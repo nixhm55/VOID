@@ -1,0 +1,629 @@
+I need you to correct the layout behavior of the VOID Music Player.
+
+IMPORTANT:
+The previous implementation made too many parts of the interface fixed/sticky.
+
+That is NOT what I want.
+
+ONLY THE LEFT SIDEBAR should be permanently fixed.
+
+Everything else in the main content area must remain normally scrollable.
+
+Do not make the Home hero, greeting, content sections, cards, music lists, or other main-content elements sticky.
+
+==================================================
+1. ONLY THE LEFT SIDEBAR IS FIXED
+==================================================
+
+The left navigation sidebar is the ONLY permanently fixed element.
+
+It must:
+
+- stay attached to the left side
+- occupy the full application height
+- remain visible while the main content scrolls
+- never move vertically
+- never scroll away
+- never become part of the main content scrolling area
+
+The sidebar should remain completely stable while everything to its right scrolls.
+
+Think of the layout as:
+
+┌────────────────┬───────────────────────────────────┐
+│                │                                   │
+│    FIXED       │        SCROLLABLE CONTENT         │
+│    SIDEBAR     │                                   │
+│                │        Good morning.              │
+│    Home        │                                   │
+│    Music       │        Content                    │
+│    Albums      │        Content                    │
+│    Artists     │        Content                    │
+│    Favorites   │        Content                    │
+│    Playlists   │        Content                    │
+│                │        Content                    │
+│                │        Content                    │
+│                │        ↓ SCROLL ↓                 │
+│                │                                   │
+└────────────────┴───────────────────────────────────┘
+
+ONLY the left column is fixed.
+
+==================================================
+2. MAIN CONTENT MUST SCROLL
+==================================================
+
+The entire main content area to the right of the sidebar must be scrollable.
+
+This includes:
+
+- Home greeting
+- Hero section
+- Recently added
+- Music library
+- Albums
+- Artists
+- Playlists
+- Favorites
+- Recently played
+- Search results
+- Track lists
+- Album grids
+- Playlist content
+- Settings content
+- Any other content displayed inside the main area
+
+Do NOT make these sticky.
+
+Do NOT use position: sticky for the main hero.
+
+Do NOT pin the greeting to the viewport.
+
+Do NOT lock the Home page content.
+
+The user should be able to scroll naturally through the main content.
+
+If the Home page becomes longer than the viewport, the user must be able to scroll down normally.
+
+==================================================
+3. DO NOT FIX THE GREETING
+==================================================
+
+This is especially important.
+
+The large greeting such as:
+
+"Good morning."
+
+or
+
+"Good to have you here."
+
+MUST scroll naturally with the Home content.
+
+Do not keep the greeting permanently visible.
+
+Do not make the hero section sticky.
+
+Do not create a fixed top section.
+
+The previous implementation made this area feel locked and boring.
+
+Undo that behavior.
+
+The greeting should be part of the normal scrollable Home page.
+
+==================================================
+4. BOTTOM PLAYER
+==================================================
+
+The bottom music player can remain fixed to the bottom ONLY if this is already part of the intended music-player architecture.
+
+If the bottom player is fixed:
+
+- it must remain visually attached to the bottom
+- it must not interfere with scrolling
+- content must have enough bottom padding so nothing gets hidden behind it
+- it should not make the main content itself fixed
+
+The bottom player and sidebar are separate UI elements.
+
+The main content between them must remain scrollable.
+
+==================================================
+5. DESKTOP APP STRUCTURE
+==================================================
+
+Use a clean desktop application layout:
+
+- Fixed left sidebar
+- Scrollable main content
+- Optional fixed bottom player
+
+The main content should occupy the remaining horizontal space.
+
+Do not create a page-level layout where everything is position: fixed.
+
+Do not make the entire application feel frozen.
+
+The user should clearly feel that the content can scroll.
+
+==================================================
+6. SIDEBAR DESIGN
+==================================================
+
+Keep the sidebar premium and minimal.
+
+Navigation:
+
+Home
+Music / Songs
+Albums
+Artists
+Playlists
+Favorites
+Recently Played
+Settings
+
+The sidebar should have:
+
+- stable width
+- clean spacing
+- refined typography
+- subtle hover states
+- elegant active state
+- carefully aligned icons
+- smooth transitions
+
+The sidebar should not be visually oversized.
+
+It should feel like a real macOS music application.
+
+==================================================
+7. VOID VISUAL IDENTITY
+==================================================
+
+Do not redesign VOID into a generic music player.
+
+Preserve the existing VOID identity.
+
+The wordmark should remain:
+
+V O I D
+
+Use refined letter spacing and careful typography.
+
+VOID should feel:
+
+- premium
+- minimal
+- quiet
+- confident
+- elegant
+- sophisticated
+
+Do NOT use:
+
+- neon
+- cyberpunk
+- excessive futuristic typography
+- huge logo
+- excessive glow
+- gaming aesthetics
+- generic AI-dashboard styling
+
+==================================================
+8. LIQUID GLASS DESIGN
+==================================================
+
+I still want the Liquid Glass visual language.
+
+However, it must be subtle and premium.
+
+Use Liquid Glass for appropriate surfaces such as:
+
+- bottom player
+- floating controls
+- dialogs
+- menus
+- selected controls
+- important floating UI
+
+Use:
+
+- subtle translucency
+- restrained backdrop blur
+- soft borders
+- very subtle reflections
+- gentle depth
+- smooth transitions
+
+Do NOT apply heavy glass blur to the entire application.
+
+Do NOT blur the whole background.
+
+Do NOT make every card look like a glass panel.
+
+The goal is premium Liquid Glass, not "everything is glass."
+
+Performance is very important.
+
+The application must remain smooth on an 8GB MacBook.
+
+Avoid excessive:
+
+- backdrop-filter
+- blur layers
+- animated gradients
+- particles
+- continuous animations
+- GPU-heavy effects
+
+==================================================
+9. TRUE BLACK DARK MODE
+==================================================
+
+Dark Mode should be genuinely dark.
+
+The current dark mode looks too gray.
+
+Change the primary dark background to true/deep black.
+
+Use subtle near-black variations for hierarchy.
+
+For example:
+
+- main background → deep black
+- sidebar → black / near-black
+- secondary surfaces → extremely subtle near-black
+- glass → translucent black
+- borders → very subtle
+- primary text → soft white
+- secondary text → muted gray
+
+Do not make everything identical black.
+
+There should still be subtle separation between surfaces.
+
+But the overall appearance must clearly feel BLACK.
+
+Avoid:
+
+- blue-tinted gray
+- purple-tinted gray
+- bright gradients
+- neon accents
+
+The dark mode should feel cinematic and luxurious.
+
+==================================================
+10. LIGHT MODE
+==================================================
+
+Keep a proper Light Mode.
+
+Light Mode should feel like the same VOID application.
+
+Use:
+
+- clean white
+- soft neutral whites
+- subtle light gray surfaces
+- restrained borders
+- dark typography
+- subtle shadows
+
+Do not completely redesign the application when switching themes.
+
+The same layout and identity should remain.
+
+Theme switching should be smooth.
+
+Persist the selected theme.
+
+If supported, maintain:
+
+- Light
+- Dark
+- System
+
+==================================================
+11. TIME-BASED GREETING
+==================================================
+
+The Home greeting should change based on the user's local time.
+
+It must NOT randomly change.
+
+It must NOT change every few seconds.
+
+It should be based on the current hour/time period.
+
+Create approximately 12 carefully written greetings.
+
+For example:
+
+12 AM
+"Still awake?"
+
+1 AM
+"Late night listening."
+
+2 AM
+"The night is quiet."
+
+3 AM
+"Lost in the night?"
+
+4 AM
+"Before the world wakes."
+
+5 AM
+"Early morning."
+
+6 AM
+"Good morning."
+
+7 AM
+"Morning, let's listen."
+
+8 AM
+"A good morning starts here."
+
+9 AM
+"Good morning."
+
+10 AM
+"Good to have you here."
+
+11 AM
+"Morning sounds."
+
+12 PM
+"Good afternoon."
+
+Refine these phrases if necessary so they sound natural and premium.
+
+The greeting should update when the relevant time period changes.
+
+Do not constantly animate or rotate the greeting.
+
+Use a subtle transition only when the greeting actually changes.
+
+==================================================
+12. HOME PAGE
+==================================================
+
+The Home page should be spacious.
+
+Do not fill every empty area.
+
+Use intentional breathing room.
+
+The Home page should contain useful content such as:
+
+- time-based greeting
+- recently added music
+- recently played
+- favorites
+- playlists
+- library overview
+
+But keep the layout calm.
+
+Do not turn it into a dashboard full of cards.
+
+VOID is a music player, not a business analytics dashboard.
+
+==================================================
+13. SCROLL EXPERIENCE
+==================================================
+
+Scrolling should feel natural.
+
+The main content should support:
+
+- mouse wheel
+- trackpad scrolling
+- smooth native scrolling
+
+Do not create strange scroll-jacking behavior.
+
+Do not prevent normal scrolling.
+
+Do not freeze the page when hovering over the main content.
+
+The sidebar should remain stationary while the content moves.
+
+The main content should be able to scroll from the top to the bottom normally.
+
+==================================================
+14. MUSIC FUNCTIONALITY
+==================================================
+
+Do not break the existing music functionality while changing the layout.
+
+Preserve:
+
+- local audio import
+- MP3/M4A playback
+- metadata
+- artwork
+- favorites
+- recently played
+- playlists
+- queue
+- search
+- playback controls
+
+Real music must continue to play.
+
+Do not replace real imported music with mock data.
+
+Do not remove existing local library data.
+
+If any playback functionality is currently broken, fix the underlying problem rather than hiding it.
+
+Pay particular attention to track duration.
+
+If a real audio file has a valid duration, the UI should not incorrectly display 0:00.
+
+==================================================
+15. BOTTOM PLAYER
+==================================================
+
+Keep the player elegant.
+
+It should contain:
+
+- artwork
+- title
+- artist
+- previous
+- play/pause
+- next
+- progress
+- volume
+- shuffle
+- repeat
+
+Keep enough spacing.
+
+Do not overcrowd the controls.
+
+If fixed to the bottom, make sure the scrollable main content has sufficient bottom padding.
+
+==================================================
+16. SEARCH
+==================================================
+
+Keep the existing search functionality.
+
+Search should search the actual local library.
+
+Make the search field match the premium VOID visual language.
+
+Keep it simple and fast.
+
+==================================================
+17. ANIMATIONS
+==================================================
+
+Animations should be subtle.
+
+Use short, smooth transitions for:
+
+- sidebar hover
+- active navigation
+- buttons
+- favorite toggles
+- play/pause
+- theme changes
+- greeting changes
+- artwork changes
+
+Do not use:
+
+- huge spring animations
+- slow page transitions
+- excessive parallax
+- constant movement
+- distracting effects
+
+The interface should feel calm.
+
+==================================================
+18. PERFORMANCE
+==================================================
+
+Performance is extremely important.
+
+Target a smooth experience on an 8GB MacBook.
+
+Avoid unnecessary React re-renders.
+
+Avoid expensive effects.
+
+Avoid excessive backdrop blur.
+
+Optimize artwork loading.
+
+Do not create large animation loops.
+
+Do not use unnecessary libraries.
+
+Audio playback must remain stable even while scrolling.
+
+Scrolling must remain smooth even with a large music library.
+
+==================================================
+19. RESPONSIVE BEHAVIOR
+==================================================
+
+The main target is desktop/macOS.
+
+On smaller windows:
+
+- sidebar may collapse appropriately
+- controls may adapt
+- content should remain usable
+- no horizontal overflow
+
+But do NOT sacrifice the desktop experience.
+
+==================================================
+20. IMPORTANT: DO NOT OVER-EDIT
+==================================================
+
+This is a refinement of the current VOID Music Player.
+
+Do not rebuild the whole project.
+
+Do not replace the current design unnecessarily.
+
+Do not delete working features.
+
+Do not replace the music system.
+
+Do not create a completely different visual identity.
+
+Make targeted improvements.
+
+The MOST IMPORTANT layout rule is:
+
+ONLY THE LEFT SIDEBAR IS FIXED.
+
+Everything in the main content area must be allowed to scroll normally.
+
+==================================================
+21. FINAL CHECK BEFORE FINISHING
+==================================================
+
+After making the changes, test all of the following:
+
+1. Scroll the Home page.
+2. Confirm the greeting scrolls away normally.
+3. Confirm Home content scrolls normally.
+4. Confirm the sidebar does NOT move.
+5. Confirm the sidebar remains visible from top to bottom.
+6. Confirm the main content can reach its full bottom.
+7. Confirm there is no unwanted page-level horizontal scrolling.
+8. Confirm the bottom player does not hide content.
+9. Test Light Mode.
+10. Test true-black Dark Mode.
+11. Test the time-based greeting.
+12. Test music import.
+13. Test actual playback.
+14. Test seeking.
+15. Test volume.
+16. Test favorites.
+17. Test search.
+18. Test navigation.
+19. Test refresh/persistence.
+20. Check the browser console for errors.
+
+Do not finish until the layout behaves exactly like:
+
+FIXED SIDEBAR + SCROLLABLE MAIN CONTENT + OPTIONAL FIXED BOTTOM PLAYER.
+
+That is the intended VOID application architecture.

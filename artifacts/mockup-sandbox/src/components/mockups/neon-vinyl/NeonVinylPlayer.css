@@ -1,0 +1,52 @@
+.neon-vinyl-player {
+  --vinyl-purple: #b66cff;
+  --vinyl-teal: #56e2cf;
+  --vinyl-ink: #090b10;
+  font-family: "Outfit", sans-serif;
+  background:
+    radial-gradient(ellipse at 50% 39%, rgba(49, 26, 70, 0.3), transparent 44%),
+    #090b10;
+}
+
+.neon-vinyl-player::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  content: "";
+  opacity: 0.12;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.2'/%3E%3C/svg%3E");
+}
+
+.vinyl-rim {
+  background: conic-gradient(
+    from 215deg,
+    var(--vinyl-purple) 0deg,
+    #cf75ff 85deg,
+    #9581ff 164deg,
+    #68d9df 250deg,
+    var(--vinyl-teal) 318deg,
+    var(--vinyl-purple) 360deg
+  );
+  box-shadow:
+    0 0 29px rgba(153, 88, 255, 0.24),
+    0 0 48px rgba(65, 221, 204, 0.12),
+    0 28px 76px rgba(0, 0, 0, 0.55);
+}
+
+.vinyl-progress {
+  filter: drop-shadow(0 0 7px rgba(111, 232, 222, 0.46));
+}
+
+.vinyl-play-pulse {
+  animation: vinyl-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes vinyl-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.055); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vinyl-play-pulse { animation: none; }
+}

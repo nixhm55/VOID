@@ -1,0 +1,927 @@
+I want you to perform a COMPLETE VISUAL DESIGN REFINEMENT of the existing VOID Music Player.
+
+THIS IS A DESIGN-ONLY TASK.
+
+==================================================
+CRITICAL RULE — DO NOT CHANGE FUNCTIONALITY
+==================================================
+
+The existing software functionality is already working correctly.
+
+DO NOT change, rewrite, refactor, replace, or remove any application logic.
+
+DO NOT change:
+
+- audio playback logic
+- audio importing
+- local file handling
+- IndexedDB/storage
+- metadata extraction
+- artwork extraction
+- playlists
+- favorites
+- recently played
+- queue
+- search logic
+- navigation logic
+- theme state logic
+- settings logic
+- keyboard shortcuts
+- audio controls
+- player state
+- persistence
+- routing
+- APIs
+- data structures
+- backend
+- database
+- authentication
+- dependencies unless absolutely required for a purely visual reason
+
+DO NOT "improve" functionality.
+
+DO NOT rebuild the application architecture.
+
+DO NOT replace working functionality with mock data.
+
+DO NOT change how anything works internally.
+
+ONLY improve the visual design, layout, typography, spacing, colors, surfaces, animations, icons, and overall visual polish.
+
+If a visual change can be achieved with CSS or existing components, prefer that over changing application logic.
+
+The final application must behave exactly as it currently does.
+
+==================================================
+THE DESIGN GOAL
+==================================================
+
+I want VOID to look like a genuinely premium music application designed by an expert product/UI designer.
+
+It should feel like a polished macOS application.
+
+Not a website.
+
+Not a generic dashboard.
+
+Not a Spotify clone.
+
+Not an Apple Music clone.
+
+Not an AI-generated template.
+
+Not a futuristic gaming interface.
+
+Not excessive "glassmorphism."
+
+VOID should have its own visual identity.
+
+The design language should feel:
+
+- premium
+- minimal
+- calm
+- sophisticated
+- spacious
+- precise
+- elegant
+- modern
+- confident
+- slightly mysterious
+- extremely clean
+
+Think of a product where every pixel feels intentional.
+
+==================================================
+1. OVERALL VISUAL LANGUAGE
+==================================================
+
+Completely refine the visual hierarchy of the application.
+
+Everything should feel carefully aligned.
+
+Use:
+
+- generous whitespace
+- strong alignment
+- consistent spacing
+- refined typography
+- subtle depth
+- restrained borders
+- subtle translucency
+- carefully controlled contrast
+
+Do not fill empty space just because it is available.
+
+VOID should breathe.
+
+Avoid visual clutter.
+
+Avoid excessive cards.
+
+Avoid excessive separators.
+
+Avoid excessive icons.
+
+Avoid unnecessary decorations.
+
+The interface should feel expensive because it is restrained.
+
+==================================================
+2. VOID BRANDING
+==================================================
+
+The VOID wordmark should be one of the strongest visual elements.
+
+Keep the identity:
+
+V O I D
+
+Use elegant letter spacing.
+
+The spacing should feel intentional rather than simply using a generic CSS letter-spacing value.
+
+The wordmark should have a distinctive personality while remaining extremely minimal.
+
+Do NOT:
+
+- make it huge
+- add neon
+- add glow
+- add gradients
+- use sci-fi typography
+- use gaming typography
+- add unnecessary symbols
+
+The logo should look believable as the branding of a premium macOS application.
+
+Create a subtle visual relationship between:
+
+VOID wordmark
+sidebar
+player
+icons
+buttons
+headings
+
+Everything should feel like the same design system.
+
+==================================================
+3. DARK MODE
+==================================================
+
+Dark Mode should be the primary visual experience.
+
+Make it genuinely dark.
+
+The current interface should NOT feel like dark gray.
+
+Use a deep black foundation.
+
+Suggested visual hierarchy:
+
+- primary background: near-black / true black
+- sidebar: black
+- content surfaces: extremely subtle near-black variations
+- glass surfaces: translucent black
+- borders: extremely subtle
+- primary text: soft white
+- secondary text: restrained gray
+- tertiary text: darker muted gray
+
+Do not use:
+
+- blue-gray backgrounds
+- purple-gray backgrounds
+- excessive gradients
+- neon colors
+- bright accent colors everywhere
+
+Dark Mode should feel cinematic and luxurious.
+
+==================================================
+4. LIGHT MODE
+==================================================
+
+Create an equally polished Light Mode.
+
+It should not simply be "dark mode with white background."
+
+Use:
+
+- refined white
+- warm/neutral whites
+- very light gray surfaces
+- subtle borders
+- soft shadows
+- dark charcoal typography
+
+Keep the same visual identity.
+
+Dark and Light should feel like two versions of the SAME premium product.
+
+==================================================
+5. LIQUID GLASS
+==================================================
+
+Use a sophisticated Liquid Glass design language.
+
+IMPORTANT:
+
+Do NOT make everything glass.
+
+Use Liquid Glass selectively.
+
+Ideal areas:
+
+- bottom player
+- floating controls
+- modal/dialog surfaces
+- contextual menus
+- selected controls
+- floating search/control surfaces
+- important overlay elements
+
+Glass should have:
+
+- subtle transparency
+- restrained backdrop blur
+- delicate border
+- very subtle highlight
+- soft depth
+- smooth transition
+
+Avoid huge blur radiuses.
+
+Avoid making the entire background blurry.
+
+Avoid turning every card into frosted glass.
+
+The result should feel like premium macOS glass, not a glassmorphism showcase.
+
+==================================================
+6. SIDEBAR
+==================================================
+
+The sidebar should look extremely polished.
+
+Keep the existing navigation.
+
+Improve:
+
+- spacing
+- icon alignment
+- typography
+- active state
+- hover state
+- section hierarchy
+- logo placement
+
+Navigation items should feel light and effortless.
+
+The active item should be obvious but subtle.
+
+Do NOT use huge bright pills.
+
+Do NOT use oversized colored backgrounds.
+
+Use a refined active state.
+
+Icons should be visually consistent.
+
+Use one coherent icon style throughout the application.
+
+==================================================
+7. MAIN HOME PAGE
+==================================================
+
+The Home page should be the visual centerpiece.
+
+Create a premium sense of hierarchy.
+
+The greeting should feel important but not oversized.
+
+Use elegant typography.
+
+The Home page should have a natural visual rhythm:
+
+Greeting
+↓
+Supporting context
+↓
+Recently played / recently added
+↓
+Library content
+↓
+Additional sections
+
+Do not make every section look identical.
+
+Introduce hierarchy through:
+
+- typography
+- spacing
+- size
+- subtle surfaces
+- artwork
+- alignment
+
+NOT through dozens of cards.
+
+==================================================
+8. GREETING
+==================================================
+
+The time-based greeting should look beautiful.
+
+Examples:
+
+Good morning.
+Good afternoon.
+Good evening.
+Still awake?
+
+The greeting should have:
+
+- refined typography
+- excellent line height
+- subtle entrance transition
+- no distracting animation
+
+Do not animate it constantly.
+
+The greeting should feel like part of the VOID identity.
+
+==================================================
+9. TYPOGRAPHY
+==================================================
+
+Typography is extremely important.
+
+Use a modern system/UI font that feels native to macOS.
+
+Prioritize:
+
+- clean letterforms
+- excellent readability
+- refined weight
+- careful tracking
+- strong hierarchy
+
+Create a clear typography scale.
+
+For example:
+
+Display
+Large section heading
+Medium section heading
+Track title
+Artist name
+Metadata
+Secondary information
+
+Do not use too many font weights.
+
+Avoid excessive bold text.
+
+Use typography to create hierarchy instead of boxes.
+
+==================================================
+10. MUSIC ARTWORK
+==================================================
+
+Album artwork should look premium.
+
+Improve:
+
+- aspect ratios
+- corner radius
+- spacing
+- shadows
+- hover behavior
+- image loading appearance
+
+Use consistent artwork proportions.
+
+Do not add huge artificial glow around artwork.
+
+Avoid excessive reflections.
+
+Artwork should remain the visual focus when appropriate.
+
+Use subtle hover scaling only.
+
+==================================================
+11. TRACK LIST
+==================================================
+
+Make track rows feel extremely polished.
+
+Improve:
+
+- row height
+- artwork size
+- typography
+- spacing
+- hover state
+- selected state
+- favorite icon
+- duration alignment
+- context menu
+
+Track rows should feel lightweight.
+
+Avoid heavy borders around every row.
+
+Use subtle hover surfaces.
+
+Make long music libraries comfortable to scan.
+
+==================================================
+12. PLAYER
+==================================================
+
+The bottom player should feel like the signature component of VOID.
+
+It should look like a premium floating music-control surface.
+
+Use Liquid Glass carefully.
+
+Improve:
+
+- artwork
+- typography
+- playback controls
+- progress bar
+- volume
+- spacing
+- button shapes
+- hover states
+
+The play button should be visually important.
+
+Do not make every control equally prominent.
+
+Create a clear hierarchy:
+
+Primary:
+Play/Pause
+
+Secondary:
+Previous / Next
+
+Tertiary:
+Shuffle / Repeat / Volume / Queue
+
+The player should feel extremely clean.
+
+==================================================
+13. BUTTONS
+==================================================
+
+Redesign buttons as part of one coherent design system.
+
+Buttons should feel:
+
+- precise
+- soft
+- premium
+- responsive
+
+Avoid:
+
+- huge gradients
+- oversized rounded pills
+- excessive shadows
+- random colors
+
+Use consistent:
+
+- height
+- radius
+- padding
+- typography
+- icon sizing
+
+Primary actions should be visually distinct.
+
+Secondary actions should remain quiet.
+
+==================================================
+14. ICONS
+==================================================
+
+Use a consistent icon language.
+
+Icons should have:
+
+- consistent stroke weight
+- consistent size
+- consistent visual density
+
+Avoid mixing completely different icon styles.
+
+Do not use emojis as UI icons.
+
+Do not use decorative icons where they aren't necessary.
+
+==================================================
+15. SEARCH
+==================================================
+
+Make the search interface feel integrated into VOID.
+
+Use a refined glass/subtle surface.
+
+Search should not dominate the interface.
+
+Focus state should be elegant.
+
+Avoid bright outlines.
+
+==================================================
+16. FAVORITES
+==================================================
+
+Favorite interactions should feel satisfying but subtle.
+
+Use a refined transition when a track becomes a favorite.
+
+No huge animation.
+
+No particle explosion.
+
+No excessive bounce.
+
+A small scale/opacity transition is enough.
+
+==================================================
+17. PLAYLISTS
+==================================================
+
+Make playlist presentation visually consistent with the rest of VOID.
+
+Use artwork where available.
+
+Create strong hierarchy between:
+
+playlist title
+description
+track count
+playlist artwork
+
+Avoid generic card grids.
+
+==================================================
+18. ALBUMS AND ARTISTS
+==================================================
+
+Album and artist pages should feel editorial and premium.
+
+Use strong artwork.
+
+Use carefully balanced whitespace.
+
+Do not overcrowd the page.
+
+Album titles and artist names should have clear hierarchy.
+
+==================================================
+19. SETTINGS
+==================================================
+
+Make Settings visually consistent with the rest of the application.
+
+Use clear sections.
+
+Avoid giant boxed panels.
+
+Use elegant rows and subtle separators.
+
+Controls should feel native and understandable.
+
+==================================================
+20. SCROLLING VISUALS
+==================================================
+
+Do not redesign the functionality of scrolling.
+
+Only improve its visual presentation.
+
+The sidebar remains fixed as currently intended.
+
+The main content remains scrollable.
+
+Avoid visible ugly scrollbars where possible while maintaining usability.
+
+Use subtle scrollbar styling if appropriate.
+
+Do not interfere with native trackpad scrolling.
+
+==================================================
+21. MICRO-INTERACTIONS
+==================================================
+
+Add refined micro-interactions throughout the interface.
+
+Examples:
+
+- button hover
+- sidebar hover
+- navigation selection
+- artwork hover
+- play button interaction
+- favorite toggle
+- search focus
+- theme transition
+- menu opening
+- modal opening
+- track selection
+
+Animations should generally be fast and subtle.
+
+Approximately:
+
+120–250ms
+
+for most UI transitions.
+
+Use smooth easing.
+
+Avoid:
+
+- slow animations
+- exaggerated springs
+- bouncing
+- constant movement
+- unnecessary parallax
+
+==================================================
+22. MOTION DESIGN
+==================================================
+
+VOID should feel alive without constantly moving.
+
+Use motion only when it communicates something.
+
+Good:
+
+button pressed
+track selected
+player changed
+theme changed
+menu opened
+favorite toggled
+
+Bad:
+
+constant floating
+constant particles
+continuous gradients
+large animated backgrounds
+random movement
+
+Calm is more important than flashy.
+
+==================================================
+23. DEPTH AND SHADOWS
+==================================================
+
+Use depth carefully.
+
+Avoid giant shadows.
+
+Use extremely soft shadows only where necessary.
+
+For dark mode, rely more on:
+
+- tonal separation
+- subtle borders
+- transparency
+- layering
+
+rather than heavy shadows.
+
+==================================================
+24. BORDERS
+==================================================
+
+Borders should be extremely subtle.
+
+Do not put visible borders around everything.
+
+Use borders only where they help separate layers.
+
+Think:
+
+"barely there"
+
+rather than:
+
+"outlined box."
+
+==================================================
+25. SPACING SYSTEM
+==================================================
+
+Create a consistent spacing rhythm throughout the application.
+
+Avoid random margins.
+
+Align:
+
+- sidebar
+- headers
+- sections
+- artwork
+- player
+- buttons
+
+to a consistent grid.
+
+The entire application should feel geometrically intentional.
+
+==================================================
+26. RESPONSIVE DESIGN
+==================================================
+
+Do not change application functionality.
+
+Only improve how the existing UI adapts to different window sizes.
+
+Avoid:
+
+- horizontal overflow
+- clipped text
+- overlapping controls
+- broken artwork
+- cramped player controls
+
+Desktop/macOS is the primary target.
+
+==================================================
+27. EMPTY STATES
+==================================================
+
+Make empty states beautiful.
+
+Do not use generic ugly placeholders.
+
+Use:
+
+- elegant typography
+- subtle iconography
+- generous whitespace
+- one clear action
+
+Do not add unnecessary illustrations.
+
+==================================================
+28. LOADING STATES
+==================================================
+
+Loading states should match the VOID visual identity.
+
+Use subtle skeletons or opacity transitions where appropriate.
+
+Avoid flashy spinners everywhere.
+
+==================================================
+29. ERROR STATES
+==================================================
+
+Error messages should look intentional and premium.
+
+Do not expose raw technical errors in the main UI.
+
+Use concise human-readable messaging.
+
+Do not change the underlying error handling logic.
+
+Only improve presentation.
+
+==================================================
+30. PERFORMANCE
+==================================================
+
+This is a visual redesign, but performance must remain excellent.
+
+Do NOT add:
+
+- large particle systems
+- heavy WebGL
+- constantly animated backgrounds
+- excessive blur layers
+- unnecessary canvas animations
+- expensive continuous effects
+
+The application must remain smooth on an 8GB MacBook.
+
+Visual quality must come from design, spacing, typography and hierarchy — NOT from expensive effects.
+
+==================================================
+31. DESIGN CONSISTENCY
+==================================================
+
+Everything must feel like one product.
+
+Do not design each page independently.
+
+The same visual language must appear in:
+
+Home
+Music
+Albums
+Artists
+Playlists
+Favorites
+Recently Played
+Settings
+Player
+Dialogs
+Menus
+
+Use one coherent design system.
+
+==================================================
+32. DO NOT COPY OTHER MUSIC APPS
+==================================================
+
+Take inspiration from premium software design principles, but do NOT directly copy Spotify, Apple Music, Tidal, or another music application.
+
+VOID must feel original.
+
+The identity should be:
+
+VOID.
+
+==================================================
+33. FINAL QUALITY BAR
+==================================================
+
+Before finishing, visually inspect the entire application.
+
+Look for:
+
+- inconsistent spacing
+- inconsistent corner radii
+- mismatched icon sizes
+- excessive borders
+- excessive cards
+- weak typography
+- poor alignment
+- unnecessary colors
+- inconsistent shadows
+- inconsistent hover states
+- awkward empty space
+- crowded sections
+- excessive blur
+
+Fix these inconsistencies.
+
+The result should look like a product that has gone through multiple professional design iterations.
+
+==================================================
+MOST IMPORTANT INSTRUCTION
+==================================================
+
+THIS IS A DESIGN-ONLY TASK.
+
+DO NOT MODIFY THE SOFTWARE ARCHITECTURE.
+
+DO NOT CHANGE FUNCTIONALITY.
+
+DO NOT CHANGE DATA.
+
+DO NOT CHANGE AUDIO LOGIC.
+
+DO NOT CHANGE STORAGE.
+
+DO NOT CHANGE PLAYBACK.
+
+DO NOT CHANGE FEATURES.
+
+DO NOT REMOVE WORKING FEATURES.
+
+DO NOT ADD FAKE FEATURES.
+
+ONLY IMPROVE:
+
+- visual design
+- layout styling
+- typography
+- spacing
+- colors
+- surfaces
+- Liquid Glass treatment
+- icons
+- borders
+- shadows
+- artwork presentation
+- animations
+- micro-interactions
+- overall visual polish
+
+The final result should feel like a premium, calm, sophisticated macOS music application called VOID.
+
+Make it beautiful through restraint, precision and excellent visual hierarchy — not through excessive effects.
