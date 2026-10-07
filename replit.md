@@ -4,32 +4,30 @@ A premium, local-first music player for importing, organizing, and playing a per
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm --filter @workspace/void-player run dev` — run the VOID web app
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm install` — install dependencies
+- `pnpm run dev` — start the Vite dev server (defaults to port 3010; `PORT`/`BASE_PATH` env vars are optional and validated)
+- `pnpm run build` — production build to `dist/`
+- `pnpm run serve` — preview the production build locally
+- `pnpm run typecheck` — TypeScript typecheck (`tsc --noEmit`)
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Vite 7 + React 19 + TypeScript 5.9 + Tailwind CSS 4
+- pnpm workspaces (single package at repo root), Node.js 22+
+- Routing: wouter (client-side SPA)
+- Deployment: Vercel (`vercel.json`) and Cloudflare Pages (`public/_redirects`)
 
 ## Where things live
 
-- `artifacts/void-player/` — VOID music player web app
-- `artifacts/api-server/` — shared API scaffold; VOID's library is browser-local
-- `artifacts/mockup-sandbox/` — design canvas preview service
+- `src/` — app source: `App.tsx`, `main.tsx`, `components/`, `hooks/`, `lib/`, `pages/`
+- `public/` — static assets: `favicon.svg`, `robots.txt`, `_redirects` (SPA fallback `/* /index.html 200`)
+- `dist/` — build output (gitignored)
+- `vite.config.ts` — Vite config with safe `PORT`/`BASE_PATH` fallbacks, `@` → `src/` alias
+- Root: `package.json`, `pnpm-lock.yaml`, `tsconfig.json`, `pnpm-workspace.yaml`, `vercel.json`
 
 ## Architecture decisions
 
-- Imported audio and library data are intended to stay in browser storage; do not upload personal audio to the server.
+- Imported audio and library data stay in browser storage; do not upload personal audio to the server.
 - Use IndexedDB for audio file blobs and browser-local persistence, not localStorage/base64 for audio.
 
 ## Product
@@ -41,11 +39,9 @@ VOID is a personal music player for importing local audio, organizing a library 
 - Keep the VOID wordmark distinctive through subtle spacing and kerning, not oversized futuristic type or effects.
 - Maintain a calm, spacious, premium macOS feel; use glass effects selectively to protect performance.
 - Support intentional dark, light, and system appearance with a monochrome identity.
+- No visual/UI changes without explicit request — styling in `src/`, `src/index.css` is treated as frozen.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- `pnpm-workspace.yaml` overrides strip non-linux-x64 native binaries for lean installs; the four `optionalDependencies` (`@esbuild/darwin-arm64`, `@rollup/rollup-darwin-arm64`, `@tailwindcss/oxide-darwin-arm64`, `lightningcss-darwin-arm64`) restore them on macOS so local builds work. Do not remove them.
+- `minimumReleaseAge: 1440` in `pnpm-workspace.yaml` is a deliberate supply-chain defense — never disable it.
