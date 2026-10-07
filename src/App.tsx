@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowDown, ArrowUp, AudioLines, ChevronDown, Clock3, Disc3, Heart, Home,
   ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, Pause, Play, Plus, Search,
@@ -43,17 +43,69 @@ const formatTime = (seconds: number) => {
 };
 const compactBytes = (bytes: number) => bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 
-function Cover({ track, large = false }: { track?: Track; large?: boolean }) {
+const countLabel = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
+const rangeStyle = (fraction: number) => ({ '--p': `${Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0)) * 100}%` }) as CSSProperties;
+const hueOf = (seed: string) => { let hash = 0; for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 360; return hash; };
+// Presentation only: a calm mood line for each two-hour block, matching the greetings above.
+const moods = [
+  'Late hours, low volume', 'Quiet, close, nocturnal', 'Soft light before sunrise', 'Slow start, warm cup',
+  'Bright, easy, unhurried', 'Clear head, open window', 'Midday, easy and warm', 'Slow afternoon light',
+  'Golden hour, low glare', 'Warm, slow, low light', 'Dim lamps, deep listening', 'Last light, long songs',
+];
+const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
+
+// Memoized so playback-time re-renders (timeupdate) never remount or reload artwork.
+const Cover = memo(function Cover({ track, large = false, kind = 'disc' }: { track?: Track; large?: boolean; kind?: 'disc' | 'list' }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
+    setLoaded(false);
     if (!track?.artwork) { setSrc(null); return; }
     const url = URL.createObjectURL(track.artwork); setSrc(url);
     return () => URL.revokeObjectURL(url);
   }, [track?.artwork]);
-  return <div className={large ? 'cover-large' : 'cover-mini'} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
-    {src ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} /> : <Disc3 aria-hidden="true" />}
+  const Glyph = kind === 'list' ? ListMusic : Disc3;
+  const style = track ? ({ '--cover-h': hueOf(`${track.album}|${track.artist}`) } as CSSProperties) : undefined;
+  return <div className={large ? 'cover-large' : 'cover-mini'} style={style} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
+    {src ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} /> : <Glyph aria-hidden="true" />}
   </div>;
-}
+}, (a, b) => a.large === b.large && a.kind === b.kind && a.track?.artwork === b.track?.artwork
+  && a.track?.id === b.track?.id && a.track?.album === b.track?.album && a.track?.artist === b.track?.artist);
+
+type RowActions = {
+  play: (track: Track, list: string[]) => void;
+  openAlbum: (name: string) => void;
+  move: (track: Track, index: number, step: number) => void;
+  removeFromList: (id: string) => void;
+  favorite: (track: Track) => void;
+  menu: (track: Track) => void;
+};
+
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions;
+}) {
+  return <div className="table-wrap">
+    <table className="track-table">
+      <thead><tr><th>{showIndex ? ' ' : 'Title'}</th><th>Album</th><th>Time</th><th aria-label="Actions" /></tr></thead>
+      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
+        <td><div className="track-main">
+          {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
+          <Cover track={track} />
+          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => actions.play(track, items.map(item => item.id))} aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
+            <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
+          </button>
+        </div></td>
+        <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={() => actions.openAlbum(track.album)} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
+        <td>{formatTime(track.duration)}</td>
+        <td><div className="row-actions">
+          {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={() => actions.move(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={() => actions.move(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => actions.removeFromList(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
+          <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
+          <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
+        </div></td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
+});
 
 function App() {
   const [location, setLocation] = useLocation();
@@ -402,7 +454,7 @@ function App() {
     if (q) list = list.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
     return list;
   }, [detail, page, playlists, query, tracks]);
-  const queueTracks = queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track);
+  const queueTracks = useMemo(() => queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track), [queue, tracks]);
   const albumNames = useMemo(() => [...new Set(tracks.map(track => track.album))], [tracks]);
   const artistNames = useMemo(() => [...new Set(tracks.map(track => track.artist))], [tracks]);
   const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', settings: 'Settings' } as Record<Page, string>)[page];
@@ -427,31 +479,18 @@ function App() {
   const playList = (list: Track[]) => {
     if (list.length) void playTrack(list[0], list.map(track => track.id));
   };
-  function TrackRows({ items, showIndex = false, reorder = false }: { items: Track[]; showIndex?: boolean; reorder?: boolean }) {
-    return <div className="table-wrap">
-      <table className="track-table">
-        <thead><tr><th>{showIndex ? ' ' : 'Title'}</th><th>Album</th><th>Date added</th><th>Time</th><th aria-label="Actions" /></tr></thead>
-        <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
-          <td><div className="track-main">
-            {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
-            <Cover track={track} />
-            <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => void playTrack(track, items.map(item => item.id))} aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
-              <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
-            </button>
-          </div></td>
-          <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={() => { setDetail({ kind: 'album', name: track.album }); setQuery(''); }} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
-          <td>{new Date(track.importedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
-          <td>{formatTime(track.duration)}</td>
-          <td><div className="row-actions">
-            {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={() => moveItem(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={() => moveItem(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => page === 'queue' ? removeFromQueue(track.id) : void removeFromPlaylist(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
-            <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => void toggleFavorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
-            <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => setContextTrack(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
-          </div></td>
-        </tr>)}</tbody>
-      </table>
-    </div>;
-  }
-
+  const hasPlayed = useMemo(() => tracks.some(track => track.lastPlayedAt), [tracks]);
+  const jumpBack = useMemo(() => {
+    const played = tracks.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0)).slice(0, 4);
+    return [...played, ...tracks.filter(track => !played.includes(track))].slice(0, 4);
+  }, [tracks]);
+  const recentlyAdded = useMemo(() => tracks.slice(0, 4), [tracks]);
+  // Uses the existing playback path: a random starting song with the whole library queued.
+  const playSomething = () => {
+    if (!tracks.length) { notify('Import audio files to begin your library.'); return; }
+    const choices = tracks.length > 1 ? tracks.filter(track => track.id !== activeId) : tracks;
+    void playTrack(choices[Math.floor(Math.random() * choices.length)], tracks.map(track => track.id));
+  };
   const moveQueue = (index: number, step: number) => {
     const nextIndex = index + step;
     if (nextIndex < 0 || nextIndex >= queueTracks.length) return;
@@ -480,6 +519,25 @@ function App() {
     try { await savePlaylist({ ...playlist, trackIds: playlist.trackIds.filter(item => item !== id) }); await reload(); }
     catch { notify('Could not remove this song from the playlist.'); }
   };
+  // Stable action bag so memoized rows keep their identity while handlers use the latest state.
+  const latestActions = useRef<RowActions | null>(null);
+  latestActions.current = {
+    play: (track, list) => void playTrack(track, list),
+    openAlbum: name => { setDetail({ kind: 'album', name }); setQuery(''); },
+    move: moveItem,
+    removeFromList: id => page === 'queue' ? removeFromQueue(id) : void removeFromPlaylist(id),
+    favorite: track => void toggleFavorite(track),
+    menu: track => setContextTrack(track),
+  };
+  const rowActions = useMemo<RowActions>(() => ({
+    play: (track, list) => latestActions.current!.play(track, list),
+    openAlbum: name => latestActions.current!.openAlbum(name),
+    move: (track, index, step) => latestActions.current!.move(track, index, step),
+    removeFromList: id => latestActions.current!.removeFromList(id),
+    favorite: track => latestActions.current!.favorite(track),
+    menu: track => latestActions.current!.menu(track),
+  }), []);
+  const moodIndex = Math.floor(greetingHour / 2);
 
   const pageDescription: Record<Page, string> = {
     home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
@@ -488,7 +546,8 @@ function App() {
     playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, settings: 'A few quiet preferences.',
   };
 
-  return <div className="void-app">
+  return <div className="void-app" data-ambient={page}>
+    <div className="ambient" aria-hidden="true" />
     <audio ref={audio} preload="none" onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
       onLoadedMetadata={() => {
         const value = audio.current?.duration ?? 0; setDuration(value);
@@ -535,29 +594,22 @@ function App() {
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
           {page === 'home' && !detail && <>
             <div className="welcome">
-              <div><div className="eyebrow">Your listening space</div><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p></div>
+              <div><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
               <button className="button primary" onClick={() => fileInput.current?.click()} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
             </div>
-            <div className="home-grid">
-              <div>
-                <div className="welcome-panel">
-                  <div><div className="eyebrow">Made for your library</div><h2>Your music stays yours.</h2><p>Bring in audio from your Mac. VOID keeps the files in this browser, ready whenever you return.</p><button className="button" onClick={() => fileInput.current?.click()} data-testid="button-choose-files"><Plus />Choose audio files</button></div>
-                  <div className="abstract-disc" aria-hidden="true" />
-                </div>
-                <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
-                  {tracks.length ? <TrackRows items={tracks.slice(0, 4)} /> : <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button" onClick={() => fileInput.current?.click()} data-testid="button-import-empty"><Plus />Add your music</button></div>}
-                </div>
+            <section className="mood" aria-label={moodLabelFor(greetingHour)}>
+              <div className="mood-orb" aria-hidden="true" />
+              <div className="mood-copy"><div className="mood-label">{moodLabelFor(greetingHour)}</div><h2>{moods[moodIndex]}</h2>
+                <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something"><Play />Play something for me</button></div>
+            </section>
+            {tracks.length ? <>
+              <div className="home-section"><div className="section-heading"><h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2></div>
+                <div className="jump-grid">{jumpBack.map(track => <button className="jump-tile" key={track.id} onClick={() => void playTrack(track)} aria-label={`Play ${track.title}`} data-testid={`tile-jump-${track.id}`}><Cover track={track} large /><span className="jump-title">{track.title}</span><span className="jump-sub">{track.artist}</span></button>)}</div>
               </div>
-              <div>
-                <div className="section-heading"><h2>Your library</h2><span>On this device</span></div>
-                <div className="stat-card"><div className="stat-number">{tracks.length}</div><div className="stat-caption">songs in your collection</div></div>
-                <div style={{ height: 9 }} />
-                <div className="stat-card"><div className="stat-number">{albumNames.length}</div><div className="stat-caption">albums, from available file names</div></div>
-                <div className="home-section"><div className="section-heading"><h2>Recently played</h2><span>{tracks.filter(item => item.lastPlayedAt).length}</span></div>
-                  {tracks.some(item => item.lastPlayedAt) ? <div>{tracks.filter(item => item.lastPlayedAt).sort((a,b) => (b.lastPlayedAt ?? 0)-(a.lastPlayedAt ?? 0)).slice(0,3).map(track => <div className="track-main" key={track.id} style={{ padding: '8px 0', cursor: 'pointer' }} onClick={() => void playTrack(track)}><Cover track={track} /><span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span></div>)}</div> : <p className="page-subtitle" style={{ lineHeight: 1.7 }}>Your listening history will appear here, only on this device.</p>}
-                </div>
+              <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
+                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
               </div>
-            </div>
+            </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={() => fileInput.current?.click()} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
           {page !== 'home' && page !== 'settings' && <div>
             <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
@@ -575,17 +627,17 @@ function App() {
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
             {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.album === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {tracks.filter(track => track.album === name).length} songs</div></button>;
+              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
             })}</div> : <EmptyLibrary label="No albums yet" onImport={() => fileInput.current?.click()} /> : null}
             {page === 'artists' && !detail ? artistNames.length ? <div className="cover-grid">{artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.artist === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{tracks.filter(track => track.artist === name).length} songs</div></button>;
+              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{countLabel(tracks.filter(track => track.artist === name).length, 'song')}</div></button>;
             })}</div> : <EmptyLibrary label="No artists yet" onImport={() => fileInput.current?.click()} /> : null}
-            {page === 'playlists' && !detail && <div className="playlist-list">
-              {playlists.map(playlist => <button className="playlist-tile" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><span className="playlist-glyph"><ListMusic /></span><strong>{playlist.name}</strong><span>{playlist.trackIds.length} {playlist.trackIds.length === 1 ? 'song' : 'songs'}</span></button>)}
+            {page === 'playlists' && !detail && <div className="cover-grid">
+              {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={() => fileInput.current?.click()} />)}
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={() => fileInput.current?.click()} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
           {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
@@ -610,7 +662,7 @@ function App() {
       </main>
     </div>
     <div className="player-bar" data-testid="player-bar">
-      <div className="progress-row"><input aria-label="Playback position" type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="input-seek" /></div>
+      <div className="progress-row"><input aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="input-seek" /></div>
       <div className="player-track" onClick={() => activeTrack && setExpanded(true)} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setExpanded(true); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
         <span style={{ minWidth: 0 }}><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
@@ -625,7 +677,7 @@ function App() {
       <div className="player-extra">
         <span className="crumb">{formatTime(position)} / {formatTime(duration)}</span>
         <button className="icon-button" aria-label={prefs.muted ? 'Unmute' : 'Mute'} title={prefs.muted ? 'Unmute' : 'Mute'} onClick={() => void updatePrefs({ ...prefs, muted: !prefs.muted })} data-testid="button-mute">{prefs.muted ? <VolumeX /> : <Volume2 />}</button>
-        <input className="volume-slider" type="range" min="0" max="1" step=".01" value={prefs.volume} aria-label="Volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="input-volume" />
+        <input className="volume-slider" style={rangeStyle(prefs.volume)} type="range" min="0" max="1" step=".01" value={prefs.volume} aria-label="Volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="input-volume" />
         <button className="icon-button" aria-label="Expand now playing" onClick={() => setExpanded(true)} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
       </div>
     </div>
@@ -648,7 +700,7 @@ function App() {
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
        {modal === 'add-to-playlist' ? <>
         <p>Choose where “{contextTrack?.title}” belongs.</p>
-        {playlists.length ? playlists.map(playlist => <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}><ListMusic size={15} />{playlist.name}<span className="crumb" style={{ marginLeft: 'auto' }}>{playlist.trackIds.length} songs</span></button>) : <p>Create a playlist first, then add songs from their menus.</p>}
+        {playlists.length ? playlists.map(playlist => <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}><ListMusic size={15} />{playlist.name}<span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span></button>) : <p>Create a playlist first, then add songs from their menus.</p>}
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-add-playlist">Close</button></div>
        </> : modal === 'properties' && contextTrack ? <>
          <p>File information stored with your local library.</p>
@@ -688,13 +740,13 @@ function App() {
         <Cover track={activeTrack} large />
         <div className="now-playing-meta"><div className="eyebrow">Now playing</div><h1>{activeTrack.title}</h1><p>{activeTrack.artist} · {activeTrack.album}</p>
           <div className="lyrics-box">{activeTrack.lyrics || 'Lyrics unavailable'}</div>
-           <div className="expanded-progress"><input type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} aria-label="Now playing position" onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="expanded-seek" /><div><span>{formatTime(position)}</span><span>{formatTime(duration)}</span></div></div>
+           <div className="expanded-progress"><input type="range" min="0" max={duration || 0} step=".1" style={rangeStyle(duration ? position / duration : 0)} value={Math.min(position, duration || 0)} aria-label="Now playing position" onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="expanded-seek" /><div><span>{formatTime(position)}</span><span>{formatTime(duration)}</span></div></div>
             <div className="player-controls" style={{ justifyContent: 'flex-start', marginTop: 15 }}><button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button><button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play">{isPlaying ? <Pause /> : <Play />}</button><button className="icon-button" onClick={() => playRelative(1)} aria-label="Next track" title="Next track" data-testid="expanded-next"><SkipForward /></button><button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button><button className="icon-button" onClick={() => { setExpanded(false); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>
             <div className="expanded-toggles">
               <button className={`button ${prefs.shuffle ? 'selected' : ''}`} aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle />Shuffle</button>
               <button className={`button ${prefs.repeat !== 'off' ? 'selected' : ''}`} aria-pressed={prefs.repeat !== 'off'} onClick={() => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' })} data-testid="expanded-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}Repeat{prefs.repeat === 'one' ? ' one' : prefs.repeat === 'all' ? ' queue' : ''}</button>
             </div>
-           <label className="expanded-volume"><Volume2 size={15} /><input type="range" min="0" max="1" step=".01" value={prefs.volume} aria-label="Now playing volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="expanded-volume" /></label>
+           <label className="expanded-volume"><Volume2 size={15} /><input type="range" min="0" max="1" step=".01" style={rangeStyle(prefs.volume)} value={prefs.volume} aria-label="Now playing volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="expanded-volume" /></label>
         </div>
       </div> : <div className="empty-state" style={{ width: 'min(500px,90%)', margin: 'auto' }}><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { setExpanded(false); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div>}
     </div>}
