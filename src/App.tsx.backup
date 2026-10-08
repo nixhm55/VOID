@@ -239,7 +239,13 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
         <td><div className="track-main">
           {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
           <Cover track={track} />
-          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => actions.play(track, items.map(item => item.id))} aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
+          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => {
+            try {
+              const audioEl = document.querySelector('audio');
+              if (audioEl) { audioEl.load(); }
+            } catch {}
+            actions.play(track, items.map(item => item.id));
+          }} aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
             <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
           </button>
         </div></td>
@@ -312,7 +318,15 @@ function App() {
   const reload = useCallback(async () => {
     try {
       const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
-      setTracks(storedTracks.sort((a, b) => b.importedAt - a.importedAt));
+      
+      let remoteFavs: Track[] = [];
+      try {
+        remoteFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+      } catch { remoteFavs = []; }
+
+      const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
+      setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
+      
       setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
       if (storedPrefs) {
         setPrefs({ ...defaults, ...storedPrefs });
@@ -676,11 +690,38 @@ function App() {
   };
   const openImport = () => setImportMenu(true);
 
-  const toggleFavorite = async (track: Track) => {
-    const updated = { ...track, favorite: !track.favorite };
-    setTracks(items => items.map(item => item.id === track.id ? updated : item));
-    try { await saveTrack(updated); } catch { notify('Could not save favorite.'); }
-  };
+const toggleFavorite = async (track: Track | any) => {
+  const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+  const isRemote = !!remoteUrl;
+  const nextFavorite = !track.favorite;
+  const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
+
+  if (isRemote) {
+    setStreamingTrack((current: any) => current?.id === track.id ? updated : current);
+  }
+
+  setTracks(items => {
+    const exists = items.some(item => item.id === track.id);
+    const newItems = exists ? items.map(item => item.id === track.id ? updated : item) : (isRemote ? [updated, ...items] : items);
+    
+    if (isRemote) {
+      try {
+        const favs = newItems.filter(t => t.favorite && (t.audioUrl || t.downloadUrl || t.src));
+        localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+      } catch { /* storage fallback */ }
+    }
+    return newItems;
+  });
+
+  try {
+    if (!isRemote) {
+      await saveTrack(updated);
+    }
+  } catch (error) {
+    console.error('[VOID] Could not save favorite:', error);
+    notify('Could not save favorite.');
+  }
+};
   const deleteTrack = async (track: Track) => {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
     try {
@@ -1004,10 +1045,10 @@ function App() {
               </div>
             </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
-          {page !== 'home' && page !== 'settings' && <div>
-            <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
-            <div className="section-heading" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
-              <div><h1 className="page-title">{title}</h1><p className="page-subtitle">{pageDescription[page]}</p></div>
+          {page !== 'home' && page !== 'settings' && <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div className="eyebrow" style={{ marginBottom: 2 }}>{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
+            <div className="section-heading" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
+              <div><h1 className="page-title" style={{ margin: 0 }}>{title}</h1><p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{pageDescription[page]}</p></div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {page === 'playlists' && !detail && <button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
                 {page === 'queue' && queueTracks.length > 0 && <button className="button" onClick={clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}

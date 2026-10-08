@@ -1,3 +1,5 @@
+import { searchMusic } from "./api/musicApi";
+import { searchYouTube } from "./api/youtubeApi";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
@@ -853,16 +855,17 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
 
 // Memoized so playback-time re-renders (timeupdate) never remount or reload artwork.
 // `identity` lets albums, artists and playlists seed their own fallback cover instead of borrowing a song's.
-const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: Track; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
+const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setLoaded(false); setFailed(false);
+    if (track?.image) { setSrc(track.image); return; }
     if (!track?.artwork) { setSrc(null); return; }
     const url = URL.createObjectURL(track.artwork); setSrc(url);
     return () => URL.revokeObjectURL(url);
-  }, [track?.artwork]);
+  }, [track?.artwork, track?.image]);
   const Glyph = kind === 'list' ? ListMusic : Disc3;
   // Real embedded artwork always wins; the composed cover only when there is none or it cannot be decoded.
   const art = track && (!track.artwork || failed) ? artFor(track, identity) : null;
@@ -894,7 +897,11 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
         <td><div className="track-main">
           {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
           <Cover track={track} />
-          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => actions.play(track, items.map(item => item.id))} aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
+          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}
+          onClick={() => {
+          actions.play(track, items.map(item => item.id));
+          }}
+           aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
             <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
           </button>
         </div></td>
@@ -972,6 +979,7 @@ function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [prefs, setPrefs] = useState<Preferences>(defaults);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [streamingTrack, setStreamingTrack] = useState<any>(null);
   const [queue, setQueue] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-queue') || '[]') as string[]; } catch { return []; }
   });
@@ -980,6 +988,46 @@ function App() {
   const [query, setQuery] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
+  const [musicResults, setMusicResults] = useState<any[]>([]);
+  const [musicSearching, setMusicSearching] = useState(false);
+  useEffect(() => {
+  const q = paletteQuery.trim();
+
+  if (!q) {
+    setMusicResults([]);
+    return;
+  }
+
+  let cancelled = false;
+
+  const search = async () => {
+    setMusicSearching(true);
+
+    try {
+      const data = await searchMusic(q);
+
+      if (!cancelled) {
+        setMusicResults(data ?? []);
+      }
+} catch (error) {
+  console.error("Jamendo search error:", error);
+
+  if (!cancelled) {
+    setMusicResults([]);
+  }
+} finally {      if (!cancelled) {
+        setMusicSearching(false);
+      }
+    }
+  };
+
+  const timer = window.setTimeout(search, 350);
+
+  return () => {
+    cancelled = true;
+    window.clearTimeout(timer);
+  };
+}, [paletteQuery]);
   const [modal, setModal] = useState<'playlist' | 'rename' | 'add-to-playlist' | 'properties' | null>(null);
   const [modalValue, setModalValue] = useState('');
   const [contextTrack, setContextTrack] = useState<Track | null>(null);
@@ -1024,7 +1072,7 @@ function App() {
   const themeTint = useRef<[number, number, number] | null>(null);
   expandedRef.current = expanded;
   closingRef.current = closing;
-  const activeTrack = tracks.find(track => track.id === activeId) ?? null;
+  const activeTrack = streamingTrack?.id === activeId ? streamingTrack : (tracks.find(track => track.id === activeId) ?? null);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -1035,7 +1083,15 @@ function App() {
   const reload = useCallback(async () => {
     try {
       const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
-      setTracks(storedTracks.sort((a, b) => b.importedAt - a.importedAt));
+      
+      let remoteFavs: Track[] = [];
+      try {
+        remoteFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+      } catch { remoteFavs = []; }
+
+      const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
+      setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
+      
       setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
       if (storedPrefs) {
         setPrefs({ ...defaults, ...storedPrefs });
@@ -1302,27 +1358,31 @@ function App() {
     try { await savePreferences(next); } catch { notify('Could not save preferences on this device.'); }
   }, [notify]);
 
-  const playTrack = useCallback(async (track: Track, list?: string[]) => {
+  const playTrack = useCallback(async (track: any, list?: string[]) => {
     if (!audio.current) return;
     if (list) setQueue(list);
 
-    let playableTrack: Track;
-    let file: File;
-    let mimeType: string;
-    try {
-      ({ file, mimeType } = await materializeAudioFile(track));
-      playableTrack = { ...track, file, mimeType };
-    } catch (error) {
-      console.error('[VOID] Could not materialize persisted audio bytes.', { fileName: track.fileName, error });
-      setIsPlaying(false);
-      notify(`Could not restore “${track.fileName}” after Safari restarted. The saved audio data could not be read.`);
-      return;
+    const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+    const isRemote = !!remoteUrl;
+    let playableTrack = { ...track, audioUrl: remoteUrl };
+
+    if (isRemote) {
+      setStreamingTrack(playableTrack);
+    } else {
+      try {
+        const { file, mimeType } = await materializeAudioFile(playableTrack);
+        playableTrack = { ...playableTrack, file, mimeType };
+      } catch (error) {
+        console.error('[VOID] Could not materialize persisted audio bytes.', { fileName: playableTrack.fileName, error });
+        setIsPlaying(false);
+        notify(`Could not restore “${playableTrack.fileName || playableTrack.title}” after Safari restarted. The saved audio data could not be read.`);
+        return;
+      }
     }
 
-    setTracks(items => items.map(item => item.id === track.id ? playableTrack : item));
-    setActiveId(track.id);
+    setActiveId(playableTrack.id);
     setPosition(0);
-    setDuration(track.duration || 0);
+    setDuration(playableTrack.duration || 0);
 
     const el = audio.current;
     el.pause();
@@ -1331,13 +1391,15 @@ function App() {
       objectUrl.current = null;
     }
 
-    // Reset the media element before assigning a fresh Blob URL. This avoids Safari
-    // keeping decoder state from the previous media source.
     el.removeAttribute('src');
     el.load();
 
-    const url = URL.createObjectURL(file);
-    objectUrl.current = url;
+    let url = playableTrack.audioUrl;
+    if (!isRemote) {
+      url = URL.createObjectURL(playableTrack.file);
+      objectUrl.current = url;
+    }
+
     el.src = url;
     el.volume = prefs.volume;
     el.muted = prefs.muted;
@@ -1346,25 +1408,42 @@ function App() {
     try {
       await el.play();
       const actualDuration = el.duration;
+      
       const persistedTrack = {
         ...playableTrack,
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
         lastPlayedAt: Date.now(),
       };
-      setTracks(items => items.map(item => item.id === track.id ? persistedTrack : item));
-      // Persist the freshly materialized File so the next Safari restart gets a
-      // normal, explicitly typed Blob/File rather than the decoder-sensitive object.
-      void saveTrack(persistedTrack).catch(error => {
-        console.warn('[VOID] Could not persist refreshed audio source.', error);
+
+      setTracks(items => {
+        const exists = items.some(item => item.id === persistedTrack.id);
+        const updatedItems = exists
+          ? items.map(item => item.id === persistedTrack.id ? persistedTrack : item)
+          : [persistedTrack, ...items];
+
+        if (isRemote) {
+          try {
+            const favs = updatedItems.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+            localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+          } catch { /* storage fallback */ }
+        }
+        return updatedItems;
       });
+
+      if (!isRemote) {
+        void saveTrack(persistedTrack).catch(error => {
+          console.warn('[VOID] Could not persist refreshed audio source.', error);
+        });
+      }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return; // superseded by a newer play
+      if (error instanceof DOMException && error.name === 'AbortError') return;
 
       setIsPlaying(false);
-      console.error('[VOID] Audio playback failed.', { fileName: track.fileName, mimeType, error });
-      notify(`Unable to decode “${track.fileName}”. The saved audio data could not be decoded by Safari.`);
+      console.error('[VOID] Audio playback failed.', error);
+      notify(`Unable to play track.`);
     }
   }, [notify, prefs.muted, prefs.volume]);
+
 
   const togglePlay = useCallback(async () => {
     const el = audio.current;
@@ -1470,11 +1549,38 @@ function App() {
   };
   const openImport = () => setImportMenu(true);
 
-  const toggleFavorite = async (track: Track) => {
-    const updated = { ...track, favorite: !track.favorite };
-    setTracks(items => items.map(item => item.id === track.id ? updated : item));
-    try { await saveTrack(updated); } catch { notify('Could not save favorite.'); }
-  };
+const toggleFavorite = async (track: Track | any) => {
+  const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+  const isRemote = !!remoteUrl;
+  const nextFavorite = !track.favorite;
+  const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
+
+  if (isRemote) {
+    setStreamingTrack((current: any) => current?.id === track.id ? updated : current);
+  }
+
+  setTracks(items => {
+    const exists = items.some(item => item.id === track.id);
+    const newItems = exists ? items.map(item => item.id === track.id ? updated : item) : (isRemote ? [updated, ...items] : items);
+    
+    if (isRemote) {
+      try {
+        const favs = newItems.filter(t => t.favorite && (t.audioUrl || t.downloadUrl || t.src));
+        localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+      } catch { /* storage fallback */ }
+    }
+    return newItems;
+  });
+
+  try {
+    if (!isRemote) {
+      await saveTrack(updated);
+    }
+  } catch (error) {
+    console.error('[VOID] Could not save favorite:', error);
+    notify('Could not save favorite.');
+  }
+};
   const deleteTrack = async (track: Track) => {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
     try {
@@ -1879,10 +1985,10 @@ function App() {
               </div>
             </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
-          {page !== 'home' && page !== 'settings' && <div>
-            <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
-            <div className="section-heading" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
-              <div><h1 className="page-title">{title}</h1><p className="page-subtitle">{pageDescription[page]}</p></div>
+          {page !== 'home' && page !== 'settings' && <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div className="eyebrow" style={{ marginBottom: 2 }}>{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
+            <div className="section-heading" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
+              <div><h1 className="page-title" style={{ margin: 0 }}>{title}</h1><p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{pageDescription[page]}</p></div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {page === 'playlists' && !detail && <button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
                 {page === 'queue' && queueTracks.length > 0 && <button className="button" onClick={clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
@@ -2021,20 +2127,181 @@ function App() {
       <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
       <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
     </div></div>}
-    {paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}><div className="palette" role="dialog" aria-modal="true" aria-label="Search your library"><input autoFocus className="palette-input" placeholder="Search your music…" value={paletteQuery} onChange={event => setPaletteQuery(event.target.value)} onKeyDown={event => {
-      if (event.key !== 'Enter') return;
-      if (allSearchResults[0]) { void playTrack(allSearchResults[0]); setPaletteOpen(false); }
-      else if (albumSearchResults[0]) { setPaletteOpen(false); openCollection('album', albumSearchResults[0]); }
-      else if (artistSearchResults[0]) { setPaletteOpen(false); openCollection('artist', artistSearchResults[0]); }
-      else if (playlistSearchResults[0]) { const playlist = playlistSearchResults[0]; setPaletteOpen(false); setPage('playlists'); setLocation('/playlists'); setDetail({ kind: 'playlist', name: playlist.name }); }
-    }} data-testid="input-search-palette" /><div className="palette-results">
-       {allSearchResults.map(track => <button key={track.id} className="palette-result" onClick={() => { void playTrack(track); setPaletteOpen(false); }} data-testid={`search-result-${track.id}`}><Cover track={track} /><span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist} · {track.album}</span></span><Play size={13} /></button>)}
-       {albumSearchResults.map(name => <button key={`album-${name}`} className="palette-result" onClick={() => { setPaletteOpen(false); openCollection('album', name); }} data-testid={`search-album-${name}`}><Disc3 size={16} /><span>{name}</span><span className="crumb" style={{ marginLeft: 'auto' }}>Album</span></button>)}
-       {artistSearchResults.map(name => <button key={`artist-${name}`} className="palette-result" onClick={() => { setPaletteOpen(false); openCollection('artist', name); }} data-testid={`search-artist-${name}`}><Mic2 size={16} /><span>{name}</span><span className="crumb" style={{ marginLeft: 'auto' }}>Artist</span></button>)}
-       {playlistSearchResults.map(playlist => <button key={playlist.id} className="palette-result" onClick={() => { setPaletteOpen(false); setPage('playlists'); setLocation('/playlists'); setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`search-playlist-${playlist.id}`}><ListMusic size={16} /><span>{playlist.name}</span><span className="crumb" style={{ marginLeft: 'auto' }}>Playlist</span></button>)}
-       {paletteQuery && !allSearchResults.length && !albumSearchResults.length && !artistSearchResults.length && !playlistSearchResults.length && <div className="empty-state" style={{ margin: 8, padding: 20 }}><strong>No match in your library</strong><p>Search only checks files you’ve added here.</p></div>}
-      {!paletteQuery && <div className="crumb" style={{ padding: '14px 12px' }}>Search your local songs by title, artist, album, or file name.</div>}
-      </div></div></div>}
+{paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
+  <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
+    <input
+      autoFocus
+      className="palette-input"
+      placeholder="Search your music…"
+      value={paletteQuery}
+      onChange={event => setPaletteQuery(event.target.value)}
+      onKeyDown={event => {
+        if (event.key !== 'Enter') return;
+
+        if (allSearchResults[0]) {
+          void playTrack(allSearchResults[0]);
+          setPaletteOpen(false);
+        } else if (musicResults[0]) {
+          setPaletteOpen(false);
+        } else if (albumSearchResults[0]) {
+          setPaletteOpen(false);
+          openCollection('album', albumSearchResults[0]);
+        } else if (artistSearchResults[0]) {
+          setPaletteOpen(false);
+          openCollection('artist', artistSearchResults[0]);
+        } else if (playlistSearchResults[0]) {
+          const playlist = playlistSearchResults[0];
+          setPaletteOpen(false);
+          setPage('playlists');
+          setLocation('/playlists');
+          setDetail({ kind: 'playlist', name: playlist.name });
+        }
+      }}
+      data-testid="input-search-palette"
+    />
+
+    <div className="palette-results">
+
+      {allSearchResults.map(track => (
+        <button
+          key={track.id}
+          className="palette-result"
+          onClick={() => {
+            void playTrack(track);
+            setPaletteOpen(false);
+          }}
+          data-testid={`search-result-${track.id}`}
+        >
+          <Cover track={track} />
+          <span>
+            <span className="track-title">{track.title}</span>
+            <span className="track-sub">{track.artist} · {track.album}</span>
+          </span>
+          <Play size={13} />
+        </button>
+      ))}
+
+      {musicResults.map(track => (
+        <button
+          key={`saavn-${track.id}`}
+          className="palette-result"
+          onClick={() => {
+            const saavnTrack = {
+              id: `saavn-${track.id}`,
+              title: track.name,
+              artist: track.artist,
+              album: track.album,
+              fileName: `${track.name}.mp4`,
+              audioUrl: track.downloadUrl,
+              src: track.downloadUrl,
+              image: track.image,
+              duration: track.duration,
+            };
+
+            setPaletteOpen(false);
+            void playTrack(saavnTrack as any);
+          }}
+          data-testid={`search-music-${track.id}`}
+        >
+          <Cover track={{ image: track.image }} />
+          <span>
+            <span className="track-title">{track.name}</span>
+            <span className="track-sub">{track.artist}</span>
+          </span>
+          <span className="crumb" style={{ marginLeft: 'auto' }}>
+            JioSaavn
+          </span>
+        </button>
+      ))}
+
+      {albumSearchResults.map(name => (
+        <button
+          key={`album-${name}`}
+          className="palette-result"
+          onClick={() => {
+            setPaletteOpen(false);
+            openCollection('album', name);
+          }}
+          data-testid={`search-album-${name}`}
+        >
+          <Disc3 size={16} />
+          <span>{name}</span>
+          <span className="crumb" style={{ marginLeft: 'auto' }}>Album</span>
+        </button>
+      ))}
+
+      {artistSearchResults.map(name => (
+        <button
+          key={`artist-${name}`}
+          className="palette-result"
+          onClick={() => {
+            setPaletteOpen(false);
+            openCollection('artist', name);
+          }}
+          data-testid={`search-artist-${name}`}
+        >
+          <Mic2 size={16} />
+          <span>{name}</span>
+          <span className="crumb" style={{ marginLeft: 'auto' }}>Artist</span>
+        </button>
+      ))}
+
+      {playlistSearchResults.map(playlist => (
+        <button
+          key={playlist.id}
+          className="palette-result"
+          onClick={() => {
+            setPaletteOpen(false);
+            setPage('playlists');
+            setLocation('/playlists');
+            setDetail({ kind: 'playlist', name: playlist.name });
+            setQuery('');
+          }}
+          data-testid={`search-playlist-${playlist.id}`}
+        >
+          <ListMusic size={16} />
+          <span>{playlist.name}</span>
+          <span className="crumb" style={{ marginLeft: 'auto' }}>Playlist</span>
+        </button>
+      ))}
+
+      {musicSearching && paletteQuery && (
+        <div
+          className="crumb"
+          style={{ padding: '14px 12px' }}
+        >
+          Searching Jamendo…
+        </div>
+      )}
+
+      {paletteQuery &&
+        !allSearchResults.length &&
+        !musicResults.length &&
+        !musicSearching &&
+        !albumSearchResults.length &&
+        !artistSearchResults.length &&
+        !playlistSearchResults.length && (
+          <div
+            className="empty-state"
+            style={{ margin: 8, padding: 20 }}
+          >
+            <strong>No match in your library</strong>
+            <p>Search your library and Jamendo.</p>
+          </div>
+        )}
+
+      {!paletteQuery && (
+        <div
+          className="crumb"
+          style={{ padding: '14px 12px' }}
+        >
+          Search your local songs and Jamendo.
+        </div>
+      )}
+
+    </div>
+  </div>
+</div>}
     {modal && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setModal(null); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
        {modal === 'add-to-playlist' ? <>
@@ -2117,7 +2384,7 @@ function App() {
 }
 
 function EmptyLibrary({ label, onImport }: { label: string; onImport: () => void }) {
-  return <div className="empty-state" data-testid="empty-library"><strong>{label}</strong><p>VOID only shows audio you’ve added. No catalog, recommendations, or placeholder tracks.</p><button className="button" onClick-on={onImport} data-testid="button-empty-add-files"><Plus />Add audio files</button></div>;
+  return <div className="empty-state" data-testid="empty-library"><strong>{label}</strong><p>VOID only shows audio you’ve added. No catalog, recommendations, or placeholder tracks.</p><button className="button" onClick={onImport} data-testid="button-empty-add-files"><Plus />Add audio files</button></div>;
 }
 
 export default App;
