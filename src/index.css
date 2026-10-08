@@ -12,14 +12,15 @@
 @property --ox { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --oy { syntax: '<number>'; inherits: true; initial-value: 0; }
 
-/* ───────────────────────── Built-in fonts ───────────────────────── */
+/* ───────────────────────── Built-in font family ───────────────────────── */
 @font-face {
-  font-family: 'DM Serif Display Italic';
-  font-style: italic;
+  font-family: 'DM Serif Display';
+  font-style: normal;
   font-weight: 400;
   font-display: swap;
   src: url('/fonts/DMSerifDisplay-Italic.ttf') format('truetype');
 }
+
 @font-face {
   font-family: 'Delamoore';
   font-style: normal;
@@ -27,6 +28,7 @@
   font-display: swap;
   src: url('/fonts/Delamoore.ttf') format('truetype');
 }
+
 @font-face {
   font-family: 'Savage Roses';
   font-style: normal;
@@ -34,6 +36,7 @@
   font-display: swap;
   src: url('/fonts/Savage-Roses-Exfont35c7.otf') format('opentype');
 }
+
 @font-face {
   font-family: 'Wasted Vindey';
   font-style: normal;

@@ -89,15 +89,29 @@ const FONT_EXTENSIONS = ['ttf', 'otf', 'woff', 'woff2'];
 const FONT_MIME: Record<string, string> = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
 const FONT_MAX_BYTES = 12 * 1024 * 1024;
 const FONT_ROW_PREFIX = 'font:';
+const SAVAGE_FAMILY = 'Savage Roses';
+const BUILTIN_FONTS = [
+  { id: 'dm-serif-display', name: 'DM Serif Display Italic', family: 'DM Serif Display', tag: 'Built in' },
+  { id: 'delamoore', name: 'Delamoore', family: 'Delamoore', tag: 'Built in' },
+  { id: 'savage-roses', name: SAVAGE_FAMILY, family: SAVAGE_FAMILY, tag: 'Built in' },
+  { id: 'wasted-vindey', name: 'Wasted Vindey', family: 'Wasted Vindey', tag: 'Built in' },
+] as const;
 const FONT_PREVIEW = 'A quiet place for your music';
 const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
-const BUILTIN_FONTS = [
-  { id: 'dm-serif-display', name: 'DM Serif Display Italic', tag: 'Built in', family: 'DM Serif Display Italic', path: '/fonts/DMSerifDisplay-Italic.ttf' },
-  { id: 'delamoore', name: 'Delamoore', tag: 'Built in', family: 'Delamoore', path: '/fonts/Delamoore.ttf' },
-  { id: 'savage-roses', name: 'Savage Roses', tag: 'Built in', family: 'Savage Roses', path: '/fonts/Savage-Roses-Exfont35c7.otf' },
-  { id: 'wasted-vindey', name: 'Wasted Vindey', tag: 'Built in', family: 'Wasted Vindey', path: '/fonts/Wasted Vindey.ttf' },
-] as const;
 const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
+
+async function materializeAudioFile(track: Track): Promise<{ file: File; mimeType: string }> {
+  const mimeType = resolveAudioMimeType(track.fileName, track.mimeType || track.file.type);
+  // Safari can restore an IndexedDB Blob/File in a state that appears valid to JS but
+  // later fails inside the media decoder after a browser restart. Copy the persisted
+  // bytes into a fresh File with an explicit MIME type before handing it to <audio>.
+  const buffer = await track.file.arrayBuffer();
+  const file = new File([buffer], track.fileName, {
+    type: mimeType,
+    lastModified: Number.isFinite(track.importedAt) ? track.importedAt : Date.now(),
+  });
+  return { file, mimeType };
+}
 
 function fontStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -272,7 +286,7 @@ function App() {
   });
   const [customFonts, setCustomFonts] = useState<StoredFont[]>([]);
   const [fontsStatus, setFontsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [builtinFontState, setBuiltinFontState] = useState<Record<string, 'checking' | 'ready' | 'missing'>>(() => Object.fromEntries(BUILTIN_FONTS.map(font => [font.id, 'checking'])));
+  const [savageState, setSavageState] = useState<'checking' | 'ready' | 'missing'>('checking');
   const [fontBusy, setFontBusy] = useState(false);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
@@ -394,27 +408,16 @@ function App() {
   }, [prefs.volume, prefs.muted]);
 
   /* ───────────── Fonts ───────────── */
-  // Load every bundled font from its real public/fonts asset. TTF and OTF are both valid here;
-  // the files are kept in their original formats and registered with the browser's FontFace API.
+  // Verify the bundled Savage Roses face is available. The other built-in fonts are
+  // declared directly in index.css and do not need IndexedDB/import handling.
   useEffect(() => {
     let alive = true;
-    (async () => {
-      const results = await Promise.all(BUILTIN_FONTS.map(async font => {
-        try {
-          const response = await fetch(font.path, { cache: 'force-cache' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const buffer = await response.arrayBuffer();
-          const face = new FontFace(font.family, buffer, { style: 'normal', weight: '400' });
-          await face.load();
-          document.fonts.add(face);
-          return [font.id, 'ready'] as const;
-        } catch (error) {
-          console.warn('[VOID] Bundled font could not be loaded.', { name: font.name, path: font.path, error });
-          return [font.id, 'missing'] as const;
-        }
-      }));
-      if (alive) setBuiltinFontState(Object.fromEntries(results));
-    })();
+    if (!('fonts' in document)) setSavageState('missing');
+    else {
+      document.fonts.load(`16px "${SAVAGE_FAMILY}"`)
+        .then(faces => { if (alive) setSavageState(faces.length ? 'ready' : 'missing'); })
+        .catch(error => { console.info('[VOID] Savage Roses font could not be loaded.', error); if (alive) setSavageState('missing'); });
+    }
     return () => { alive = false; };
   }, []);
 
@@ -442,11 +445,11 @@ function App() {
     return () => { alive = false; };
   }, [isReady, storageError]);
 
-  // A saved custom-font selection that no longer exists falls back to Default.
-  // Built-in fonts always remain selectable; their @font-face rules provide the actual asset.
+  // A saved selection that no longer exists falls back to Default.
   useEffect(() => {
-    if (fontId.startsWith('custom:') && fontsStatus === 'ready' && !customFonts.some(font => `custom:${font.id}` === fontId)) setFontId('default');
-  }, [customFonts, fontId, fontsStatus]);
+    if (fontId === 'savage-roses' && savageState === 'missing') setFontId('default');
+    else if (fontId.startsWith('custom:') && fontsStatus === 'ready' && !customFonts.some(font => `custom:${font.id}` === fontId)) setFontId('default');
+  }, [customFonts, fontId, fontsStatus, savageState]);
 
   useEffect(() => {
     try { localStorage.setItem('void-font', fontId); } catch { /* Selection still applies for this session. */ }
@@ -457,7 +460,7 @@ function App() {
     const root = document.documentElement;
     let family: string | null = null;
     const builtin = BUILTIN_FONTS.find(font => font.id === fontId);
-    if (builtin) family = builtin.family;
+    if (builtin && (builtin.id !== 'savage-roses' || savageState !== 'missing')) family = builtin.family;
     else if (fontId.startsWith('custom:')) {
       const font = customFonts.find(item => `custom:${item.id}` === fontId);
       if (font) family = fontFamilyFor(font.id);
@@ -469,7 +472,7 @@ function App() {
       root.style.removeProperty('--void-font');
       root.style.removeProperty('--void-font-serif');
     }
-  }, [customFonts, fontId]);
+  }, [customFonts, fontId, savageState]);
 
   const importFont = async (file: File) => {
     const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
@@ -515,11 +518,11 @@ function App() {
       name: font.name,
       tag: font.tag,
       family: `"${font.family}", var(--app-font-sans)`,
-      note: '',
+      note: font.id === 'savage-roses' && savageState === 'missing' ? 'Bundled font could not be loaded.' : '',
       font: null as StoredFont | null,
     })),
     ...customFonts.map(font => ({ id: `custom:${font.id}`, name: font.name, tag: font.format.toUpperCase(), family: `"${fontFamilyFor(font.id)}", var(--app-font-sans)`, note: '', font: font as StoredFont | null })),
-  ], [customFonts]);
+  ], [customFonts, savageState]);
 
   const updatePrefs = useCallback(async (next: Preferences) => {
     setPrefs(next);
@@ -530,35 +533,65 @@ function App() {
   const playTrack = useCallback(async (track: Track, list?: string[]) => {
     if (!audio.current) return;
     if (list) setQueue(list);
-    const mimeType = resolveAudioMimeType(track.fileName, track.file.type || track.mimeType);
-    const file = track.file.type === mimeType ? track.file : track.file.slice(0, track.file.size, mimeType);
-    const playableTrack = { ...track, file, mimeType };
-    if (track.file.type !== mimeType || track.mimeType !== mimeType) {
-      setTracks(items => items.map(item => item.id === track.id ? playableTrack : item));
+
+    let playableTrack: Track;
+    let file: File;
+    let mimeType: string;
+    try {
+      ({ file, mimeType } = await materializeAudioFile(track));
+      playableTrack = { ...track, file, mimeType };
+    } catch (error) {
+      console.error('[VOID] Could not materialize persisted audio bytes.', { fileName: track.fileName, error });
+      setIsPlaying(false);
+      notify(`Could not restore “${track.fileName}” after Safari restarted. The saved audio data could not be read.`);
+      return;
     }
+
+    setTracks(items => items.map(item => item.id === track.id ? playableTrack : item));
     setActiveId(track.id);
     setPosition(0);
     setDuration(track.duration || 0);
-    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+
+    const el = audio.current;
+    el.pause();
+    if (objectUrl.current) {
+      URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = null;
+    }
+
+    // Reset the media element before assigning a fresh Blob URL. This avoids Safari
+    // keeping decoder state from the previous media source.
+    el.removeAttribute('src');
+    el.load();
+
     const url = URL.createObjectURL(file);
     objectUrl.current = url;
-    audio.current.src = url;
-    audio.current.volume = prefs.volume;
-    audio.current.muted = prefs.muted;
+    el.src = url;
+    el.volume = prefs.volume;
+    el.muted = prefs.muted;
+    el.load();
+
     try {
-      await audio.current.play();
+      await el.play();
       setIsPlaying(true);
-      const actualDuration = audio.current.duration;
-      void saveTrack({
+      const actualDuration = el.duration;
+      const persistedTrack = {
         ...playableTrack,
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
         lastPlayedAt: Date.now(),
-      }).then(reload).catch(() => undefined);
-    } catch {
+      };
+      setTracks(items => items.map(item => item.id === track.id ? persistedTrack : item));
+      // Persist the freshly materialized File so the next Safari restart gets a
+      // normal, explicitly typed Blob/File rather than the decoder-sensitive object.
+      void saveTrack(persistedTrack).catch(error => {
+        console.warn('[VOID] Could not persist refreshed audio source.', error);
+      });
+    } catch (error) {
       setIsPlaying(false);
-      notify(`This browser could not play “${track.fileName}”. The codec may not be supported.`);
+      console.error('[VOID] Audio playback failed.', { fileName: track.fileName, mimeType, error });
+      notify(`Unable to decode “${track.fileName}”. The saved audio data could not be decoded by Safari.`);
     }
-  }, [notify, prefs.muted, prefs.volume, reload]);
+  }, [notify, prefs.muted, prefs.volume]);
 
   const togglePlay = useCallback(async () => {
     const el = audio.current;
@@ -907,16 +940,14 @@ function App() {
     <div className="ambient" aria-hidden="true" />
     <audio ref={audio} preload="none" onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
       onLoadedMetadata={() => {
-        const value = audio.current?.duration ?? 0; setDuration(value);
-        const loadedTrack = tracks.find(item => item.id === activeId);
-        if (activeId && loadedTrack) {
-          const mimeType = resolveAudioMimeType(loadedTrack.fileName, loadedTrack.file.type || loadedTrack.mimeType);
-          const file = loadedTrack.file.type === mimeType
-            ? loadedTrack.file
-            : loadedTrack.file.slice(0, loadedTrack.file.size, mimeType);
-          const updatedTrack = { ...loadedTrack, file, mimeType, duration: value };
-          setTracks(items => items.map(item => item.id === activeId ? updatedTrack : item));
-          void saveTrack(updatedTrack).then(reload).catch(() => undefined);
+        const value = audio.current?.duration ?? 0;
+        setDuration(value);
+        if (activeId && Number.isFinite(value) && value > 0) {
+          setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
+          const loadedTrack = tracks.find(item => item.id === activeId);
+          if (loadedTrack) {
+            void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
+          }
         }
       }}
       onEnded={() => {
