@@ -100,6 +100,107 @@ const FONT_PREVIEW = 'A quiet place for your music';
 const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
 const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
 
+import { fetchArtist } from './musicApi';
+
+// --- OFFICIAL ARTIST PHOTO FETCHER (JioSaavn) ---
+const artistPhotoCache = new Map<string, string | null>();
+
+async function fetchArtistPhoto(
+  artistName: string
+): Promise<string | null> {
+  if (!artistName || artistName === 'Unknown Artist') {
+    return null;
+  }
+
+  const cacheKey = artistName.trim().toLowerCase();
+
+  if (artistPhotoCache.has(cacheKey)) {
+    return artistPhotoCache.get(cacheKey) || null;
+  }
+
+  try {
+    const artist = await fetchArtist(artistName);
+    const imageUrl = artist?.image || null;
+
+    artistPhotoCache.set(cacheKey, imageUrl);
+
+    return imageUrl;
+  } catch (error) {
+    console.error(
+      '[VOID] JioSaavn artist photo fetch failed:',
+      error
+    );
+
+    artistPhotoCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+const ArtistPhoto = memo(function ArtistPhoto({
+  artistName,
+  fallbackTrack,
+}: {
+  artistName: string;
+  fallbackTrack?: Track;
+}) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(
+    artistPhotoCache.get(artistName.trim().toLowerCase()) || null
+  );
+
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    const cacheKey = artistName.trim().toLowerCase();
+
+    setLoaded(false);
+
+    const cached = artistPhotoCache.get(cacheKey);
+
+    if (cached) {
+      setPhotoUrl(cached);
+      return () => {
+        active = false;
+      };
+    }
+
+    fetchArtistPhoto(artistName).then((url) => {
+      if (!active) return;
+
+      setPhotoUrl(url);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [artistName]);
+
+  if (photoUrl) {
+    return (
+      <img
+        src={photoUrl}
+        alt={artistName}
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+        }}
+        className={loaded ? 'loaded' : ''}
+        onLoad={() => setLoaded(true)}
+      />
+    );
+  }
+
+  return (
+    <Cover
+      track={fallbackTrack}
+      large
+      identity={`artist:${artistName}`}
+    />
+  );
+});
+// ----------------------------------------------------
 async function materializeAudioFile(track: Track): Promise<{ file: File; mimeType: string }> {
   const mimeType = resolveAudioMimeType(track.fileName, track.mimeType || track.file.type);
   // Safari can restore an IndexedDB Blob/File in a state that appears valid to JS but

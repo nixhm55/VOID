@@ -1,4 +1,4 @@
-import { searchMusic } from "./api/musicApi";
+import { searchMusic, fetchArtist } from './api/musicApi';
 import { searchYouTube } from "./api/youtubeApi";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
@@ -756,6 +756,109 @@ const FONT_PREVIEW = 'A quiet place for your music';
 const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
 const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
 
+
+// --- OFFICIAL ARTIST PHOTO FETCHER (ULTRA DEEP SEARCH: AudioDB + Wikipedia + Deezer) ---
+const artistPhotoCache = new Map<string, string | null>();
+
+async function fetchArtistPhoto(artistName: string): Promise<string | null> {
+  if (!artistName || artistName === 'Unknown Artist') return null;
+  if (artistPhotoCache.has(artistName)) return artistPhotoCache.get(artistName) || null;
+
+  const cleanName = artistName.trim();
+
+  try {
+    // LAYER 1: TheAudioDB (Native CORS, 100% Official Spotify-level Artist Photos)
+    // Used by media players for perfectly accurate musician photos.
+    const adbRes = await fetch(`https://www.theaudiodb.com/api/v1/json/2/search.php?s=${encodeURIComponent(cleanName)}`);
+    if (adbRes.ok) {
+      const adbData = await adbRes.json();
+      if (adbData.artists && adbData.artists.length > 0) {
+        // Strictly match the name so Michael Jackson doesn't return a remix compilation
+        const artist = adbData.artists.find((a: any) => a.strArtist.toLowerCase() === cleanName.toLowerCase()) || adbData.artists[0];
+        if (artist.strArtistThumb) {
+          const imgUrl = artist.strArtistThumb;
+          artistPhotoCache.set(artistName, imgUrl);
+          return imgUrl;
+        }
+      }
+    }
+  } catch (e) { console.warn("AudioDB fetch failed"); }
+
+  try {
+    // LAYER 2: Wikipedia API (Native CORS, Extremely Reliable Fallback)
+    // Fetches the primary profile picture of the artist from Wikipedia.
+    const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=600&format=json&origin=*`);
+    if (wikiRes.ok) {
+      const wikiData = await wikiRes.json();
+      if (wikiData.query && wikiData.query.pages) {
+        const pages = Object.values(wikiData.query.pages) as any[];
+        if (pages.length > 0 && pages[0].thumbnail?.source) {
+          const imgUrl = pages[0].thumbnail.source;
+          artistPhotoCache.set(artistName, imgUrl);
+          return imgUrl;
+        }
+      }
+    }
+  } catch (e) { console.warn("Wikipedia fetch failed"); }
+
+  try {
+    // LAYER 3: Deezer API with strict name matching (via AllOrigins)
+    const dzUrl = `https://api.deezer.com/search/artist?q=${encodeURIComponent(cleanName)}`;
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(dzUrl)}`;
+    const dzRes = await fetch(proxyUrl);
+    if (dzRes.ok) {
+      const proxyData = await dzRes.json();
+      if (proxyData.contents) {
+        const data = JSON.parse(proxyData.contents);
+        if (data && data.data && data.data.length > 0) {
+          // Strictly match to avoid taking album covers of similar names
+          const artist = data.data.find((a: any) => a.name.toLowerCase() === cleanName.toLowerCase()) || data.data[0];
+          if (artist.picture_xl) {
+            artistPhotoCache.set(artistName, artist.picture_xl);
+            return artist.picture_xl;
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn("Deezer fetch failed"); }
+
+  // If absolutely nothing is found, save as null to prevent spamming APIs
+  artistPhotoCache.set(artistName, null);
+  return null;
+}
+
+const ArtistPhoto = memo(function ArtistPhoto({ artistName, fallbackTrack }: { artistName: string, fallbackTrack?: Track }) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(artistPhotoCache.get(artistName) || null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (!photoUrl) {
+      fetchArtistPhoto(artistName).then(url => {
+        if (active && url) setPhotoUrl(url);
+      });
+    }
+    return () => { active = false; };
+  }, [artistName, photoUrl]);
+
+  if (photoUrl) {
+    return (
+      <img 
+        src={photoUrl} 
+        alt={artistName} 
+        style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+        className={loaded ? 'loaded' : ''} 
+        onLoad={() => setLoaded(true)} 
+      />
+    );
+  }
+
+  // If NO artist photo exists anywhere, fallback to track's embedded artwork
+  return <Cover track={fallbackTrack} large identity={`artist:${artistName}`} />;
+});
+// ----------------------------------------------------
+
+// ----------------------------------------------------
 async function materializeAudioFile(track: Track): Promise<{ file: File; mimeType: string }> {
   const mimeType = resolveAudioMimeType(track.fileName, track.mimeType || track.file.type);
   // Safari can restore an IndexedDB Blob/File in a state that appears valid to JS but
@@ -2114,10 +2217,55 @@ const toggleFavorite = async (track: Track | any) => {
               const representative = tracks.find(track => track.album === name);
               return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large identity={`album:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
             })}</div> : <EmptyLibrary label="No albums yet" onImport={openImport} /> : null}
-            {page === 'artists' && !detail ? artistNames.length ? <div className="cover-grid">{artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
-              const representative = tracks.find(track => track.artist === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large identity={`artist:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{countLabel(tracks.filter(track => track.artist === name).length, 'song')}</div></button>;
-            })}</div> : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
+            {page === 'artists' && !detail ? artistNames.length ? (
+              <>
+                <style>{`
+                  .cover-card:hover .artist-badge {
+                    opacity: 0;
+                    visibility: hidden;
+                  }
+                  .artist-badge {
+                    transition: all 0.2s ease-in-out;
+                  }
+                `}</style>
+                <div className="cover-grid">
+                  {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
+                    const representative = tracks.find(track => track.artist === name);
+                    const songCount = tracks.filter(track => track.artist === name).length;
+                    return (
+                      <button 
+                        className="cover-card" 
+                        key={name} 
+                        onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} 
+                        data-testid={`card-artist-${name}`}
+                        style={{ alignItems: 'center', textAlign: 'center' }}
+                      >
+                        <div style={{ position: 'relative', width: '130px', height: '130px', margin: '0 auto 12px' }}>
+                          <div style={{ width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden' }}>
+                            <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                          </div>
+                          {/* Top-Right Badge (Number only, hides on hover) */}
+                          <div className="artist-badge" style={{
+                            position: 'absolute',
+                            top: '2px',
+                            right: '4px',
+                            transform: 'translate(50%, -50%)',
+                            color: 'hsl(142, 71%, 45%)',
+                            fontSize: '16px',
+                            fontWeight: '900',
+                            textShadow: '0px 2px 4px rgba(0,0,0,0.7)',
+                            zIndex: 2
+                          }}>
+                            {songCount}
+                          </div>
+                        </div>
+                        <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            ) : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
             {page === 'playlists' && !detail && <div className="cover-grid">
               {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}

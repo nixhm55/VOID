@@ -10,7 +10,14 @@ export interface SearchResult {
   duration: number;
 }
 
+export interface ArtistResult {
+  id: string;
+  name: string;
+  image: string;
+}
+
 type JioArtist = {
+  id?: string | number;
   name?: string;
 };
 
@@ -36,6 +43,12 @@ type JioSong = {
   image?: JioImage[];
   downloadUrl?: JioDownload[];
   duration?: number | string;
+};
+
+type JioArtistProfile = {
+  id?: string | number;
+  name?: string;
+  image?: JioImage[];
 };
 
 function getArtist(song: JioSong): string {
@@ -94,6 +107,27 @@ function getDownloadUrl(song: JioSong): string {
   );
 }
 
+function getArtistImage(artist: JioArtistProfile): string {
+  if (!Array.isArray(artist.image)) {
+    return "";
+  }
+
+  const images = artist.image.filter(
+    (image) => Boolean(image?.url)
+  );
+
+  const highQuality = images.find(
+    (image) => image?.quality === "500x500"
+  );
+
+  return (
+    highQuality?.url ||
+    images[images.length - 1]?.url ||
+    images[0]?.url ||
+    ""
+  );
+}
+
 export async function searchMusic(
   query: string
 ): Promise<SearchResult[]> {
@@ -147,5 +181,60 @@ export async function searchMusic(
     );
 
     return [];
+  }
+}
+
+export async function fetchArtist(
+  artistName: string
+): Promise<ArtistResult | null> {
+  const cleanName = artistName.trim();
+
+  if (!cleanName || cleanName === "Unknown Artist") {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/artists/by-name?query=${encodeURIComponent(
+        cleanName
+      )}`
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `JioSaavn artist lookup failed: ${response.status}`
+      );
+    }
+
+    const json = await response.json();
+
+    const artist: JioArtistProfile =
+      json?.data?.artist ||
+      json?.data ||
+      json?.result ||
+      null;
+
+    if (!artist || !artist.name) {
+      return null;
+    }
+
+    const image = getArtistImage(artist);
+
+    if (!image) {
+      return null;
+    }
+
+    return {
+      id: String(artist.id || ""),
+      name: artist.name,
+      image,
+    };
+  } catch (error) {
+    console.error(
+      "JioSaavn artist lookup error:",
+      error
+    );
+
+    return null;
   }
 }
