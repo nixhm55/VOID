@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  ArrowDown, ArrowUp, AudioLines, ChevronDown, Clock3, Disc3, Heart, Home,
-  ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, Pause, Play, Plus, Search,
+  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
+  ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -26,15 +26,16 @@ const greetings = [
   'Let the day soften.',
   'The evening is yours.',
 ];
-const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'collection' }[] = [
-  { id: 'home', label: 'Home', icon: Home, group: 'listen' },
-  { id: 'recent', label: 'Recently played', icon: Clock3, group: 'listen' },
-  { id: 'songs', label: 'Songs', icon: Music2, group: 'collection' },
-  { id: 'albums', label: 'Albums', icon: Disc3, group: 'collection' },
-  { id: 'artists', label: 'Artists', icon: Mic2, group: 'collection' },
-  { id: 'playlists', label: 'Playlists', icon: ListMusic, group: 'collection' },
-  { id: 'favorites', label: 'Favorites', icon: Heart, group: 'collection' },
-  { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection' },
+// `compact` marks the pages that stay visible when the sidebar is collapsed to icons.
+const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'collection'; compact: boolean }[] = [
+  { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
+  { id: 'recent', label: 'Recently played', icon: Clock3, group: 'listen', compact: true },
+  { id: 'songs', label: 'Songs', icon: Music2, group: 'collection', compact: true },
+  { id: 'albums', label: 'Albums', icon: Disc3, group: 'collection', compact: false },
+  { id: 'artists', label: 'Artists', icon: Mic2, group: 'collection', compact: false },
+  { id: 'playlists', label: 'Playlists', icon: ListMusic, group: 'collection', compact: true },
+  { id: 'favorites', label: 'Favorites', icon: Heart, group: 'collection', compact: true },
+  { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection', compact: false },
 ];
 const pathFor = (page: Page) => page === 'home' ? '/' : `/${page}`;
 const formatTime = (seconds: number) => {
@@ -54,20 +55,153 @@ const moods = [
 ];
 const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
 
+/* ───────────────────────── Fallback artwork ─────────────────────────
+   Tracks without usable embedded artwork get one of ART_VARIANTS locally generated looks (see
+   .art-fallback in index.css). The choice is a pure function of the album/file identity, so the same
+   song always gets the same artwork. Tracks of one album share a look; tracks with no album tag are
+   keyed by file name + size. */
+const ART_VARIANTS = 13;
+// Very low-intensity light under the player for the playing track's fallback artwork (index-aligned with the CSS).
+const ART_GLOW = [
+  'hsl(30 95% 56% / .16)', 'hsl(270 85% 64% / .16)', 'hsl(350 85% 56% / .15)', 'hsl(180 80% 50% / .13)', 'hsl(222 88% 62% / .15)',
+  'hsl(0 0% 85% / .10)', 'hsl(210 70% 66% / .13)', 'hsl(32 98% 58% / .17)', 'hsl(215 40% 80% / .10)', 'hsl(34 40% 80% / .10)',
+  'hsl(340 70% 58% / .14)', 'hsl(36 92% 66% / .14)', 'hsl(165 40% 50% / .12)',
+];
+const hashOf = (seed: string) => { let hash = 2166136261; for (let i = 0; i < seed.length; i += 1) { hash ^= seed.charCodeAt(i); hash = Math.imul(hash, 16777619); } return hash >>> 0; };
+const artFor = (track: Track) => {
+  const seed = track.album && track.album !== 'Unknown album' ? `${track.album}|${track.artist}` : `${track.fileName}|${track.fileSize}`;
+  const hash = hashOf(seed);
+  return { variant: hash % ART_VARIANTS, x: 22 + ((hash >>> 8) % 56), y: 22 + ((hash >>> 16) % 56) };
+};
+
+/* ───────────────────────── Auto Import ─────────────────────────
+   Only formats the browser can genuinely play are imported (checked with canPlayType), and hidden
+   files such as macOS "._" companions are ignored. */
+const AUTO_IMPORT_EXTENSIONS = new Set(['mp3', 'm4a', 'm4b', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'aif', 'aiff']);
+
+/* ───────────────────────── Fonts ─────────────────────────
+   "Default" and "Savage Roses" are permanent. Imported fonts are read locally, registered with
+   document.fonts, and persisted as Blobs in the existing 'void-local-library' IndexedDB (in the
+   'preferences' store under 'font:<id>' keys, so no library.ts change or schema bump is needed).
+   The active font is applied through --void-font / --void-font-serif on <html>. */
+type StoredFont = { id: string; name: string; fileName: string; format: string; size: number; addedAt: number; data: Blob };
+const FONT_EXTENSIONS = ['ttf', 'otf', 'woff', 'woff2'];
+const FONT_MIME: Record<string, string> = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
+const FONT_MAX_BYTES = 12 * 1024 * 1024;
+const FONT_ROW_PREFIX = 'font:';
+const FONT_PREVIEW = 'A quiet place for your music';
+const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
+const BUILTIN_FONTS = [
+  { id: 'dm-serif-display', name: 'DM Serif Display Italic', tag: 'Built in', family: 'DM Serif Display Italic', path: '/fonts/DMSerifDisplay-Italic.ttf' },
+  { id: 'delamoore', name: 'Delamoore', tag: 'Built in', family: 'Delamoore', path: '/fonts/Delamoore.ttf' },
+  { id: 'savage-roses', name: 'Savage Roses', tag: 'Built in', family: 'Savage Roses', path: '/fonts/Savage-Roses-Exfont35c7.otf' },
+  { id: 'wasted-vindey', name: 'Wasted Vindey', tag: 'Built in', family: 'Wasted Vindey', path: '/fonts/Wasted Vindey.ttf' },
+] as const;
+const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
+
+function fontStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>) {
+  return new Promise<T>((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB is not available.')); return; }
+    const open = indexedDB.open('void-local-library');
+    // Never create the database from here; library.ts owns its schema.
+    open.onupgradeneeded = () => open.transaction?.abort();
+    open.onerror = () => reject(open.error ?? new Error('Could not open library storage.'));
+    open.onsuccess = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains('preferences')) { db.close(); reject(new Error('Library storage is not ready.')); return; }
+      let result: T | undefined;
+      const transaction = db.transaction('preferences', mode);
+      const request = action(transaction.objectStore('preferences'));
+      request.onsuccess = () => { result = request.result; };
+      transaction.oncomplete = () => { db.close(); resolve(result as T); };
+      transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error('Font storage was interrupted.')); };
+    };
+  });
+}
+const listStoredFonts = async () => {
+  const rows = await fontStore<{ id: string; value?: StoredFont }[]>('readonly', store => store.getAll());
+  return rows
+    .filter(row => typeof row.id === 'string' && row.id.startsWith(FONT_ROW_PREFIX) && row.value?.data)
+    .map(row => row.value as StoredFont)
+    .sort((a, b) => a.addedAt - b.addedAt);
+};
+const putStoredFont = (font: StoredFont) => fontStore<IDBValidKey>('readwrite', store => store.put({ id: FONT_ROW_PREFIX + font.id, value: font }));
+const deleteStoredFont = (id: string) => fontStore<undefined>('readwrite', store => store.delete(FONT_ROW_PREFIX + id));
+
+async function loadFontFace(id: string, data: ArrayBuffer) {
+  const face = new FontFace(fontFamilyFor(id), data);
+  await face.load();
+  document.fonts.add(face);
+  return face;
+}
+
+// Reads the family name from the font's 'name' table (TTF/OTF, and WOFF where the browser can inflate it).
+// WOFF2 is Brotli-compressed and cannot be read here, so those fall back to the file name.
+async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
+  try {
+    const view = new DataView(buffer);
+    const signature = view.getUint32(0);
+    let table: DataView | null = null;
+    if (signature === 0x774f4646) {
+      const count = view.getUint16(12);
+      for (let i = 0; i < count; i += 1) {
+        const entry = 44 + i * 20;
+        if (view.getUint32(entry) !== 0x6e616d65) continue;
+        const offset = view.getUint32(entry + 4), packed = view.getUint32(entry + 8), original = view.getUint32(entry + 12);
+        const raw = buffer.slice(offset, offset + packed);
+        if (packed === original) table = new DataView(raw);
+        else if ('DecompressionStream' in window) {
+          const stream = new Blob([raw]).stream().pipeThrough(new (window as any).DecompressionStream('deflate'));
+          table = new DataView(await new Response(stream).arrayBuffer());
+        }
+        break;
+      }
+    } else if (signature === 0x00010000 || signature === 0x4f54544f || signature === 0x74727565) {
+      const count = view.getUint16(4);
+      for (let i = 0; i < count; i += 1) {
+        const entry = 12 + i * 16;
+        if (view.getUint32(entry) !== 0x6e616d65) continue;
+        table = new DataView(buffer, view.getUint32(entry + 8), view.getUint32(entry + 12));
+        break;
+      }
+    }
+    if (!table) return null;
+    const records = table.getUint16(2), strings = table.getUint16(4);
+    let family: string | null = null, legacy: string | null = null;
+    for (let i = 0; i < records; i += 1) {
+      const record = 6 + i * 12;
+      const platform = table.getUint16(record), nameId = table.getUint16(record + 6);
+      if (nameId !== 1 && nameId !== 16) continue;
+      const length = table.getUint16(record + 8), offset = strings + table.getUint16(record + 10);
+      const bytes = new Uint8Array(table.buffer, table.byteOffset + offset, length);
+      const text = new TextDecoder(platform === 3 || platform === 0 ? 'utf-16be' : 'windows-1252').decode(bytes).trim();
+      if (!text) continue;
+      if (nameId === 16 && !family) family = text;
+      else if (nameId === 1 && !legacy) legacy = text;
+    }
+    return family ?? legacy;
+  } catch { return null; }
+}
+
 // Memoized so playback-time re-renders (timeupdate) never remount or reload artwork.
 const Cover = memo(function Cover({ track, large = false, kind = 'disc' }: { track?: Track; large?: boolean; kind?: 'disc' | 'list' }) {
   const [src, setSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    setLoaded(false);
+    setLoaded(false); setFailed(false);
     if (!track?.artwork) { setSrc(null); return; }
     const url = URL.createObjectURL(track.artwork); setSrc(url);
     return () => URL.revokeObjectURL(url);
   }, [track?.artwork]);
   const Glyph = kind === 'list' ? ListMusic : Disc3;
-  const style = track ? ({ '--cover-h': hueOf(`${track.album}|${track.artist}`) } as CSSProperties) : undefined;
-  return <div className={large ? 'cover-large' : 'cover-mini'} style={style} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
-    {src ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} /> : <Glyph aria-hidden="true" />}
+  // Real embedded artwork always wins; fallback art only when there is none or it cannot be decoded.
+  const art = track && (!track.artwork || failed) ? artFor(track) : null;
+  const style = track ? ({ '--cover-h': hueOf(`${track.album}|${track.artist}`), ...(art ? { '--ax': art.x, '--ay': art.y } : {}) } as CSSProperties) : undefined;
+  return <div className={`${large ? 'cover-large' : 'cover-mini'}${art ? ' art-fallback' : ''}`} style={style} data-art={art?.variant} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
+    {src && !failed
+      ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
+      : art ? (kind === 'list' ? <Glyph aria-hidden="true" /> : null) : <Glyph aria-hidden="true" />}
   </div>;
 }, (a, b) => a.large === b.large && a.kind === b.kind && a.track?.artwork === b.track?.artwork
   && a.track?.id === b.track?.id && a.track?.album === b.track?.album && a.track?.artist === b.track?.artist);
@@ -129,11 +263,27 @@ function App() {
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState('');
   const [importing, setImporting] = useState(false);
+  const [importMenu, setImportMenu] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('void-sidebar') === 'collapsed'; } catch { return false; }
+  });
+  const [fontId, setFontId] = useState<string>(() => {
+    try { return localStorage.getItem('void-font') || 'default'; } catch { return 'default'; }
+  });
+  const [customFonts, setCustomFonts] = useState<StoredFont[]>([]);
+  const [fontsStatus, setFontsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [builtinFontState, setBuiltinFontState] = useState<Record<string, 'checking' | 'ready' | 'missing'>>(() => Object.fromEntries(BUILTIN_FONTS.map(font => [font.id, 'checking'])));
+  const [fontBusy, setFontBusy] = useState(false);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement | null>(null);
+  const fontInput = useRef<HTMLInputElement>(null);
+  const fontFaces = useRef(new Map<string, FontFace>());
+  const orbRef = useRef<HTMLDivElement>(null);
+  const orbFrame = useRef(0);
   const audio = useRef<HTMLAudioElement>(null);
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -172,7 +322,7 @@ function App() {
   useEffect(() => {
     const root = document.documentElement;
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    
+
     const applyTheme = () => {
       root.classList.toggle('dark', dark);
       root.dataset.theme = dark ? 'dark' : 'light';
@@ -213,6 +363,10 @@ function App() {
   }, [queue]);
 
   useEffect(() => {
+    try { localStorage.setItem('void-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded'); } catch { /* Layout still works for this session. */ }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const sync = (e: MediaQueryListEvent) => {
       if (prefs.theme === 'system') {
@@ -238,6 +392,134 @@ function App() {
       audio.current.muted = prefs.muted;
     }
   }, [prefs.volume, prefs.muted]);
+
+  /* ───────────── Fonts ───────────── */
+  // Load every bundled font from its real public/fonts asset. TTF and OTF are both valid here;
+  // the files are kept in their original formats and registered with the browser's FontFace API.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const results = await Promise.all(BUILTIN_FONTS.map(async font => {
+        try {
+          const response = await fetch(font.path, { cache: 'force-cache' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const buffer = await response.arrayBuffer();
+          const face = new FontFace(font.family, buffer, { style: 'normal', weight: '400' });
+          await face.load();
+          document.fonts.add(face);
+          return [font.id, 'ready'] as const;
+        } catch (error) {
+          console.warn('[VOID] Bundled font could not be loaded.', { name: font.name, path: font.path, error });
+          return [font.id, 'missing'] as const;
+        }
+      }));
+      if (alive) setBuiltinFontState(Object.fromEntries(results));
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Restore imported fonts once the library database exists. Never blocks first paint.
+  useEffect(() => {
+    if (!isReady) return;
+    let alive = true;
+    (async () => {
+      if (storageError) { setFontsStatus('error'); return; }
+      try {
+        const stored = await listStoredFonts();
+        const usable: StoredFont[] = [];
+        for (const font of stored) {
+          try {
+            fontFaces.current.set(font.id, await loadFontFace(font.id, await font.data.arrayBuffer()));
+            usable.push(font);
+          } catch (error) { console.warn('[VOID] Stored font could not be restored.', { name: font.name, fileName: font.fileName, error }); }
+        }
+        if (alive) { setCustomFonts(usable); setFontsStatus('ready'); }
+      } catch (error) {
+        console.warn('[VOID] Could not read stored fonts.', error);
+        if (alive) setFontsStatus('error');
+      }
+    })();
+    return () => { alive = false; };
+  }, [isReady, storageError]);
+
+  // A saved custom-font selection that no longer exists falls back to Default.
+  // Built-in fonts always remain selectable; their @font-face rules provide the actual asset.
+  useEffect(() => {
+    if (fontId.startsWith('custom:') && fontsStatus === 'ready' && !customFonts.some(font => `custom:${font.id}` === fontId)) setFontId('default');
+  }, [customFonts, fontId, fontsStatus]);
+
+  useEffect(() => {
+    try { localStorage.setItem('void-font', fontId); } catch { /* Selection still applies for this session. */ }
+  }, [fontId]);
+
+  // The one place the selected font reaches the UI.
+  useEffect(() => {
+    const root = document.documentElement;
+    let family: string | null = null;
+    const builtin = BUILTIN_FONTS.find(font => font.id === fontId);
+    if (builtin) family = builtin.family;
+    else if (fontId.startsWith('custom:')) {
+      const font = customFonts.find(item => `custom:${item.id}` === fontId);
+      if (font) family = fontFamilyFor(font.id);
+    }
+    if (family) {
+      root.style.setProperty('--void-font', `"${family}", var(--app-font-sans)`);
+      root.style.setProperty('--void-font-serif', `"${family}", var(--app-font-serif)`);
+    } else {
+      root.style.removeProperty('--void-font');
+      root.style.removeProperty('--void-font-serif');
+    }
+  }, [customFonts, fontId]);
+
+  const importFont = async (file: File) => {
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (!FONT_EXTENSIONS.includes(extension)) { notify('Choose a .ttf, .otf, .woff or .woff2 font file.'); return; }
+    if (file.size > FONT_MAX_BYTES) { notify('That font file is too large. Choose one under 12 MB.'); return; }
+    if (customFonts.some(font => font.fileName === file.name && font.size === file.size)) { notify('That font is already in My Fonts.'); return; }
+    setFontBusy(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const name = (await readFontName(buffer)) || cleanFontName(file.name);
+      const id = crypto.randomUUID();
+      const face = await loadFontFace(id, buffer.slice(0));
+      fontFaces.current.set(id, face);
+      const font: StoredFont = { id, name, fileName: file.name, format: extension, size: file.size, addedAt: Date.now(), data: new Blob([buffer], { type: FONT_MIME[extension] }) };
+      setCustomFonts(items => [...items, font]);
+      setFontId(`custom:${id}`);
+      try { await putStoredFont(font); notify(`“${name}” added to My Fonts.`); }
+      catch (error) { console.warn('[VOID] Font loaded but could not be saved.', error); notify(`“${name}” is active, but could not be saved on this device.`); }
+    } catch (error) {
+      console.error('[VOID] Font import failed.', { fileName: file.name, size: file.size, extension, error });
+      notify('That font couldn’t be loaded. Your current font is unchanged.');
+    } finally { setFontBusy(false); }
+  };
+  const deleteFont = async (font: StoredFont) => {
+    if (!window.confirm(`Remove “${font.name}” from VOID? Your original font file is not deleted.`)) return;
+    try {
+      await deleteStoredFont(font.id);
+      const face = fontFaces.current.get(font.id);
+      if (face) document.fonts.delete(face);
+      fontFaces.current.delete(font.id);
+      setCustomFonts(items => items.filter(item => item.id !== font.id));
+      setFontId(current => current === `custom:${font.id}` ? 'default' : current);
+      notify('Font removed.');
+    } catch (error) {
+      console.error('[VOID] Font removal failed.', { name: font.name, error });
+      notify('Could not remove this font.');
+    }
+  };
+  const fontOptions = useMemo(() => [
+    { id: 'default', name: 'Default', tag: 'Built in', family: 'var(--app-font-sans)', note: '', font: null as StoredFont | null },
+    ...BUILTIN_FONTS.map(font => ({
+      id: font.id,
+      name: font.name,
+      tag: font.tag,
+      family: `"${font.family}", var(--app-font-sans)`,
+      note: '',
+      font: null as StoredFont | null,
+    })),
+    ...customFonts.map(font => ({ id: `custom:${font.id}`, name: font.name, tag: font.format.toUpperCase(), family: `"${fontFamilyFor(font.id)}", var(--app-font-sans)`, note: '', font: font as StoredFont | null })),
+  ], [customFonts]);
 
   const updatePrefs = useCallback(async (next: Preferences) => {
     setPrefs(next);
@@ -315,7 +597,7 @@ function App() {
     void playTrack(source[index], source.map(track => track.id));
   }, [activeId, playTrack, prefs.autoplay, prefs.repeat, prefs.shuffle, queue, tracks]);
 
-  const importFiles = async (files: FileList | File[]) => {
+  const importFiles = async (files: FileList | File[], note = '') => {
     const chosen = Array.from(files).filter(file => file.size > 0);
     if (!chosen.length) return;
     setImporting(true);
@@ -331,9 +613,35 @@ function App() {
         }
       }
       await reload();
-      if (added) notify(`${added} ${added === 1 ? 'file' : 'files'} added to your library.`);
+      if (added) notify(`${added} ${added === 1 ? 'file' : 'files'} added to your library.${note ? ` ${note}` : ''}`);
     } finally { setImporting(false); }
   };
+
+  // Auto Import: the person picks a folder (webkitdirectory works in Safari, Chrome and Firefox);
+  // we keep only playable, non-hidden audio that is not already in the library, then reuse importFiles.
+  const autoImport = async (files: FileList) => {
+    const all = Array.from(files);
+    const known = new Set(tracks.map(track => `${track.fileName}|${track.fileSize}`));
+    const probe = document.createElement('audio');
+    const supported: File[] = [];
+    let duplicates = 0;
+    for (const file of all) {
+      if (file.size === 0 || file.name.startsWith('.')) continue;
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (!AUTO_IMPORT_EXTENSIONS.has(extension)) continue;
+      if (!probe.canPlayType(resolveAudioMimeType(file.name, file.type))) continue;
+      const key = `${file.name}|${file.size}`;
+      if (known.has(key)) { duplicates += 1; continue; }
+      known.add(key);
+      supported.push(file);
+    }
+    if (!supported.length) {
+      notify(duplicates ? 'Everything in that folder is already in your library.' : 'No supported music files found.');
+      return;
+    }
+    await importFiles(supported, duplicates ? `${countLabel(duplicates, 'duplicate')} skipped.` : '');
+  };
+  const openImport = () => setImportMenu(true);
 
   const toggleFavorite = async (track: Track) => {
     const updated = { ...track, favorite: !track.favorite };
@@ -448,9 +756,9 @@ function App() {
         event.preventDefault(); setPaletteOpen(value => !value); setPaletteQuery(''); return;
       }
       if (event.key === 'Escape') {
-        setPaletteOpen(false); setModal(null); setContextTrack(null); setExpanded(false); return;
+        setPaletteOpen(false); setModal(null); setContextTrack(null); setExpanded(false); setImportMenu(false); return;
       }
-      if (editing || paletteOpen || modal || contextTrack) return;
+      if (editing || paletteOpen || modal || contextTrack || importMenu) return;
       if (event.code === 'Space') { event.preventDefault(); void togglePlay(); }
       else if (event.key === 'ArrowRight') { if (audio.current && activeTrack) audio.current.currentTime = Math.min(audio.current.duration || 0, audio.current.currentTime + 5); }
       else if (event.key === 'ArrowLeft') { if (audio.current && activeTrack) audio.current.currentTime = Math.max(0, audio.current.currentTime - 5); }
@@ -460,12 +768,31 @@ function App() {
     };
     window.addEventListener('keydown', onKeys);
     return () => window.removeEventListener('keydown', onKeys);
-  }, [activeTrack, contextTrack, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
-  
+  }, [activeTrack, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
+
   useEffect(() => () => {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     window.clearTimeout(toastTimer.current);
+    window.cancelAnimationFrame(orbFrame.current);
   }, []);
+
+  // Mood orb: the pointer position becomes --ox / --oy (-1…1); CSS eases and maps them to light,
+  // shadow and parallax. Mouse only, skipped entirely for reduced motion, one rAF-throttled write.
+  const moveOrb = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const el = orbRef.current;
+    if (!el || event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, (event.clientX - rect.left - rect.width / 2) / (rect.width / 2)));
+    const y = Math.max(-1, Math.min(1, (event.clientY - rect.top - rect.height / 2) / (rect.height / 2)));
+    window.cancelAnimationFrame(orbFrame.current);
+    orbFrame.current = window.requestAnimationFrame(() => { el.style.setProperty('--ox', x.toFixed(3)); el.style.setProperty('--oy', y.toFixed(3)); });
+  };
+  const resetOrb = () => {
+    const el = orbRef.current;
+    if (!el) return;
+    window.cancelAnimationFrame(orbFrame.current);
+    el.style.setProperty('--ox', '0'); el.style.setProperty('--oy', '0');
+  };
 
   const setPageAndRoute = (target: Page) => { setDetail(null); setPage(target); setLocation(pathFor(target)); };
   const filteredTracks = useMemo(() => {
@@ -566,6 +893,8 @@ function App() {
     menu: track => latestActions.current!.menu(track),
   }), []);
   const moodIndex = Math.floor(greetingHour / 2);
+  // Fallback-art tracks lend the player a very faint local glow; real artwork does not.
+  const activeArt = activeTrack && !activeTrack.artwork ? artFor(activeTrack) : null;
 
   const pageDescription: Record<Page, string> = {
     home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
@@ -574,7 +903,7 @@ function App() {
     playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, settings: 'A few quiet preferences.',
   };
 
-  return <div className="void-app" data-ambient={page}>
+  return <div className="void-app" data-ambient={page} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}>
     <div className="ambient" aria-hidden="true" />
     <audio ref={audio} preload="none" onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
       onLoadedMetadata={() => {
@@ -597,12 +926,15 @@ function App() {
       onError={() => { if (activeTrack) { setIsPlaying(false); notify(`Unable to decode “${activeTrack.fileName}”. This format may not be supported by your browser.`); } }} />
     <div className="void-shell">
       <aside className="sidebar" aria-label="Main navigation">
-        <button className="brand" aria-label="VOID home" onClick={() => setPageAndRoute('home')} data-testid="button-void-home"><span className="eclipse" /><span className="brand-word">VOID</span></button>
+        <div className="sidebar-head">
+          <button className="brand" aria-label="VOID home" onClick={() => setPageAndRoute('home')} data-testid="button-void-home"><span className="eclipse" /><span className="brand-word">VOID</span></button>
+          <button className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)} data-testid="button-toggle-sidebar">{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button>
+        </div>
         <div className="nav-group"><div className="nav-label">Listen</div>
-          {navItems.filter(item => item.group === 'listen').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
+          {navItems.filter(item => item.group === 'listen').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-collapsed-hidden={!item.compact && !active} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
         </div>
         <div className="nav-group"><div className="nav-label">Your library</div>
-          {navItems.filter(item => item.group === 'collection').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
+          {navItems.filter(item => item.group === 'collection').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-collapsed-hidden={!item.compact && !active} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
         </div>
         <div className="sidebar-bottom">
           <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPageAndRoute('settings')} aria-current={page === 'settings' ? 'page' : undefined} title="Settings" data-testid="nav-settings"><Settings /><span>Settings</span></button>
@@ -623,10 +955,12 @@ function App() {
           {page === 'home' && !detail && <>
             <div className="welcome">
               <div><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
-              <button className="button primary" onClick={() => fileInput.current?.click()} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
+              <button className="button primary" onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
             </div>
             <section className="mood" aria-label={moodLabelFor(greetingHour)}>
-              <div className="mood-orb" aria-hidden="true" />
+              <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
+                <div className="mood-orb"><i className="orb-highlight" /><i className="orb-sheen" /></div>
+              </div>
               <div className="mood-copy"><div className="mood-label">{moodLabelFor(greetingHour)}</div><h2>{moods[moodIndex]}</h2>
                 <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something"><Play />Play something for me</button></div>
             </section>
@@ -637,7 +971,7 @@ function App() {
               <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
                 <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
               </div>
-            </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={() => fileInput.current?.click()} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
+            </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
           {page !== 'home' && page !== 'settings' && <div>
             <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
@@ -651,27 +985,48 @@ function App() {
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
             {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
-            {page === 'songs' && <div className="track-toolbar"><span className="crumb">Audio files imported into VOID</span><button className="button" onClick={() => fileInput.current?.click()} data-testid="button-add-songs"><Plus />Add files</button></div>}
+            {page === 'songs' && <div className="track-toolbar"><span className="crumb">Audio files imported into VOID</span><button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button></div>}
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
             {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.album === name);
               return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
-            })}</div> : <EmptyLibrary label="No albums yet" onImport={() => fileInput.current?.click()} /> : null}
+            })}</div> : <EmptyLibrary label="No albums yet" onImport={openImport} /> : null}
             {page === 'artists' && !detail ? artistNames.length ? <div className="cover-grid">{artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.artist === name);
               return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{countLabel(tracks.filter(track => track.artist === name).length, 'song')}</div></button>;
-            })}</div> : <EmptyLibrary label="No artists yet" onImport={() => fileInput.current?.click()} /> : null}
+            })}</div> : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
             {page === 'playlists' && !detail && <div className="cover-grid">
               {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={() => fileInput.current?.click()} />)}
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
           {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
             <div className="settings-section">
               <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
               <div className="setting-row"><div><strong>Theme</strong><p>Follow your Mac, or choose a fixed appearance.</p></div><select className="select-control" value={prefs.theme} onChange={event => void updatePrefs({ ...prefs, theme: event.target.value as Preferences['theme'] })} aria-label="Theme" data-testid="select-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+              <div className="section-heading" style={{ marginTop: 30 }}><h2>Font</h2><span>Applies across VOID</span></div>
+              <div className="font-panel" role="radiogroup" aria-label="Font" data-testid="font-panel">
+                <div className="font-group-label">My Fonts</div>
+                {fontOptions.map(option => {
+                  const disabled = !!option.note;
+                  const selected = fontId === option.id && !disabled;
+                  return <div className={`font-option ${selected ? 'selected' : ''}`} key={option.id}>
+                    <button className="font-select" role="radio" aria-checked={selected} disabled={disabled} onClick={() => setFontId(option.id)} data-testid={`font-option-${option.id}`}>
+                      <span className="font-check" aria-hidden="true">{selected ? <Check /> : null}</span>
+                      <span className="font-copy">
+                        <span className="font-name">{option.name}<em>{option.tag}</em></span>
+                        {option.note
+                          ? <span className="font-note">{option.note}</span>
+                          : <span className="font-preview" style={{ fontFamily: option.family }}>{FONT_PREVIEW}</span>}
+                      </span>
+                    </button>
+                    {option.font ? <button className="icon-button" aria-label={`Remove ${option.name}`} title="Remove font" onClick={() => void deleteFont(option.font!)} data-testid={`button-remove-font-${option.id}`}><Trash2 /></button> : null}
+                  </div>;
+                })}
+                <button className="font-import" onClick={() => fontInput.current?.click()} disabled={fontBusy} data-testid="button-import-font"><span className="font-check" aria-hidden="true"><Plus /></span>{fontBusy ? 'Adding font…' : 'Import Font'}<small>.ttf · .otf · .woff · .woff2</small></button>
+              </div>
               <div className="section-heading" style={{ marginTop: 30 }}><h2>Playback</h2></div>
               <div className="setting-row"><div><strong>Autoplay</strong><p>Continue through the queue when a song ends.</p></div><button className={`switch ${prefs.autoplay ? 'on' : ''}`} role="switch" aria-checked={prefs.autoplay} aria-label="Autoplay" onClick={() => void updatePrefs({ ...prefs, autoplay: !prefs.autoplay })} data-testid="switch-autoplay"><span /></button></div>
               <div className="setting-row"><div><strong>Shuffle</strong><p>Play the queue in a different order.</p></div><button className={`switch ${prefs.shuffle ? 'on' : ''}`} role="switch" aria-checked={prefs.shuffle} aria-label="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="switch-shuffle"><span /></button></div>
@@ -679,7 +1034,7 @@ function App() {
               <div className="section-heading" style={{ marginTop: 30 }}><h2>Your files</h2></div>
               <div className="setting-row"><div><strong>Local library</strong><p>Audio files stay in this browser’s private storage. Clearing site data removes them.</p></div><span className="crumb">{tracks.length} files · {compactBytes(tracks.reduce((sum, track) => sum + track.fileSize, 0))}</span></div>
               <p className="page-subtitle" style={{ marginTop: 17, lineHeight: 1.7 }}>VOID does not upload your audio. Browser storage can be limited, and playback depends on which codecs this browser supports. Imported files are copied into local browser storage so they can be available after refresh.</p>
-               <div className="setting-row"><div><strong>Import music</strong><p>Add more audio from your Mac.</p></div><button className="button" onClick={() => fileInput.current?.click()} data-testid="button-settings-import">Choose files</button></div>
+               <div className="setting-row"><div><strong>Import music</strong><p>Add more audio from your Mac.</p></div><button className="button" onClick={openImport} data-testid="button-settings-import">Add music</button></div>
                <div className="setting-row"><div><strong>Rescan library</strong><p>Read available file tags and artwork again from stored audio.</p></div><button className="button" onClick={() => void rescanLibrary()} disabled={!tracks.length} data-testid="button-rescan-library">Rescan</button></div>
                <div className="setting-row"><div><strong>Clear library</strong><p>Remove VOID’s local copies and playlists. Original Mac files are untouched.</p></div><button className="button danger" onClick={() => void clearLibrary()} disabled={!tracks.length && !playlists.length} data-testid="button-clear-library">Clear library</button></div>
               <div className="section-heading" style={{ marginTop: 30 }}><h2>Keyboard shortcuts</h2></div>
@@ -689,8 +1044,8 @@ function App() {
         </section>
       </main>
     </div>
-    <div className="player-bar" data-testid="player-bar">
-      <div className="progress-row"><input aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="input-seek" /></div>
+    <div className="player-bar" data-testid="player-bar" data-idle={activeTrack ? undefined : ''} style={activeArt ? ({ '--art-glow': ART_GLOW[activeArt.variant] } as CSSProperties) : undefined}>
+      <div className="progress-row"><input aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} disabled={!activeTrack} onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="input-seek" /></div>
       <div className="player-track" onClick={() => activeTrack && setExpanded(true)} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setExpanded(true); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
         <span style={{ minWidth: 0 }}><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
@@ -710,6 +1065,14 @@ function App() {
       </div>
     </div>
     <input ref={fileInput} type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.alac" multiple hidden onChange={event => { if (event.target.files) void importFiles(event.target.files); event.target.value = ''; }} data-testid="input-import-files" />
+    <input ref={element => { folderInput.current = element; element?.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden onChange={event => { if (event.target.files) void autoImport(event.target.files); event.target.value = ''; }} data-testid="input-import-folder" />
+    <input ref={fontInput} type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFont(file); }} data-testid="input-import-font" />
+    {importMenu && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setImportMenu(false); }}><div className="import-menu" role="dialog" aria-modal="true" aria-labelledby="import-title" data-testid="import-menu">
+      <div className="import-head"><h2 id="import-title">Add music</h2><p>Files are copied into this browser’s private storage. Nothing is uploaded.</p></div>
+      <button className="import-option" onClick={() => { setImportMenu(false); folderInput.current?.click(); }} data-testid="button-auto-import"><span className="import-icon"><FolderOpen /></span><span className="import-copy"><strong>Auto Import</strong><span>Choose a folder and VOID finds the music inside it.</span></span></button>
+      <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
+      <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
+    </div></div>}
     {paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}><div className="palette" role="dialog" aria-modal="true" aria-label="Search your library"><input autoFocus className="palette-input" placeholder="Search your music…" value={paletteQuery} onChange={event => setPaletteQuery(event.target.value)} onKeyDown={event => {
       if (event.key !== 'Enter') return;
       if (allSearchResults[0]) { void playTrack(allSearchResults[0]); setPaletteOpen(false); }
