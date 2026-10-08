@@ -162,16 +162,29 @@ function App() {
   }, []);
 
   useEffect(() => { void reload(); }, [reload]);
+
   useEffect(() => {
     const pageFromPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
     if (['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
   }, [location]);
+
+  // Handle theme transitions seamlessly
   useEffect(() => {
     const root = document.documentElement;
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    root.classList.toggle('dark', dark);
-    root.dataset.theme = dark ? 'dark' : 'light';
+    
+    const applyTheme = () => {
+      root.classList.toggle('dark', dark);
+      root.dataset.theme = dark ? 'dark' : 'light';
+    };
+
+    if ('startViewTransition' in document && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      (document as any).startViewTransition(applyTheme);
+    } else {
+      applyTheme();
+    }
   }, [prefs.theme]);
+
   useEffect(() => {
     let timer = 0;
     const refreshGreeting = () => {
@@ -194,17 +207,31 @@ function App() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, []);
+
   useEffect(() => {
     localStorage.setItem('void-queue', JSON.stringify(queue));
   }, [queue]);
+
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const sync = () => {
-      if (prefs.theme === 'system') document.documentElement.classList.toggle('dark', media.matches);
+    const sync = (e: MediaQueryListEvent) => {
+      if (prefs.theme === 'system') {
+        const dark = e.matches;
+        const applyTheme = () => {
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        };
+        if ('startViewTransition' in document && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          (document as any).startViewTransition(applyTheme);
+        } else {
+          applyTheme();
+        }
+      }
     };
     media.addEventListener('change', sync);
     return () => media.removeEventListener('change', sync);
   }, [prefs.theme]);
+
   useEffect(() => {
     if (audio.current) {
       audio.current.volume = prefs.volume;
@@ -434,6 +461,7 @@ function App() {
     window.addEventListener('keydown', onKeys);
     return () => window.removeEventListener('keydown', onKeys);
   }, [activeTrack, contextTrack, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
+  
   useEffect(() => () => {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     window.clearTimeout(toastTimer.current);

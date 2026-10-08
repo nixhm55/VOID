@@ -219,3 +219,24 @@ export async function trackFromFile(file: File): Promise<Track> {
     artwork: tags.artwork,
   };
 }
+
+/**
+ * Merge a partial update into the stored record inside ONE readwrite transaction.
+ */
+export function updateTrack(id: string, patch: Partial<Track>) {
+  return database().then(db => new Promise<Track | undefined>((resolve, reject) => {
+    const transaction = db.transaction('tracks', 'readwrite');
+    const store = transaction.objectStore('tracks');
+    let merged: Track | undefined;
+    const read = store.get(id);
+    read.onsuccess = () => {
+      const current = read.result as Track | undefined;
+      if (!current) return;
+      merged = { ...current, ...patch, id: current.id };
+      store.put(merged);
+    };
+    transaction.oncomplete = () => resolve(merged);
+    transaction.onerror = () => reject(transaction.error ?? new Error('Local library update failed.'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('Local library transaction was interrupted.'));
+  }));
+}
