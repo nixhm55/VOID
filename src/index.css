@@ -499,6 +499,64 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .detail-hero h1 { font-size: 44px; letter-spacing: -.035em; font-weight: 600; margin: 8px 0; line-height: 1.06; overflow-wrap: anywhere; text-wrap: balance; }
 .detail-hero p { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 0; }
 
+/* Presentation only — home cards fly in from the sides as they scroll in; nothing else is touched.
+   Each flyer declares its side (left/right) with data-fly and a per-item delay with --fly-delay.
+   While hidden, the card is translated off its edge and faded; once [data-revealed] is present the
+   CSS glides it onto the grid and fades it in. The effect is scoped to the home section's parent
+   (data-fly-armed marks when home JS is actively driving it) so any flyer outside that section is
+   always fully visible. Reduced motion (or a missing IntersectionObserver) simply reveals everything. */
+[data-fly-armed] [data-fly]:not([data-revealed]) {
+  opacity: 0; transform: translate(calc(100% + clamp(32px, 9vw, 120px)), 0);
+  animation: none;
+}
+[data-fly-armed] [data-fly="right"]:not([data-revealed]) { transform: translate(calc(-100% - clamp(32px, 9vw, 120px)), 0); }
+[data-fly-armed] [data-fly]:not([data-revealed]) { transform-origin: left center; }
+[data-fly-armed] [data-fly="right"]:not([data-revealed]) { transform-origin: right center; }
+
+@keyframes fly-in-scale {
+  from { opacity: 0; transform: translate(calc(100% + clamp(32px, 9vw, 120px))) scale(.92); }
+  to { opacity: 1; transform: translate(0) scale(1); }
+}
+@keyframes fly-in-scale-from-right {
+  from { opacity: 0; transform: translate(calc(-100% - clamp(32px, 9vw, 120px))) scale(.92); }
+  to { opacity: 1; transform: translate(0) scale(1); }
+}
+[datalaunch-fly][data-fly="left"]:not([data-revealed]) {
+  animation-name: fly-in-scale;
+}
+[datalaunch-fly][data-fly="right"]:not([data-revealed]) {
+  animation-name: fly-in-scale-from-right;
+}
+
+[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-iteration-count: 1; animation-timing-function: cubic-bezier(.1, .82, .2, 1); animation-duration: 0.92s; animation-delay: var(--fly-delay, 0s); }
+
+/* While hidden, the card keeps the grid ready but can't open the row; the table row is clipped
+   horizontally so a half-flown row can never open a scrollbar. */
+[data-fly-armed] tr[data-fly]:not([data-revealed]) {
+  opacity: 0; transform: translate3d(calc(100% + clamp(24px, 7vw, 80px)), 0, 0);
+  animation: none;
+}
+[data-fly-armed] tr[data-fly="right"]:not([data-revealed]) { transform: translate3d(calc(-100% - clamp(24px, 7vw, 80px)), 0, 0); }
+[data-fly-armed] tr[data-fly]:not([data-revealed]) { transform-origin: left center; }
+[data-fly-armed] tr[data-fly="right"]:not([data-revealed]) { transform-origin: right center; }
+
+@keyframes fly-row-scale {
+  from { opacity: 0; transform: translate3d(calc(100% + clamp(24px, 7vw, 80px)), 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes fly-row-scale-from-right {
+  from { opacity: 0; transform: translate3d(calc(-100% - clamp(24px, 7vw, 80px)), 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.datalaunch-fly tr[data-fly="left"]:not([data-revealed]) {
+  animation-name: fly-row-scale;
+}
+.datalaunch-fly tr[data-fly="right"]:not([data-revealed]) {
+  animation-name: fly-row-scale-from-right;
+}
+
+tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-iteration-count: 1; animation-timing-function: cubic-bezier(.1, .82, .2, 1); animation-duration: 0.8s; animation-delay: var(--fly-delay, 0s); }
+
 /* ───────────────────────── Settings ───────────────────────── */
 .settings-section { max-width: 720px; margin-top: 34px; }
 .settings-section .section-heading h2 { font-size: 15px; }
@@ -945,4 +1003,245 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   :root { --glass-bg: hsl(40 20% 97%); --glass-bg-strong: hsl(40 20% 98%); --panel-bg: hsl(40 18% 94%); --np-scrim: hsl(40 20% 96% / .7); --np-glass: hsl(40 20% 98%); }
   .dark { --glass-bg: hsl(0 0% 6%); --glass-bg-strong: hsl(0 0% 8%); --panel-bg: hsl(0 0% 5%); --np-scrim: hsl(0 0% 0% / .7); --np-glass: hsl(0 0% 7%); }
   * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
+/* 
+========================================================
+   VOID MOBILE REDESIGN CSS OVERRIDES
+   (Append this to the bottom of your existing index.css)
+========================================================
+*/
+
+@layer utilities {
+  
+  /* Mobile Specific Styles - Desktop stays completely untouched */
+  @media (max-width: 768px) {
+    
+    /* Hide desktop sidebar */
+    .sidebar {
+      display: none !important;
+    }
+    
+    /* Make space for Mini Player + Bottom Nav + padding */
+    .main-area {
+      padding-bottom: 140px !important;
+    }
+
+    /* Bottom Navigation - Exactly 4 items */
+    .mobile-bottom-nav {
+      display: flex !important;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: calc(64px + env(safe-area-inset-bottom));
+      background: rgba(15, 15, 15, 0.85);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      z-index: 50;
+      justify-content: space-around;
+      align-items: center;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .mobile-nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 64px;
+      color: rgba(255, 255, 255, 0.4);
+      background: transparent;
+      border: none;
+      transition: color 0.2s ease;
+      cursor: pointer;
+    }
+
+    .mobile-nav-item.active {
+      color: #ffffff;
+    }
+
+    /* Mobile Mini Player - Positioned directly above navigation */
+    .player-bar {
+      position: fixed !important;
+      bottom: calc(64px + env(safe-area-inset-bottom) + 8px) !important;
+      left: 8px !important;
+      right: 8px !important;
+      width: auto !important;
+      height: 56px !important;
+      border-radius: 12px !important;
+      background: rgba(24, 24, 24, 0.85) !important;
+      backdrop-filter: blur(20px) !important;
+      -webkit-backdrop-filter: blur(20px) !important;
+      border: 1px solid rgba(255, 255, 255, 0.1) !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      padding: 0 12px !important;
+      z-index: 45 !important;
+    }
+
+    /* Hide desktop controls on mobile mini player */
+    .player-center, .player-extra {
+      display: none !important;
+    }
+
+    /* Track info container for mobile */
+    .player-track {
+      flex: 1;
+      min-width: 0;
+      padding-right: 12px;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    /* Dedicated play/pause button for mobile mini player */
+    .mobile-mini-play {
+      display: flex !important;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      background: transparent;
+      border: none;
+      color: #ffffff;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+
+    /* --- Mobile Settings: Font Panel --- */
+    
+    /* Button to open font panel on mobile */
+    .mobile-font-trigger {
+      display: flex !important;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: inherit;
+      font-size: 16px;
+      margin-top: 12px;
+      cursor: pointer;
+    }
+
+    /* Hide the standard font panel by default */
+    .font-panel {
+      display: none;
+    }
+
+    /* Full screen font panel when active */
+    .font-panel.mobile-open {
+      display: flex !important;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg-color, #0a0a0a);
+      z-index: 100;
+      flex-direction: column;
+      padding: 24px;
+      padding-top: max(24px, env(safe-area-inset-top));
+      overflow-y: auto;
+    }
+
+    .mobile-font-header {
+      display: flex !important;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    
+    .mobile-font-header h2 {
+      font-size: 1.5rem;
+      margin: 0;
+    }
+    
+    /* Hide the normal font section heading on mobile */
+    .font-section-heading {
+      display: none !important;
+    }
+  }
+
+  /* Keep mobile specific UI hidden on Desktop entirely */
+  @media (min-width: 769px) {
+    .mobile-bottom-nav, 
+    .mobile-mini-play, 
+    .mobile-font-trigger, 
+    .mobile-font-header {
+      display: none !important;
+    }
+  }
+}
+
+
+/* 
+========================================================
+   DESKTOP PLAYER BAR REFINEMENTS
+========================================================
+*/
+@media (min-width: 769px) {
+  /* 1. പ്ലേ ബട്ടണിന്റെ ഗ്ലാസും സൈസും മാറ്റില്ല, വോയിഡിന്റെ എംബ്ലം (പകുതി സർക്കിൾ) മാത്രം കളയുന്നു */
+  .player-bar .play-button .void-glyph .g-ring {
+    display: none !important;
+  }
+
+  /* 2. മിനി പ്ലെയറിന്റെ ഉള്ളിൽത്തന്നെ കൃത്യമായി താഴെ വരാൻ overflow: hidden കൊടുക്കുന്നു */
+  .player-bar {
+    overflow: hidden !important;
+    padding-bottom: 0 !important;
+  }
+
+  .player-center {
+    position: static !important;
+  }
+
+  /* 3. പ്രോഗ്രസ്സ് ബാർ ഏറ്റവും താഴെ ഫുൾ വീതിയിൽ ലൈൻ ആയി കൊടുക്കുന്നു */
+  .player-bar .player-scrub {
+    position: absolute !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: 3px !important; /* വരയുടെ കനം */
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important; /* പഴയ Grid മാറ്റി Block ആക്കുന്നു */
+  }
+
+  /* പ്രോഗ്രസ്സ് ബാറിന്റെ നീളവും വീതിയും */
+  .player-bar .player-scrub .seek {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+  
+  .player-bar .seek::-webkit-slider-runnable-track {
+    height: 3px !important;
+    border-radius: 0 !important;
+  }
+  .player-bar .seek::-moz-range-track {
+    height: 3px !important;
+    border-radius: 0 !important;
+  }
+
+  /* Thumb (വട്ടത്തിലുള്ള ഡോട്ട്) കളയുന്നു, വര മാത്രം മതി */
+  .player-bar .seek::-webkit-slider-thumb {
+    transform: scale(0) !important;
+    opacity: 0 !important;
+  }
+  .player-bar .seek::-moz-range-thumb {
+    transform: scale(0) !important;
+    opacity: 0 !important;
+  }
+
+  /* 4. പഴയ സമയങ്ങൾ (0:00 - 3:00) ഹൈഡ് ചെയ്യുന്നു (App.tsx-ൽ Hover Time ചെയ്യാൻ വേണ്ടി) */
+  .player-bar .player-scrub > span {
+    display: none !important;
+  }
 }

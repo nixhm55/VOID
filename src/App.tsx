@@ -58,189 +58,620 @@ const moods = [
 const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
 
 /* ───────────────────────── Procedural artwork ─────────────────────────
-   Tracks (and albums / artists / playlists) without usable embedded artwork get a locally composed
-   cover. Nothing is stored and no images are generated: a stable seed string drives a seeded PRNG,
-   and the PRNG chooses many independent things — a warm-first dominant / secondary / accent hue, a
-   composition archetype (where the light sits), 0–2 soft light forms (bloom, sweep, pool, mist,
-   core, ember), glow sizes, alphas, shading direction and grain. Every light is a feathered bleed:
-   bright at its heart and dissolving into transparency, so a cover can never contain a dark disc,
-   a ring or a hard edge — only smooth red / gold / deep ambient light on a rich dark sleeve.
-   The result is one layered CSS `background` string, so a cover costs a few gradients and no pixels.
-   The same seed always produces the same cover; different seeds produce different compositions
-   (placement, hue, size, alpha and base all vary continuously, so no two covers match), and the
-   dominant hues double as the global ambient colour. */
-type Hue4 = readonly [number, number, number, number]; // [h1, h2, h3, saturation %]
+Songs, albums, artists and playlists WITHOUT embedded artwork get a locally composed cover.
+Songs that already have a real picture never reach this code (Cover uses the real image first).
+
+Look: soft feathered lights on a deep, tinted dark sleeve — the red glow, the golden-yellow glow,
+the red + gold + magenta mixes. Every light dissolves into transparency, so there is never a ring,
+a hard edge or a dark disc.
+
+Uniqueness: the seed is hashed into a 128-bit state (four 32-bit words), so two different seeds
+never share a random stream. From that stream, EVERYTHING is continuous: exact hue (not picked
+from a short list), saturation, brightness, light positions, sizes, alphas, base tint, shade
+angle, vignette, grain — plus one of eight composition archetypes and 0–3 optional extra layers.
+The same seed always gives the same cover (reload, restart, any browser).
+*/
+type Hue4 = readonly [number, number, number, number];
 type ArtResult = { background: string; ambient: Hue4; grain: number };
-// Warm first — crimson, ember, amber, gold — with deep plum / violet / steel as rare counterpoints.
-const ART_WARM = [348, 354, 2, 8, 16, 24, 32, 40, 46] as const;
-const ART_DEEP = [332, 314, 296, 276, 258, 240, 222, 206] as const;
-const ART_KINDS = ['bloom', 'sweep', 'pool', 'mist', 'core', 'ember'] as const;
-const ART_LAYOUTS = ['corner', 'center', 'low', 'high', 'split', 'diagonal', 'edge', 'scatter'] as const;
-const hashOf = (seed: string) => { let hash = 2166136261; for (let i = 0; i < seed.length; i += 1) { hash ^= seed.charCodeAt(i); hash = Math.imul(hash, 16777619); } return hash >>> 0; };
-const mulberry32 = (seed: number) => () => {
-  seed = (seed + 0x6D2B79F5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+type ArtFamily = { from: number; to: number; weight: number };
+
+const ART_FAMILIES: readonly ArtFamily[] = [
+  { from: 346, to: 368, weight: 26 },
+  { from: 8, to: 26, weight: 18 },
+  { from: 30, to: 52, weight: 20 },
+  { from: 316, to: 344, weight: 12 },
+  { from: 268, to: 312, weight: 9 },
+  { from: 214, to: 262, weight: 6 },
+  { from: 176, to: 206, weight: 4 },
+  { from: 128, to: 168, weight: 3 },
+];
+
+const ART_LAYOUTS = [
+  'orb',
+  'duo',
+  'corner',
+  'horizon',
+  'trio',
+  'sun',
+  'edge',
+  'wash',
+] as const;
+
+const seedWords = (seed: string): [number, number, number, number] => {
+  let h1 = 1779033703;
+  let h2 = 3144134277;
+  let h3 = 1013904242;
+  let h4 = 2773480762;
+
+  for (let i = 0; i < seed.length; i += 1) {
+    const k = seed.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+
+  return [
+    (h1 ^ h2 ^ h3 ^ h4) >>> 0,
+    (h2 ^ h1) >>> 0,
+    (h3 ^ h1) >>> 0,
+    (h4 ^ h1) >>> 0,
+  ];
 };
+
+const sfc32 = (a: number, b: number, c: number, d: number) => () => {
+  a >>>= 0;
+  b >>>= 0;
+  c >>>= 0;
+  d >>>= 0;
+
+  const t = (a + b) | 0;
+  a = b ^ (b >>> 9);
+  b = (c + (c << 3)) | 0;
+  c = (c << 21) | (c >>> 11);
+  d = (d + 1) | 0;
+
+  const r = (t + d) | 0;
+  c = (c + r) | 0;
+
+  return (r >>> 0) / 4294967296;
+};
+
 const num = (value: number, digits = 0) => value.toFixed(digits);
-const hsla = (h: number, s: number, l: number, a?: number) => a === undefined
-  ? `hsl(${num(h)} ${num(s)}% ${num(l)}%)`
-  : `hsl(${num(h)} ${num(s)}% ${num(l)}% / ${num(a, 2)})`;
+
+const hsla = (
+  h: number,
+  s: number,
+  l: number,
+  a?: number,
+) =>
+  a === undefined
+    ? `hsl(${num(h, 1)} ${num(s)}% ${num(l, 1)}%)`
+    : `hsl(${num(h, 1)} ${num(s)}% ${num(l, 1)}% / ${num(a, 2)})`;
 
 function composeArt(seed: string): ArtResult {
-  const rnd = mulberry32(hashOf(seed) ^ 0x9e3779b9);
-  for (let i = 0; i < 4; i += 1) rnd();
+  const rnd = sfc32(...seedWords(seed));
+
+  for (let i = 0; i < 12; i += 1) rnd();
+
   const range = (a: number, b: number) => a + rnd() * (b - a);
   const chance = (p: number) => rnd() < p;
-  const pick = <T,>(list: readonly T[]): T => list[Math.floor(rnd() * list.length)];
-  const sign = () => (rnd() < .5 ? -1 : 1);
+  const sign = () => (rnd() < 0.5 ? -1 : 1);
   const wrap = (h: number) => ((h % 360) + 360) % 360;
 
-  const neutral = chance(.06);   // a few silver / ink covers keep the collection from being all colour
-  const lush = chance(.26);      // a rich, saturated colour field instead of a dark cover with a light in it
-  // Warm-first: three quarters of covers start from crimson / ember / amber / golden yellow, the rest
-  // from the deep plum / violet / steel counterpoints. Hue then drifts within (or just beside) that
-  // family, so reds stay reds and golds stay golds — only the balance shifts.
-  const warm = chance(.76);
-  const h1 = wrap((warm ? pick(ART_WARM) : pick(ART_DEEP)) + range(-8, 8));
-  const spread = rnd();
-  const h2 = wrap(h1 + (spread < .58 ? sign() * range(9, 32) : spread < .9 ? sign() * range(38, 84) : range(-6, 6)));
-  // The accent light is usually a second warm tone (amber over crimson, gold over ember); sometimes
-  // it simply sits close to the dominant hue. Never a hard complement, which would read as a clash.
-  const h3 = wrap(chance(.58) ? pick(ART_WARM) + range(-6, 6) : h1 + sign() * range(7, 30));
-  const s1 = neutral ? range(6, 14) : range(70, 96);
-  const s2 = neutral ? s1 : Math.max(50, s1 - range(0, 18));
-  const lit = range(54, 68);
+  const pickFamily = (list: readonly ArtFamily[]) => {
+    const total = list.reduce((sum, item) => sum + item.weight, 0);
+    let roll = rnd() * total;
 
-  // One light bleed: bright warm heart, then four stops that soften outward into full transparency.
-  // There is no opaque rim and no cut-off edge anywhere in the ramp, so a light can never show a
-  // ring, a hole or a band — it just dissolves into the sleeve.
-  const glow = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 100) =>
-    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(h, s, Math.min(94, l + 6), a)} 0, ${hsla(h, s, l, a * .64)} ${num(end * .26)}%, ${hsla(h, s, Math.max(6, l - 8), a * .32)} ${num(end * .56)}%, ${hsla(h, s, Math.max(4, l - 16), a * .11)} ${num(end * .8)}%, transparent ${num(end)}%)`;
+    for (const item of list) {
+      roll -= item.weight;
+      if (roll <= 0) return item;
+    }
 
-  // Where the light sits: eight archetypes, each with its own placement logic.
-  const layout = pick(ART_LAYOUTS);
-  let p: [number, number];
-  let q: [number, number];
-  switch (layout) {
+    return list[list.length - 1];
+  };
+
+  const hueIn = (family: ArtFamily) =>
+    wrap(range(family.from, family.to));
+
+  const family = pickFamily(ART_FAMILIES);
+  const warmFamilies = ART_FAMILIES.slice(0, 4);
+
+  const h1 = hueIn(family);
+
+  const roll = rnd();
+
+  const h2 =
+    roll < 0.5
+      ? hueIn(pickFamily(warmFamilies.filter((item) => item !== family)))
+      : roll < 0.86
+        ? wrap(h1 + sign() * range(14, 46))
+        : wrap(h1 + sign() * range(70, 130));
+
+  const h3 = chance(0.5)
+    ? hueIn(ART_FAMILIES[2])
+    : wrap(h2 + sign() * range(12, 44));
+
+  const lush = chance(0.24);
+
+  const s1 = range(74, 98);
+  const s2 = range(66, 96);
+  const s3 = range(62, 94);
+
+  const lit = range(46, 60);
+  const size = lush ? 1.26 : 1;
+
+  const alpha = (lo: number, hi: number) =>
+    Math.min(1, range(lo, hi) * (lush ? 1.2 : 1));
+
+  const glow = (
+    x: number,
+    y: number,
+    rx: number,
+    ry: number,
+    h: number,
+    s: number,
+    l: number,
+    a: number,
+    end = 100,
+  ) =>
+    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(
+      h,
+      s,
+      Math.min(94, l + 6),
+      a,
+    )} 0, ${hsla(h, s, l, a * 0.64)} ${num(end * 0.26)}%, ${hsla(
+      h,
+      s,
+      Math.max(6, l - 8),
+      a * 0.32,
+    )} ${num(end * 0.56)}%, ${hsla(
+      h,
+      s,
+      Math.max(4, l - 16),
+      a * 0.11,
+    )} ${num(end * 0.8)}%, transparent ${num(end)}%)`;
+
+  const lights: string[] = [];
+
+  const add = (
+    x: number,
+    y: number,
+    rx: number,
+    ry: number,
+    h: number,
+    s: number,
+    l: number,
+    a: number,
+    end?: number,
+  ) => {
+    lights.push(glow(x, y, rx, ry, h, s, l, a, end));
+  };
+
+  let focus: [number, number] = [50, 50];
+
+  switch (
+    ART_LAYOUTS[Math.floor(rnd() * ART_LAYOUTS.length)]
+  ) {
+    case 'orb': {
+      const x = range(24, 76);
+      const y = range(32, 84);
+      const r = range(34, 62) * size;
+
+      add(
+        x,
+        y,
+        r,
+        r * range(0.86, 1.14),
+        h1,
+        s1,
+        lit,
+        alpha(0.7, 0.95),
+        range(80, 100),
+      );
+
+      add(
+        100 - x + range(-14, 14),
+        100 - y + range(-14, 14),
+        range(40, 86),
+        range(36, 80),
+        h2,
+        s2,
+        lit - 6,
+        alpha(0.34, 0.6),
+      );
+
+      focus = [x, y];
+      break;
+    }
+
+    case 'duo': {
+      const flip = chance(0.5);
+      const xa = range(10, 40);
+      const xb = range(60, 90);
+      const ya = range(18, 78);
+      const yb = range(18, 78);
+
+      add(
+        flip ? xb : xa,
+        ya,
+        range(30, 56) * size,
+        range(30, 56) * size,
+        h1,
+        s1,
+        lit,
+        alpha(0.62, 0.9),
+        96,
+      );
+
+      add(
+        flip ? xa : xb,
+        yb,
+        range(28, 54) * size,
+        range(28, 54) * size,
+        h2,
+        s2,
+        lit - 4,
+        alpha(0.55, 0.85),
+        96,
+      );
+
+      focus = [flip ? xb : xa, ya];
+      break;
+    }
+
     case 'corner': {
-      const left = chance(.5), top = chance(.5);
-      p = [left ? range(2, 22) : range(78, 98), top ? range(2, 24) : range(76, 98)];
-      q = [100 - p[0] + range(-14, 14), 100 - p[1] + range(-14, 14)];
+      const left = chance(0.5);
+      const top = chance(0.5);
+
+      const x = left ? range(-6, 18) : range(82, 106);
+      const y = top ? range(-6, 20) : range(80, 106);
+
+      add(
+        x,
+        y,
+        range(70, 118) * size,
+        range(62, 110) * size,
+        h1,
+        s1,
+        lit,
+        alpha(0.66, 0.95),
+      );
+
+      add(
+        100 - x + range(-10, 10),
+        100 - y + range(-10, 10),
+        range(44, 82),
+        range(40, 78),
+        h2,
+        s2,
+        lit - 4,
+        alpha(0.5, 0.82),
+      );
+
+      focus = [x, y];
       break;
     }
-    case 'center':
-      p = [range(36, 64), range(34, 64)];
-      q = [p[0] + sign() * range(24, 42), p[1] + sign() * range(24, 40)];
-      break;
-    case 'low':
-      p = [range(14, 86), range(78, 104)];
-      q = [range(0, 100), range(-6, 26)];
-      break;
-    case 'high':
-      p = [range(14, 86), range(-6, 22)];
-      q = [range(0, 100), range(78, 106)];
-      break;
-    case 'split': {
-      const first = chance(.5);
-      p = [first ? range(8, 30) : range(70, 92), range(20, 80)];
-      q = [100 - p[0] + range(-8, 8), range(20, 80)];
+
+    case 'horizon': {
+      const low = chance(0.5);
+      const y = low ? range(80, 106) : range(-6, 20);
+
+      add(
+        range(24, 76),
+        y,
+        range(84, 130) * size,
+        range(26, 46) * size,
+        h1,
+        s1,
+        lit,
+        alpha(0.7, 0.95),
+      );
+
+      add(
+        range(10, 90),
+        low ? range(-8, 16) : range(84, 108),
+        range(36, 72),
+        range(30, 60),
+        h2,
+        s2,
+        lit - 6,
+        alpha(0.3, 0.56),
+      );
+
+      focus = [50, y];
       break;
     }
-    case 'diagonal': {
-      const first = chance(.5);
-      p = [first ? range(4, 30) : range(70, 96), range(4, 30)];
-      q = [100 - p[0], range(70, 98)];
+
+    case 'trio': {
+      const base = range(0, Math.PI * 2);
+      const radius = range(22, 38);
+
+      const hues = [h1, h2, h3];
+      const sats = [s1, s2, s3];
+
+      hues.forEach((h, i) => {
+        const angle = base + i * 2.0944 + range(-0.5, 0.5);
+
+        add(
+          50 + Math.cos(angle) * radius + range(-6, 6),
+          50 + Math.sin(angle) * radius + range(-6, 6),
+          range(30, 52) * size,
+          range(30, 52) * size,
+          h,
+          sats[i],
+          lit - i * 2,
+          alpha(0.5, 0.82),
+          98,
+        );
+      });
+
       break;
     }
+
+    case 'sun': {
+      const x = range(28, 72);
+      const y = range(28, 72);
+      const r = range(7, 15);
+
+      add(
+        x,
+        y,
+        r,
+        r,
+        h3,
+        Math.min(100, s3 + 6),
+        84,
+        alpha(0.6, 0.9),
+        60,
+      );
+
+      add(
+        x,
+        y,
+        r * 4.6,
+        r * 4.6,
+        h1,
+        s1,
+        lit,
+        alpha(0.5, 0.8),
+      );
+
+      add(
+        range(-10, 110),
+        range(-10, 110),
+        range(60, 110),
+        range(54, 100),
+        h2,
+        s2,
+        lit - 8,
+        alpha(0.3, 0.56),
+      );
+
+      focus = [x, y];
+      break;
+    }
+
     case 'edge': {
-      const first = chance(.5);
-      p = [first ? range(-8, 6) : range(94, 108), range(14, 86)];
-      q = [first ? range(60, 100) : range(0, 40), range(0, 100)];
+      const left = chance(0.5);
+      const x = left ? range(-12, 6) : range(94, 112);
+      const y = range(18, 82);
+
+      add(
+        x,
+        y,
+        range(52, 90) * size,
+        range(46, 84) * size,
+        h1,
+        s1,
+        lit,
+        alpha(0.7, 0.95),
+      );
+
+      add(
+        left ? range(70, 100) : range(0, 30),
+        range(10, 90),
+        range(34, 66),
+        range(32, 64),
+        h2,
+        s2,
+        lit - 4,
+        alpha(0.4, 0.7),
+        96,
+      );
+
+      focus = [x, y];
       break;
     }
-    default:
-      p = [range(8, 92), range(8, 92)];
-      q = [range(8, 92), range(8, 92)];
-  }
-  const t: [number, number] = [range(6, 94), range(6, 94)];
 
-  // Forms: zero, one or two soft light shapes. Every kind feathers into full transparency — there is
-  // deliberately no form here that can paint a dark disc, a bright rim, a ring or a hard-edged ray.
-  const forms: string[] = [];
-  const kinds = new Set<(typeof ART_KINDS)[number]>();
-  const kindCount = chance(.12) ? 0 : chance(.55) ? 1 : 2;
-  while (kinds.size < kindCount) kinds.add(pick(ART_KINDS));
-  for (const kind of kinds) {
-    const fx = range(26, 74), fy = range(24, 72);
-    switch (kind) {
-      case 'bloom': {                       // a wide, warm flower of light
-        const r = range(26, 60);
-        forms.push(
-          glow(fx, fy, r, r * range(.84, 1.18), h1, s1, lit, range(.5, .85), range(76, 100)),
-          glow(fx, fy, r * 1.8, r * 1.8, h2, s2, lit - 6, range(.28, .5), 100),
-        );
-        break;
-      }
-      case 'sweep': {                       // a soft diagonal drift of light across the sleeve
-        const angle = range(0, 180), c = range(32, 66), w = range(24, 46);
-        const lo = Math.max(0, c - w), hi = Math.min(100, c + w);
-        forms.push(`linear-gradient(${num(angle)}deg, transparent ${num(lo)}%, ${hsla(h2, s2 * .8, 78, range(.1, .24))} ${num(Math.max(lo, c - w * .4))}%, ${hsla(h3, s2, 84, range(.14, .3))} ${num(c)}%, ${hsla(h2, s2 * .6, 76, range(.06, .16))} ${num(Math.min(hi, c + w * .4))}%, transparent ${num(hi)}%)`);
-        break;
-      }
-      case 'pool': {                        // light gathered in one corner, spilling inward
-        const left = chance(.5), top = chance(.5);
-        forms.push(glow(left ? range(-16, 8) : range(92, 116), top ? range(-12, 12) : range(88, 114), range(72, 124), range(58, 112), chance(.5) ? h1 : h2, s1, lit, range(.4, .7), 100));
-        break;
-      }
-      case 'mist':                          // two overlapping veils, barely there
-        forms.push(
-          glow(fx, fy, range(72, 124), range(40, 82), h3, s2, 66, range(.18, .38), 100),
-          glow(100 - fx, 100 - fy, range(60, 112), range(52, 104), h2, s2, 60, range(.15, .32), 100),
-        );
-        break;
-      case 'core': {                        // a bright heart sitting inside a wide halo
-        const r = range(6, 15);
-        forms.push(
-          glow(fx, fy, r, r * range(.9, 1.15), h2, Math.min(100, s2 + 8), 82, range(.55, .85), 58),
-          glow(fx, fy, r * 5.2, r * 5.2, h1, s1, lit, range(.28, .5), 100),
-        );
-        break;
-      }
-      default: {                            // 'ember' — a small warm spark with a long fade
-        const r = range(3, 8);
-        forms.push(
-          glow(fx, fy, r, r * range(.85, 1.2), h3, s2 * .7, 90, range(.5, .8), 46),
-          glow(fx, fy, r * 7, r * 6, h1, s1, lit - 4, range(.24, .46), 100),
-        );
-      }
+    default: {
+      lights.push(
+        `linear-gradient(${num(
+          range(0, 360),
+        )}deg, ${hsla(
+          h1,
+          s1,
+          lit - 8,
+          alpha(0.5, 0.8),
+        )}, transparent ${num(
+          range(48, 70),
+        )}%, ${hsla(
+          h2,
+          s2,
+          lit - 10,
+          alpha(0.45, 0.75),
+        )})`,
+      );
+
+      const x = range(20, 80);
+      const y = range(20, 80);
+
+      add(
+        x,
+        y,
+        range(28, 52) * size,
+        range(28, 52) * size,
+        h3,
+        s3,
+        lit,
+        alpha(0.5, 0.8),
+        96,
+      );
+
+      focus = [x, y];
     }
   }
 
-  const primary = glow(p[0], p[1], range(44, lush ? 124 : 92), range(38, lush ? 124 : 88), h1, s1, lit, range(lush ? .78 : .54, lush ? 1 : .88), lush ? 100 : 84);
-  const secondary = glow(q[0], q[1], range(38, 98), range(32, 96), h2, s2, lit - 4, range(.32, .66), 92);
-  const accent = chance(.62) ? glow(t[0], t[1], range(16, 38), range(16, 38), h3, s2, 66, range(.28, .58), 86) : '';
-  // One full-cover directional shade: a smooth light-to-dark ramp with no midpoint edge, so the
-  // sleeve gains depth without ever showing a cut, a ring or a hole.
-  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(.02, .08), 2)}), transparent ${num(range(30, 48))}%, hsl(0 0% 0% / ${num(range(.14, .4), 2)}))`;
-  const baseL = lush ? range(12, 22) : range(5, 12);
-  const base = `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, neutral ? 6 : range(26, 52), baseL)}, ${hsla(h2, neutral ? 6 : range(24, 46), Math.max(2, baseL - range(1, 6)))})`;
+  const extras: string[] = [];
+
+  if (chance(0.45)) {
+    extras.push(
+      glow(
+        range(10, 90),
+        range(10, 90),
+        range(70, 120),
+        range(40, 84),
+        h3,
+        s3,
+        64,
+        alpha(0.14, 0.3),
+      ),
+      glow(
+        range(10, 90),
+        range(10, 90),
+        range(60, 110),
+        range(52, 104),
+        h2,
+        s2,
+        58,
+        alpha(0.12, 0.26),
+      ),
+    );
+  }
+
+  if (chance(0.5)) {
+    const left = chance(0.5);
+    const top = chance(0.5);
+
+    extras.push(
+      glow(
+        left ? range(-10, 8) : range(92, 110),
+        top ? range(-10, 10) : range(90, 110),
+        range(40, 80),
+        range(36, 74),
+        h3,
+        s3,
+        lit,
+        alpha(0.28, 0.55),
+      ),
+    );
+  }
+
+  const clamp = (value: number) =>
+    Math.max(20, Math.min(80, value));
+
+  const strength =
+    range(0.3, 0.62) * (lush ? 0.7 : 1);
+
+  const vignette =
+    `radial-gradient(ellipse ${num(
+      range(78, 110),
+    )}% ${num(
+      range(78, 110),
+    )}% at ${num(
+      clamp(focus[0]),
+      1,
+    )}% ${num(
+      clamp(focus[1]),
+      1,
+    )}%, transparent 0, transparent 34%, ${hsla(
+      h1,
+      50,
+      3,
+      strength * 0.45,
+    )} 70%, ${hsla(
+      h1,
+      50,
+      2,
+      strength,
+    )} 100%)`;
+
+  const shade =
+    `linear-gradient(${num(
+      range(0, 360),
+    )}deg, hsl(0 0% 100% / ${num(
+      range(0.02, 0.07),
+      2,
+    )}), transparent ${num(
+      range(30, 48),
+    )}%, hsl(0 0% 0% / ${num(
+      range(0.12, 0.34),
+      2,
+    )}))`;
+
+  const baseL = lush
+    ? range(10, 18)
+    : range(4, 9);
+
+  const base =
+    `linear-gradient(${num(
+      range(0, 360),
+    )}deg, ${hsla(
+      h1,
+      range(34, 60),
+      baseL + range(0, 3),
+    )}, ${hsla(
+      h2,
+      range(30, 56),
+      Math.max(2, baseL - range(1, 4)),
+    )})`;
 
   return {
-    background: [...forms, shade, accent, secondary, primary, base].filter(Boolean).join(', '),
-    ambient: [Math.round(h1), Math.round(h2), Math.round(h3), neutral ? 6 : Math.round(Math.min(94, s1))],
-    grain: range(.08, .26),
+    background: [
+      vignette,
+      shade,
+      ...extras,
+      ...lights,
+      base,
+    ].join(', '),
+
+    ambient: [
+      Math.round(h1),
+      Math.round(h2),
+      Math.round(h3),
+      Math.round(Math.min(94, s1)),
+    ],
+
+    grain: range(0.1, 0.26),
   };
 }
+
 const artCache = new Map<string, ArtResult>();
+
 const artForSeed = (seed: string) => {
   let art = artCache.get(seed);
-  if (!art) { art = composeArt(seed); artCache.set(seed, art); }
+
+  if (!art) {
+    art = composeArt(seed);
+    artCache.set(seed, art);
+  }
+
   return art;
 };
-// A song's cover is a pure function of stable file identity, so it never changes across reloads or rescans.
-const artFor = (track: Track, identity?: string) => artForSeed(identity ?? `${track.id}|${track.fileName}|${track.fileSize}`);
+
+const artFor = (
+  track: Track,
+  identity?: string,
+) =>
+  artForSeed(
+    identity ??
+      `${track.id}|${track.fileName}|${track.fileSize}`,
+  );
 
 // Real embedded artwork has no generator seed, so its colour is read once from a 20×20 downscale.
 // Weighted by chroma and mid-tone-ness; near-greyscale art falls back to a neutral light.
@@ -453,18 +884,13 @@ type RowActions = {
   menu: (track: Track) => void;
 };
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions, fly = false }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions; fly?: boolean;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions;
 }) {
   return <div className="table-wrap">
     <table className="track-table">
       <thead><tr><th>{showIndex ? ' ' : 'Title'}</th><th>Album</th><th>Time</th><th aria-label="Actions" /></tr></thead>
-      {/* `fly` rows declare their entrance edge (alternating sides) and stagger delay here; App.tsx
-          arms the section before paint and an IntersectionObserver marks data-revealed per row as it
-          scrolls into view. */}
-      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}
-        data-fly={fly ? (index % 2 ? 'right' : 'left') : undefined}
-        style={fly ? ({ '--fly-delay': `${index * 60}ms` } as CSSProperties) : undefined}>
+      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
         <td><div className="track-main">
           {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
           <Cover track={track} />
@@ -574,11 +1000,13 @@ function App() {
   const [fontsStatus, setFontsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [savageState, setSavageState] = useState<'checking' | 'ready' | 'missing'>('checking');
   const [fontBusy, setFontBusy] = useState(false);
+  const [mobileFontOpen, setMobileFontOpen] = useState(false);
   const [duration, setDuration] = useState(0);
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
-  // Ambient colour of the playing track: [h1, h2, h3, saturation]. Drives the whole environment.
+  // Hover time tracking
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [atmos, setAtmos] = useState<Hue4 | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
@@ -1290,22 +1718,15 @@ function App() {
     if (!root) return;
     const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-fly]:not([data-revealed])'));
     if (!nodes.length) return;
-    let disarm = 0;
     const reveal = (node: HTMLElement) => {
       node.dataset.revealed = '';
-      // Once the last flyer is on screen, drop the armed marker shortly after the longest
-      // entrance finishes (delay + duration) to hand the table's own horizontal scroll back.
-      if (root.querySelector('[data-fly]:not([data-revealed])')) return;
-      window.clearTimeout(disarm);
-      disarm = window.setTimeout(() => {
-        if (!root.querySelector('[data-fly]:not([data-revealed])')) delete root.dataset.flyArmed;
-      }, 1500);
+      if (!root.querySelector('[data-fly]:not([data-revealed])')) (root as HTMLElement).dataset.flyArmed = undefined;
     };
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
       nodes.forEach(reveal);
       return;
     }
-    root.dataset.flyArmed = '';
+    (root as HTMLElement).dataset.flyArmed = '';
     const observer = new IntersectionObserver(entries => {
       entries.forEach(entry => {
         if (!entry.isIntersecting) return;
@@ -1313,16 +1734,8 @@ function App() {
         observer.unobserve(entry.target);
       });
     }, { rootMargin: '0px 0px -8% 0px', threshold: .14 });
-    let secondFrame = 0;
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => nodes.forEach(node => observer.observe(node)));
-    });
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
-      window.clearTimeout(disarm);
-      observer.disconnect();
-    };
+    requestAnimationFrame(() => requestAnimationFrame(() => nodes.forEach(node => observer.observe(node))));
+    return () => observer.disconnect();
   }, [page, detail, jumpBack, recentlyAdded]);
   // Uses the existing playback path: a random starting song with the whole library queued.
   const playSomething = () => {
@@ -1462,7 +1875,7 @@ function App() {
                   data-fly={index % 2 ? 'right' : 'left'} style={{ '--fly-delay': `${index * 90}ms` } as CSSProperties}><Cover track={track} large /><span className="jump-title">{track.title}</span><span className="jump-sub">{track.artist}</span></button>)}</div>
               </div>
               <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
-                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} fly />
+                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
               </div>
             </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
@@ -1499,8 +1912,17 @@ function App() {
             <div className="settings-section">
               <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
               <div className="setting-row"><div><strong>Theme</strong><p>Follow your Mac, or choose a fixed appearance.</p></div><select className="select-control" value={prefs.theme} onChange={event => void updatePrefs({ ...prefs, theme: event.target.value as Preferences['theme'] })} aria-label="Theme" data-testid="select-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
-              <div className="section-heading" style={{ marginTop: 30 }}><h2>Font</h2><span>Applies across VOID</span></div>
-              <div className="font-panel" role="radiogroup" aria-label="Font" data-testid="font-panel">
+              
+              <div className="section-heading font-section-heading" style={{ marginTop: 30 }}><h2>Font</h2><span>Applies across VOID</span></div>
+              <button className="mobile-font-trigger" onClick={() => setMobileFontOpen(true)}>
+                <span>Font</span> <ChevronDown size={16} />
+              </button>
+              
+              <div className={`font-panel ${mobileFontOpen ? 'mobile-open' : ''}`} role="radiogroup" aria-label="Font" data-testid="font-panel">
+                <div className="mobile-font-header">
+                  <h2>Select Font</h2>
+                  <button className="icon-button" onClick={() => setMobileFontOpen(false)}><X /></button>
+                </div>
                 <div className="font-group-label">My Fonts</div>
                 {fontOptions.map(option => {
                   const disabled = !!option.note;
@@ -1520,6 +1942,7 @@ function App() {
                 })}
                 <button className="font-import" onClick={() => fontInput.current?.click()} disabled={fontBusy} data-testid="button-import-font"><span className="font-check" aria-hidden="true"><Plus /></span>{fontBusy ? 'Adding font…' : 'Import Font'}<small>.ttf · .otf · .woff · .woff2</small></button>
               </div>
+
               <div className="section-heading" style={{ marginTop: 30 }}><h2>Playback</h2></div>
               <div className="setting-row"><div><strong>Autoplay</strong><p>Continue through the queue when a song ends.</p></div><button className={`switch ${prefs.autoplay ? 'on' : ''}`} role="switch" aria-checked={prefs.autoplay} aria-label="Autoplay" onClick={() => void updatePrefs({ ...prefs, autoplay: !prefs.autoplay })} data-testid="switch-autoplay"><span /></button></div>
               <div className="setting-row"><div><strong>Shuffle</strong><p>Play the queue in a different order.</p></div><button className={`switch ${prefs.shuffle ? 'on' : ''}`} role="switch" aria-checked={prefs.shuffle} aria-label="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="switch-shuffle"><span /></button></div>
@@ -1536,12 +1959,38 @@ function App() {
           </div>}
         </section>
       </main>
+
+      {/* MOBILE BOTTOM NAVIGATION */}
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        {[
+          { id: 'home', icon: Home },
+          { id: 'songs', icon: Music2 },
+          { id: 'playlists', icon: ListMusic },
+          { id: 'settings', icon: Settings }
+        ].map(item => {
+          const Icon = item.icon;
+          const active = page === item.id && !detail;
+          return (
+            <button key={item.id} className={`mobile-nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id as Page)} aria-label={item.id}>
+              <Icon size={24} strokeWidth={active ? 2.5 : 2} />
+            </button>
+          );
+        })}
+      </nav>
+
     </div>
+    
     <div className="player-bar" data-testid="player-bar" data-idle={activeTrack ? undefined : ''} data-np={expanded ? '' : undefined}>
       <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
         <span><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
       </div>
+      
+      {/* MOBILE MINI PLAY BUTTON */}
+      <button className="icon-button mobile-mini-play" onClick={(e) => { e.stopPropagation(); void togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}>
+        <VoidGlyph playing={isPlaying} />
+      </button>
+
       <div className="player-center">
         <div className="player-controls">
           <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-label="Shuffle" title="Shuffle" aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="button-shuffle"><Shuffle /></button>
@@ -1646,7 +2095,7 @@ function App() {
                 <div className="np-times"><span>{formatElapsed(position)}</span><span>{formatTime(duration)}</span></div>
               </div>
               <div className="np-controls">
-                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
+                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" aria-play="" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
                 <div className="np-transport">
                   <button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button>
                   <button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play"><VoidGlyph playing={isPlaying} /></button>
@@ -1668,7 +2117,7 @@ function App() {
 }
 
 function EmptyLibrary({ label, onImport }: { label: string; onImport: () => void }) {
-  return <div className="empty-state" data-testid="empty-library"><strong>{label}</strong><p>VOID only shows audio you’ve added. No catalog, recommendations, or placeholder tracks.</p><button className="button" onClick={onImport} data-testid="button-empty-add-files"><Plus />Add audio files</button></div>;
+  return <div className="empty-state" data-testid="empty-library"><strong>{label}</strong><p>VOID only shows audio you’ve added. No catalog, recommendations, or placeholder tracks.</p><button className="button" onClick-on={onImport} data-testid="button-empty-add-files"><Plus />Add audio files</button></div>;
 }
 
 export default App;
