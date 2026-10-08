@@ -11,13 +11,6 @@
 /* Registered so the mood orb's light can ease toward the cursor instead of snapping. */
 @property --ox { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --oy { syntax: '<number>'; inherits: true; initial-value: 0; }
-@property --orb-1 { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --orb-2 { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --orb-3 { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --orb-glow { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --orb-hi { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --orb-sheen { syntax: '<color>'; inherits: true; initial-value: transparent; }
-@property --mood-tint { syntax: '<color>'; inherits: true; initial-value: transparent; }
 
 /* ───────────────────────── Built-in font family ───────────────────────── */
 @font-face {
@@ -77,7 +70,7 @@
   --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 26px;
   --sidebar-width: 244px;
   --float: 20px;
-  --player-h: 84px;
+  --player-h: 76px;
   --ease: cubic-bezier(.2, .7, .2, 1);
 
   /* Liquid Glass (light) */
@@ -97,9 +90,6 @@
   --range-track: hsl(30 10% 20% / .15);
   --range-fill: hsl(30 8% 14% / .86);
   --scrim: hsl(30 12% 20% / .26);
-  /* Expanded player: the dimming veil over the app and the floating glass layer itself */
-  --np-scrim: hsl(40 20% 96% / .34);
-  --np-glass: hsl(40 26% 98% / .66);
 
   /* Ambient light (intensity differs per theme, hue per page) */
   --amb-L: 62%; --amb-A1: .44; --amb-A2: .32; --amb-A3: .24;
@@ -131,8 +121,6 @@
   --range-track: hsl(0 0% 100% / .16);
   --range-fill: hsl(0 0% 100% / .9);
   --scrim: hsl(0 0% 0% / .5);
-  --np-scrim: hsl(0 0% 0% / .40);
-  --np-glass: hsl(0 0% 6% / .58);
 
   --amb-L: 52%; --amb-A1: .34; --amb-A2: .22; --amb-A3: .16;
   color-scheme: dark;
@@ -180,9 +168,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 
 /* ───────────────────────── Page ambient ─────────────────────────
    One fixed, static layer. Colour is chosen per page and cross-faded; the UI
-   on top stays neutral and only picks the colour up through translucent glass.
-   While a track is playing (data-track-ambient) its own hues replace the page hues everywhere:
-   the page light, the orb, the top band below, and the player's reflection. */
+   on top stays neutral and only picks the colour up through translucent glass. */
 .void-app {
   position: relative; isolation: isolate; width: 100%; height: 100dvh; min-height: 0; overflow: hidden;
   background: hsl(var(--background)); color: hsl(var(--foreground));
@@ -190,22 +176,8 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   --amb-1: hsl(var(--h1) var(--s) var(--amb-L) / var(--amb-A1));
   --amb-2: hsl(var(--h2) var(--s) var(--amb-L) / var(--amb-A2));
   --amb-3: hsl(var(--h3) var(--s) var(--amb-L) / var(--amb-A3));
-  /* Orb + mood-card colours derive from the same hues, so they follow the same cross-fade. */
-  --orb-1: hsl(var(--h2) calc(var(--s) + 4%) 74%);
-  --orb-2: hsl(var(--h1) var(--s) 54%);
-  --orb-3: hsl(var(--h3) calc(var(--s) - 16%) 26%);
-  --orb-glow: hsl(var(--h1) calc(var(--s) - 4%) 50% / .26);
-  --orb-hi: hsl(var(--h2) calc(var(--s) + 4%) 88% / .38);
-  --orb-sheen: hsl(var(--h1) calc(var(--s) - 6%) 60% / .10);
-  --mood-tint: hsl(var(--h1) calc(var(--s) - 1%) 52% / .16);
-  --amb-dur: .8s; --amb-ease: ease;
-  transition:
-    --amb-1 var(--amb-dur) var(--amb-ease), --amb-2 var(--amb-dur) var(--amb-ease), --amb-3 var(--amb-dur) var(--amb-ease),
-    --orb-1 var(--amb-dur) var(--amb-ease), --orb-2 var(--amb-dur) var(--amb-ease), --orb-3 var(--amb-dur) var(--amb-ease),
-    --orb-glow var(--amb-dur) var(--amb-ease), --orb-hi var(--amb-dur) var(--amb-ease), --orb-sheen var(--amb-dur) var(--amb-ease), --mood-tint var(--amb-dur) var(--amb-ease),
-    background-color 0.45s ease, color 0.45s ease;
+  transition: --amb-1 .8s ease, --amb-2 .8s ease, --amb-3 .8s ease, background-color 0.45s ease, color 0.45s ease;
 }
-.void-app[data-track-ambient] { --amb-dur: 2s; --amb-ease: cubic-bezier(.4, 0, .2, 1); }
 .void-app[data-ambient='home'], .void-app[data-ambient='recent'] { --h1: 24; --h2: 40; --h3: 10; }
 .void-app[data-ambient='songs'] { --h1: 268; --h2: 288; --h3: 250; --s: 88%; }
 .void-app[data-ambient='albums'] { --h1: 350; --h2: 336; --h3: 8; --s: 90%; }
@@ -216,29 +188,14 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .dark .void-app[data-ambient='queue'] { --amb-L: 92%; --amb-A1: .20; --amb-A2: .12; --amb-A3: .10; }
 .void-app[data-ambient='settings'] { --h1: 215; --h2: 30; --h3: 215; --s: 7%; --amb-L: 48%; }
 .dark .void-app[data-ambient='settings'] { --amb-L: 72%; --amb-A1: .18; --amb-A2: .11; --amb-A3: .08; }
-/* The two neutral pages normally mute the light; with a playing track they carry its colour at normal strength. */
-.void-app[data-track-ambient][data-ambient='queue'], .void-app[data-track-ambient][data-ambient='settings'] { --amb-L: 62%; }
-.dark .void-app[data-track-ambient][data-ambient='queue'], .dark .void-app[data-track-ambient][data-ambient='settings'] { --amb-L: 52%; --amb-A1: .34; --amb-A2: .22; --amb-A3: .16; }
 
-.ambient {
+.ambient, .now-playing-overlay {
   background:
     radial-gradient(62% 52% at 82% 0%, var(--amb-1), transparent 72%),
     radial-gradient(46% 46% at 4% 78%, var(--amb-2), transparent 72%),
     radial-gradient(52% 38% at 58% 108%, var(--amb-3), transparent 72%);
 }
 .ambient { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
-/* Top band: a soft wash of the same ambient light along the very top edge, fading out downward.
-   It lives behind everything and is only a light source — the transparent top area stays transparent. */
-.ambient::before {
-  content: ''; position: absolute; inset: 0 0 auto 0; height: 176px; pointer-events: none; opacity: 0;
-  background:
-    radial-gradient(58% 150% at 78% -30%, var(--amb-1), transparent 72%),
-    radial-gradient(46% 140% at 22% -36%, var(--amb-2), transparent 74%),
-    radial-gradient(42% 120% at 52% -44%, var(--amb-3), transparent 76%);
-  -webkit-mask-image: linear-gradient(180deg, #000 0, transparent 100%); mask-image: linear-gradient(180deg, #000 0, transparent 100%);
-  transition: opacity 1.2s ease;
-}
-.void-app[data-track-ambient] .ambient::before { opacity: .9; }
 
 /* ───────────────────────── Shell ───────────────────────── */
 .void-shell {
@@ -353,15 +310,6 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .button.selected { background: var(--active); border-color: hsl(var(--foreground) / .22); }
 .button.danger { color: #b0544d; }
 .dark .button.danger { color: #e0a29b; }
-.button.add-music {
-  height: 40px; padding: 0 20px 0 16px; border-color: var(--glass-border); background: var(--glass-bg);
-  box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 -1px 0 hsl(0 0% 0% / .08), 0 10px 28px hsl(0 0% 0% / .20);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.6); backdrop-filter: blur(var(--blur)) saturate(1.6);
-}
-.button.add-music:hover {
-  border-color: hsl(var(--foreground) / .26);
-  background: linear-gradient(hsl(var(--foreground) / .07), hsl(var(--foreground) / .07)), var(--glass-bg);
-}
 .button svg { width: 15px; height: 15px; stroke-width: 1.7; }
 
 .section-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 16px; gap: 14px; }
@@ -375,7 +323,7 @@ button.crumb:hover { color: hsl(var(--foreground)); }
   border: 1px solid var(--glass-border); border-radius: var(--r-xl); background: var(--glass-bg);
   box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
 }
-.mood::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(54% 130% at 12% 50%, var(--mood-tint), transparent 70%); }
+.mood::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(54% 130% at 12% 50%, hsl(var(--h1) 95% 52% / .16), transparent 70%); }
 
 /* The orb reads as a glass/light object: --ox / --oy (-1…1, set from the cursor) move its
    highlight, shadow terminator, reflection and ring in small, opposing amounts. */
@@ -390,10 +338,10 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 }
 .mood-orb {
   position: relative; width: 124px; height: 124px; border-radius: 50%; overflow: hidden;
-  background: radial-gradient(circle at 32% 28%, var(--orb-1), var(--orb-2) 40%, var(--orb-3) 78%);
+  background: radial-gradient(circle at 32% 28%, hsl(var(--h2) 100% 74%), hsl(var(--h1) 96% 54%) 40%, hsl(var(--h3) 80% 26%) 78%);
   box-shadow:
     inset calc(-30px + var(--ox) * 9px) calc(-14px + var(--oy) * 7px) 44px hsl(0 0% 0% / .78),
-    0 0 0 1px hsl(0 0% 100% / .10), 0 0 56px var(--orb-glow);
+    0 0 0 1px hsl(0 0% 100% / .10), 0 0 56px hsl(var(--h1) 92% 50% / .26);
   transform: translate3d(calc(var(--ox) * 3px), calc(var(--oy) * 3px), 0);
   scale: var(--orb-scale, 1);
   transition: scale .9s var(--ease);
@@ -401,11 +349,11 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .mood-orb-stage:hover .mood-orb { --orb-scale: 1.025; }
 .orb-highlight, .orb-sheen { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
 .orb-highlight {
-  background: radial-gradient(circle at calc(34% + var(--ox) * 16%) calc(28% + var(--oy) * 16%), var(--orb-hi), transparent 34%);
+  background: radial-gradient(circle at calc(34% + var(--ox) * 16%) calc(28% + var(--oy) * 16%), hsl(var(--h2) 100% 88% / .38), transparent 34%);
   mix-blend-mode: screen;
 }
 .orb-sheen {
-  background: linear-gradient(calc(135deg + var(--ox) * 28deg + var(--oy) * 18deg), hsl(0 0% 100% / .16), transparent 34%, transparent 72%, var(--orb-sheen));
+  background: linear-gradient(calc(135deg + var(--ox) * 28deg + var(--oy) * 18deg), hsl(0 0% 100% / .16), transparent 34%, transparent 72%, hsl(var(--h1) 90% 60% / .10));
 }
 .mood-copy { position: relative; min-width: 0; }
 .mood-label { font-size: 12px; font-weight: 500; color: hsl(var(--muted-foreground)); }
@@ -472,21 +420,89 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .cover-mini svg { width: 16px; height: 16px; stroke-width: 1.4; opacity: .75; }
 .cover-large svg { width: 34px; height: 34px; stroke-width: 1; opacity: .6; }
 
-/* Composed artwork — generated locally, no images. App.tsx composes a layered `background` for every
-   song / album / artist from a seeded PRNG (inline style), so each cover has its own composition,
-   not a template in another colour. This block only supplies what the inline background cannot:
-   a soft top sheen and a fine grain whose strength (--grain) is also chosen per cover. Artwork stays
-   dark and rich in both themes, like a real album sleeve. */
+/* Fallback artwork — generated locally, no images. Used only when a track has no usable embedded
+   artwork. App.tsx picks data-art (0–12) and the light position (--ax / --ay) from a stable hash of
+   the album/file identity, so a song keeps the same artwork across refreshes. Artwork stays dark and
+   rich in both themes, like a real album sleeve. */
 .void-app .art-fallback { background-color: hsl(220 14% 6%); }
 .art-fallback::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(180deg, hsl(0 0% 100% / .05), transparent 34%);
+  background: linear-gradient(180deg, hsl(0 0% 100% / .07), transparent 38%, hsl(0 0% 0% / .24));
 }
 .cover-large.art-fallback::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: var(--grain, .16); mix-blend-mode: overlay; background-size: 140px;
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .16; mix-blend-mode: overlay; background-size: 140px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
 }
 .art-fallback svg { position: relative; z-index: 1; color: hsl(0 0% 100% / .72); }
+
+/* 0 · amber atmosphere */
+.void-app .art-fallback[data-art='0'] { background:
+  radial-gradient(64% 64% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(32 96% 60% / .9), transparent 66%),
+  radial-gradient(90% 70% at 90% 105%, hsl(10 80% 36% / .75), transparent 72%),
+  linear-gradient(160deg, hsl(26 45% 14%), hsl(14 55% 5%)); }
+/* 1 · violet light */
+.void-app .art-fallback[data-art='1'] { background:
+  radial-gradient(60% 60% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(272 86% 66% / .85), transparent 66%),
+  radial-gradient(90% 70% at 10% 105%, hsl(246 70% 40% / .7), transparent 72%),
+  linear-gradient(165deg, hsl(260 40% 14%), hsl(250 50% 5%)); }
+/* 2 · crimson light */
+.void-app .art-fallback[data-art='2'] { background:
+  radial-gradient(62% 62% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(352 84% 56% / .85), transparent 66%),
+  radial-gradient(90% 70% at 95% 105%, hsl(330 70% 30% / .7), transparent 72%),
+  linear-gradient(160deg, hsl(350 40% 13%), hsl(345 50% 5%)); }
+/* 3 · teal / cyan atmosphere */
+.void-app .art-fallback[data-art='3'] { background:
+  radial-gradient(62% 62% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(176 74% 50% / .78), transparent 66%),
+  radial-gradient(90% 70% at 8% 105%, hsl(196 80% 32% / .7), transparent 72%),
+  linear-gradient(165deg, hsl(184 38% 12%), hsl(190 46% 4%)); }
+/* 4 · blue atmosphere */
+.void-app .art-fallback[data-art='4'] { background:
+  radial-gradient(62% 62% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(220 88% 64% / .82), transparent 66%),
+  radial-gradient(90% 70% at 92% 105%, hsl(240 70% 38% / .7), transparent 72%),
+  linear-gradient(160deg, hsl(224 38% 13%), hsl(232 48% 5%)); }
+/* 5 · monochrome black / silver */
+.void-app .art-fallback[data-art='5'] { background:
+  linear-gradient(calc(100deg + var(--ax) * .4deg), transparent 34%, hsl(0 0% 100% / .20) 48%, transparent 60%),
+  radial-gradient(70% 60% at calc(var(--ax) * 1%) calc(var(--ay) * 1%), hsl(0 0% 74% / .32), transparent 64%),
+  linear-gradient(160deg, hsl(0 0% 16%), hsl(0 0% 3%)); }
+/* 6 · glass / refraction */
+.void-app .art-fallback[data-art='6'] { background:
+  linear-gradient(118deg, transparent 20%, hsl(200 60% 80% / .16) 32%, transparent 33%, hsl(280 50% 80% / .12) 52%, transparent 53%),
+  conic-gradient(from calc(var(--ax) * 2deg) at 70% 110%, hsl(210 50% 58% / 0), hsl(200 70% 66% / .45), hsl(290 55% 62% / .35), hsl(210 50% 58% / 0)),
+  linear-gradient(170deg, hsl(222 22% 12%), hsl(230 28% 5%)); }
+/* 7 · glowing orb */
+.void-app .art-fallback[data-art='7'] { background:
+  radial-gradient(circle at calc(var(--ax) * 1%) 44%, hsl(40 100% 86%) 0, hsl(32 98% 62% / .9) 9%, hsl(22 90% 46% / .45) 22%, transparent 46%),
+  radial-gradient(80% 80% at 50% 50%, hsl(18 70% 20% / .5), transparent 80%),
+  linear-gradient(180deg, hsl(20 30% 8%), hsl(15 40% 3%)); }
+/* 8 · soft light source */
+.void-app .art-fallback[data-art='8'] { background:
+  radial-gradient(120% 90% at calc(var(--ax) * 1%) -10%, hsl(210 30% 92% / .32), transparent 60%),
+  radial-gradient(70% 50% at 50% 115%, hsl(215 40% 40% / .3), transparent 70%),
+  linear-gradient(180deg, hsl(218 18% 10%), hsl(220 20% 4%)); }
+/* 9 · abstract shadow (eclipse) */
+.void-app .art-fallback[data-art='9'] { background:
+  radial-gradient(circle at calc(48% + (var(--ax) - 50) * .3%) 50%, hsl(0 0% 2%) 0 33%, transparent 34%),
+  radial-gradient(circle at 50% 50%, hsl(36 40% 78% / .6) 0, hsl(30 30% 40% / .32) 44%, transparent 72%),
+  linear-gradient(160deg, hsl(30 8% 14%), hsl(0 0% 3%)); }
+/* 10 · flowing forms */
+.void-app .art-fallback[data-art='10'] { background:
+  radial-gradient(120% 56% at calc(var(--ax) * .4%) 22%, hsl(340 70% 56% / .6), transparent 66%),
+  radial-gradient(110% 60% at 82% 78%, hsl(24 92% 54% / .55), transparent 66%),
+  radial-gradient(70% 60% at 50% 50%, hsl(300 50% 40% / .35), transparent 70%),
+  linear-gradient(150deg, hsl(330 30% 12%), hsl(12 40% 5%)); }
+/* 11 · elegant light streaks */
+.void-app .art-fallback[data-art='11'] { background:
+  linear-gradient(104deg, transparent 38%, hsl(38 92% 72% / .34) 47%, transparent 56%),
+  linear-gradient(104deg, transparent 52%, hsl(20 90% 62% / .2) 58%, transparent 64%),
+  radial-gradient(70% 70% at 20% 110%, hsl(24 70% 34% / .5), transparent 70%),
+  linear-gradient(165deg, hsl(24 22% 11%), hsl(20 30% 4%)); }
+/* 12 · subtle geometric */
+.void-app .art-fallback[data-art='12'] { background:
+  linear-gradient(135deg, transparent 49.4%, hsl(0 0% 100% / .14) 49.7% 50.3%, transparent 50.6%),
+  repeating-radial-gradient(circle at calc(var(--ax) * 1%) 115%, hsl(0 0% 100% / .08) 0 1px, transparent 1px 13px),
+  radial-gradient(80% 70% at 80% 10%, hsl(165 36% 40% / .35), transparent 70%),
+  linear-gradient(160deg, hsl(170 18% 13%), hsl(180 20% 5%)); }
 
 .cover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 32px 24px; margin-top: 30px; }
 .cover-card { text-align: left; border: 0; background: transparent; padding: 0; cursor: pointer; min-width: 0; color: inherit; }
@@ -552,118 +568,89 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .font-import .font-check { color: hsl(var(--foreground)); }
 .font-import small { margin-left: auto; font-size: 11px; font-weight: 400; color: hsl(var(--muted-foreground)); }
 
-/* ───────────────────────── Player (floating Liquid Glass) ─────────────────────────
-   Three zones on a 84px bar: now playing (artwork + title) on the left, transport + scrubber centred
-   on the bar, favourite / queue / expand / volume on the right. The centre column is a fixed-width
-   grid track, so the controls stay on the true centre at every desktop width. */
+/* ───────────────────────── Player (floating Liquid Glass) ───────────────────────── */
+/* The playback progress is a 2px line that lives on the glass's bottom edge. overflow: hidden lets
+   the rounded corners trim it so it reads as part of the edge, not as a control inside the player. */
 .player-bar {
   position: fixed; z-index: 20; isolation: isolate; overflow: hidden;
   left: calc(var(--sidebar-width) + var(--float)); right: var(--float); bottom: calc(var(--float) - 2px); height: var(--player-h);
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 520px) minmax(0, 1fr); align-items: center; column-gap: 24px; padding: 0 24px;
-  border: 1px solid var(--glass-border); border-radius: 28px; background: var(--glass-bg);
+  display: flex; justify-content: space-between; align-items: center; padding: 0 24px;
+  border: 1px solid var(--glass-border); border-radius: 26px; background: var(--glass-bg);
   box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(1.6); backdrop-filter: blur(var(--blur)) saturate(1.6);
   transition: left .32s var(--ease), background-color 0.45s ease, border-color 0.45s ease;
 }
-.dark .player-bar { background: hsl(0 0% 5% / .8); }
-/* Ambient reflection: the active track's light pooling on the glass from below. It cross-fades with the
-   page ambient (same --amb-* properties) and stays invisible until something is playing. */
+.dark .player-bar { background: hsl(0 0% 5% / .88); }
+/* Local atmosphere: only set for tracks using fallback artwork (--art-glow), kept very low. */
 .player-bar::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit; opacity: 0;
-  background:
-    radial-gradient(52% 230% at 10% 150%, var(--amb-1), transparent 70%),
-    radial-gradient(46% 220% at 92% 160%, var(--amb-2), transparent 72%);
-  transition: opacity 1.2s ease;
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: radial-gradient(46% 190% at 4% 135%, var(--art-glow, transparent), transparent 72%);
 }
-.void-app[data-track-ambient] .player-bar::before { opacity: .9; }
 
-.player-track { display: flex; align-items: center; gap: 14px; min-width: 0; max-width: 100%; justify-self: start; cursor: pointer; border-radius: var(--r-md); }
-.player-track:focus-visible { outline: 2px solid hsl(var(--foreground) / .55); outline-offset: 4px; }
-.player-track > span { display: block; min-width: 0; }
-.player-track .track-title, .player-track .track-sub { max-width: 100%; }
-.player-track .cover-mini { width: 54px; height: 54px; border-radius: 13px; }
-/* While the expanded player is open its artwork stands in for this one (see flyArt in App.tsx). */
-.player-bar[data-np] .player-track .cover-mini { opacity: 0; }
+.player-track { display: flex; align-items: center; gap: 14px; min-width: 0; max-width: calc(50% - 130px); cursor: pointer; }
+.player-track:focus-visible { outline: 2px solid hsl(var(--foreground) / .55); outline-offset: 4px; border-radius: var(--r-sm); }
+.player-track .cover-mini { width: 48px; height: 48px; border-radius: 12px; }
 
-.player-center { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 3px; min-width: 0; }
-.player-controls { display: flex; align-items: center; justify-content: center; gap: 8px; }
-:is(.player-controls, .np-controls) .icon-button { width: 34px; height: 34px; border-radius: 50%; }
-:is(.player-controls, .np-controls) .icon-button svg { width: 17px; height: 17px; }
-:is(.player-controls, .np-controls) .icon-button.active-control { color: hsl(var(--foreground)); }
-:is(.player-controls, .np-controls) .icon-button.active-control::after { content: ''; position: absolute; bottom: 2px; width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
-:is(.player-controls, .np-controls) .play-button {
-  width: 46px; height: 46px; margin: 0 4px; background: hsl(var(--accent) / .92); color: hsl(var(--accent-foreground));
+/* The player-controls are perfectly locked dead-center using transform */
+.player-controls {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.player-controls .icon-button { width: 36px; height: 36px; border-radius: 50%; }
+.player-controls .icon-button svg { width: 17px; height: 17px; }
+.player-controls .icon-button.active-control { color: hsl(var(--foreground)); }
+.player-controls .icon-button.active-control::after { content: ''; position: absolute; bottom: 2px; width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+.player-controls .play-button {
+  width: 48px; height: 48px; margin: 0 6px; background: hsl(var(--accent) / .92); color: hsl(var(--accent-foreground));
   box-shadow: inset 0 1px 0 hsl(0 0% 100% / .4), 0 8px 22px hsl(0 0% 0% / .3);
 }
-.dark :is(.player-controls, .np-controls) .play-button { background: hsl(0 0% 100% / .17); color: #fff; border: 1px solid hsl(0 0% 100% / .26); box-shadow: inset 0 1px 0 hsl(0 0% 100% / .32), 0 8px 22px hsl(0 0% 0% / .4); }
-:is(.player-controls, .np-controls) .play-button:hover { background: hsl(var(--accent)); }
-.dark :is(.player-controls, .np-controls) .play-button:hover { background: hsl(0 0% 100% / .24); }
-:is(.player-controls, .np-controls) .play-button svg { width: 17px; height: 17px; fill: currentColor; }
-:is(.player-controls, .np-controls) .play-button .void-glyph { width: 28px; height: 28px; }
-.void-glyph .g-ring { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 53.83 9; opacity: .6; }
-.void-glyph .g-play { fill: currentColor; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
-.void-glyph .g-pause { fill: currentColor; stroke: none; }
-.void-glyph .g-play, .void-glyph .g-pause { transform-box: fill-box; transform-origin: center; transition: opacity .2s var(--ease), transform .26s var(--ease); }
-.void-glyph[data-playing='true'] .g-play, .void-glyph[data-playing='false'] .g-pause { opacity: 0; transform: scale(.6); }
+.dark .player-controls .play-button { background: hsl(0 0% 100% / .17); color: #fff; border: 1px solid hsl(0 0% 100% / .26); box-shadow: inset 0 1px 0 hsl(0 0% 100% / .32), 0 8px 22px hsl(0 0% 0% / .4); }
+.player-controls .play-button:hover { background: hsl(var(--accent)); }
+.dark .player-controls .play-button:hover { background: hsl(0 0% 100% / .24); }
+.player-controls .play-button svg { width: 17px; height: 17px; fill: currentColor; }
 
-/* Scrubber: time · thin bar · time. The thumb only appears on hover / focus / drag. */
-.player-scrub {
-  display: grid; grid-template-columns: 38px minmax(0, 1fr) 38px; align-items: center; gap: 10px; color: hsl(var(--muted-foreground));
-  font-size: 10.5px; font-variant-numeric: tabular-nums; transition: opacity .3s var(--ease);
+.player-extra { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: hsl(var(--muted-foreground)); max-width: calc(50% - 130px); }
+.player-extra .crumb { font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+/* Edge progress line. The input is 2px tall; padding-top adds an invisible hit area above it so
+   seeking stays easy without a visible slider or thumb. */
+.progress-row { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; z-index: 2; transition: opacity .3s var(--ease); }
+.player-bar[data-idle] .progress-row { opacity: .3; }
+.progress-row input {
+  position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 2px; padding: 8px 0 0; margin: 0; box-sizing: content-box;
+  -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer;
 }
-.player-scrub > span:first-child { text-align: right; }
-.player-bar[data-idle] .player-scrub { opacity: .45; }
-.seek:disabled { cursor: default; }
-
-.player-extra { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; color: hsl(var(--muted-foreground)); }
-.extra-fade { transition: opacity .2s var(--ease), background-color .15s var(--ease), color .15s var(--ease), transform .15s var(--ease); }
-/* Opening the volume capsule folds the neighbouring icons away, like the reference. */
-.player-extra:has(.vol[data-open]) .extra-fade { opacity: 0; pointer-events: none; }
+.progress-row input:disabled { cursor: default; }
+.progress-row input:focus-visible { outline: none; }
+.progress-row input::-webkit-slider-runnable-track {
+  height: 2px; border-radius: 0; background: linear-gradient(to right, hsl(var(--foreground) / .66) var(--p, 0%), hsl(var(--foreground) / .07) var(--p, 0%));
+}
+.progress-row input::-moz-range-track {
+  height: 2px; border-radius: 0; background: linear-gradient(to right, hsl(var(--foreground) / .66) var(--p, 0%), hsl(var(--foreground) / .07) var(--p, 0%));
+}
+.progress-row input::-webkit-slider-thumb { -webkit-appearance: none; width: 0; height: 0; border: 0; box-shadow: none; background: transparent; }
+.progress-row input::-moz-range-thumb { width: 0; height: 0; border: 0; box-shadow: none; background: transparent; }
 
 /* Range inputs share one custom look; --p (set in JSX) paints the filled portion. */
-:is(.seek, .vol-slider, .np-seek) {
-  -webkit-appearance: none; appearance: none; background: transparent; width: 100%; height: 16px; margin: 0; cursor: pointer; accent-color: hsl(var(--foreground));
+:is(.volume-slider, .expanded-progress input, .expanded-volume input) {
+  -webkit-appearance: none; appearance: none; background: transparent; height: 16px; margin: 0; cursor: pointer; accent-color: hsl(var(--foreground));
 }
-:is(.seek, .vol-slider, .np-seek)::-webkit-slider-runnable-track {
+:is(.volume-slider, .expanded-progress input, .expanded-volume input)::-webkit-slider-runnable-track {
   height: 3px; border-radius: 3px; background: linear-gradient(to right, var(--range-fill) var(--p, 0%), var(--range-track) var(--p, 0%));
 }
-:is(.seek, .vol-slider, .np-seek)::-moz-range-track {
+:is(.volume-slider, .expanded-progress input, .expanded-volume input)::-moz-range-track {
   height: 3px; border-radius: 3px; background: linear-gradient(to right, var(--range-fill) var(--p, 0%), var(--range-track) var(--p, 0%));
 }
-:is(.seek, .vol-slider, .np-seek)::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border-radius: 50%; background: #fff; border: 0;
-  box-shadow: 0 1px 4px hsl(0 0% 0% / .45); transform: scale(0); transition: transform .16s var(--ease);
+:is(.volume-slider, .expanded-progress input, .expanded-volume input)::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 11px; height: 11px; margin-top: -4px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 1px 4px hsl(0 0% 0% / .45); transition: transform .15s var(--ease);
 }
-:is(.seek, .vol-slider, .np-seek)::-moz-range-thumb {
-  width: 12px; height: 12px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px hsl(0 0% 0% / .45); transform: scale(0); transition: transform .16s var(--ease);
-}
-:is(.seek, .vol-slider, .np-seek):hover:not(:disabled)::-webkit-slider-thumb, :is(.seek, .vol-slider, .np-seek):focus-visible::-webkit-slider-thumb, :is(.seek, .vol-slider, .np-seek):active::-webkit-slider-thumb { transform: scale(1); }
-:is(.seek, .vol-slider, .np-seek):hover:not(:disabled)::-moz-range-thumb, :is(.seek, .vol-slider, .np-seek):focus-visible::-moz-range-thumb, :is(.seek, .vol-slider, .np-seek):active::-moz-range-thumb { transform: scale(1); }
-:is(.seek, .vol-slider, .np-seek):focus-visible { outline: none; }
-
-/* Volume: just the speaker at rest. Clicking grows a small glass capsule to its left; the icon never moves. */
-.vol { position: relative; display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 36px; flex: none; }
-.vol-button { position: relative; z-index: 1; }
-.vol-button svg { animation: vol-swap .22s var(--ease); }
-@keyframes vol-swap { from { transform: scale(.8); opacity: .4; } to { transform: scale(1); opacity: 1; } }
-.vol-pop {
-  position: absolute; z-index: 0; right: 0; top: 50%; height: 36px; width: 36px; transform: translateY(-50%); overflow: hidden;
-  border: 1px solid transparent; border-radius: 99px; background: transparent; opacity: 0; pointer-events: none;
-  transition: width .3s var(--ease), opacity .2s var(--ease), background-color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
-}
-.vol[data-open] .vol-pop {
-  width: 124px; opacity: 1; pointer-events: auto; background: var(--control-hover); border-color: var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 6px 18px hsl(0 0% 0% / .16);
-}
-.vol-slider { position: absolute; left: 14px; top: 50%; width: calc(100% - 54px); margin-top: -8px; opacity: 0; transition: opacity .18s var(--ease); }
-.vol[data-open] .vol-slider { opacity: 1; transition-delay: .08s; }
-.vol[data-silent] .vol-slider { opacity: .6; }
-.vol[data-open] .vol-button { color: hsl(var(--foreground)); }
+:is(.volume-slider, .expanded-progress input, .expanded-volume input)::-moz-range-thumb { width: 11px; height: 11px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px hsl(0 0% 0% / .45); }
+:is(.volume-slider, .expanded-progress input, .expanded-volume input):hover::-webkit-slider-thumb { transform: scale(1.25); }
+.volume-slider { width: 84px; }
 
 /* ───────────────────────── Overlays ───────────────────────── */
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--scrim); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 20px; animation: fade-in .18s ease both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
 .modal, .palette, .import-menu {
   border: 1px solid var(--glass-border); border-radius: var(--r-xl); background: var(--glass-bg-strong);
@@ -715,75 +702,23 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   box-shadow: inset 0 1px 0 var(--glass-edge), 0 14px 36px hsl(0 0% 0% / .35); -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5); animation: pop-in .22s var(--ease) both;
 }
 
-/* ───────────────────────── Now playing (floating glass layer) ─────────────────────────
-   The app stays visible underneath: a light dimming veil with a modest blur (.np-scrim), and above it one
-   centred glass panel (.np-glass) with its own stronger blur. The scrim and the glass are separate
-   siblings on purpose — nested backdrop-filters would blur nothing. The artwork (.np-art) is the one
-   element that is never faded: App.tsx flies it from / to the compact player's artwork. */
-.np-layer { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 28px; }
-.np-scrim {
-  position: absolute; inset: 0; background: var(--np-scrim);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); animation: fade-in .28s ease both;
-}
-.np-layer[data-closing] .np-scrim { animation: fade-out .26s ease both; }
-.np-panel { position: relative; z-index: 1; width: min(1120px, 100%); height: min(700px, 100%); display: flex; flex-direction: column; --np-art: min(380px, 44dvh); }
-.np-glass {
-  position: absolute; inset: 0; border: 1px solid var(--glass-border); border-radius: 34px; pointer-events: none;
-  background:
-    radial-gradient(70% 70% at 88% -12%, var(--amb-1), transparent 70%),
-    radial-gradient(60% 60% at -4% 108%, var(--amb-2), transparent 70%),
-    var(--np-glass);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 40px 90px hsl(0 0% 0% / .42);
-  -webkit-backdrop-filter: blur(36px) saturate(1.5); backdrop-filter: blur(36px) saturate(1.5);
-  animation: np-glass-in .34s var(--ease) both;
-}
-.np-layer[data-closing] .np-glass { animation: fade-out .26s ease both; }
-@keyframes np-glass-in { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
-.np-fade { animation: np-in .34s .06s var(--ease) both; }
-.np-layer[data-closing] .np-fade { animation: fade-out .18s ease both; }
-@keyframes np-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-
-.np-top { position: relative; z-index: 2; height: 72px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 24px; }
-.np-top .brand { padding: 0; cursor: default; gap: 10px; }
-.np-close { justify-self: start; }
-.np-top-end { justify-self: end; }
-
-.np-body {
-  position: relative; z-index: 1; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--np-art) minmax(0, 1fr);
-  column-gap: clamp(40px, 7vw, 96px); align-items: center; justify-content: center; padding: 0 clamp(32px, 5vw, 64px) 40px;
-}
-.np-body-empty { display: grid; place-items: center; grid-template-columns: 1fr; }
-.np-main { width: var(--np-art); min-width: 0; }
-.np-art { width: var(--np-art); aspect-ratio: 1; border-radius: 24px; overflow: hidden; box-shadow: var(--cover-shadow); }
-.np-art .cover-large { border-radius: 0; box-shadow: inset 0 0 0 1px hsl(var(--foreground) / .08); }
-.np-meta { margin-top: 22px; }
-.np-info { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.np-titles { min-width: 0; }
-.np-titles h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-titles p { margin: 3px 0 0; font-size: 14px; color: hsl(var(--muted-foreground)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-scrub { margin-top: 16px; }
-.np-times { display: flex; justify-content: space-between; margin-top: 2px; color: hsl(var(--muted-foreground)); font-size: 11px; font-variant-numeric: tabular-nums; }
-.np-controls { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
-.np-transport { display: flex; align-items: center; gap: 10px; }
-.np-controls .play-button { width: 56px; height: 56px; }
-.np-controls .play-button .void-glyph { width: 34px; height: 34px; }
-
-.np-side { min-width: 0; min-height: 0; align-self: stretch; display: flex; flex-direction: column; padding: 4px 0 48px; }
-.np-lyrics {
-  flex: 1; min-height: 0; overflow: auto; white-space: pre-wrap; font-family: var(--void-font-serif); font-size: clamp(22px, 2.4vw, 30px); line-height: 1.4;
-  color: hsl(var(--muted-foreground)); scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%); mask-image: linear-gradient(180deg, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
-}
-.np-lyrics::-webkit-scrollbar { display: none; }
-.np-lyrics[data-empty] {
-  display: flex; align-items: center; justify-content: center; text-align: center; font-family: var(--void-font); font-size: 13px;
-  -webkit-mask-image: none; mask-image: none;
-}
-.np-dock {
-  position: absolute; z-index: 2; right: 24px; bottom: 22px; display: flex; gap: 2px; padding: 3px;
-  border: 1px solid var(--glass-border); border-radius: 99px; background: var(--control); box-shadow: inset 0 1px 0 var(--glass-edge);
-}
-.np-dock .icon-button { width: 32px; height: 32px; border-radius: 50%; }
+/* ───────────────────────── Now playing ───────────────────────── */
+.now-playing-overlay { position: fixed; inset: 0; z-index: 40; background-color: hsl(var(--background)); display: flex; flex-direction: column; animation: fade-in .22s ease both; }
+.now-playing-top { height: 72px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; }
+.now-playing-top .brand { padding: 0; cursor: default; }
+.now-playing-body { width: min(980px, 100%); margin: auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 76px; align-items: center; padding: 32px; }
+.now-playing-body .cover-large { width: min(100%, 420px); border-radius: 24px; }
+.now-playing-meta { min-width: 0; }
+.now-playing-meta h1 { font-size: 34px; letter-spacing: -.035em; font-weight: 600; margin: 12px 0 6px; overflow-wrap: anywhere; line-height: 1.1; }
+.now-playing-meta p { font-size: 14px; color: hsl(var(--muted-foreground)); margin: 0; }
+.lyrics-box { margin-top: 34px; border-top: 1px solid var(--glass-border); padding-top: 18px; color: hsl(var(--muted-foreground)); font-family: var(--void-font-serif); font-size: 20px; line-height: 1.5; }
+.expanded-progress { margin-top: 26px; }
+.expanded-progress input { width: 100%; }
+.expanded-progress div { display: flex; justify-content: space-between; margin-top: 6px; color: hsl(var(--muted-foreground)); font-size: 11px; font-variant-numeric: tabular-nums; }
+.expanded-volume { display: flex; align-items: center; gap: 12px; margin-top: 20px; color: hsl(var(--muted-foreground)); }
+.expanded-volume input { width: min(180px, 55%); }
+.expanded-toggles { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.expanded-toggles .button { height: 34px; padding: 0 13px; }
 .mobile-menu { display: none; }
 
 /* ───────────────────────── Collapsed sidebar (desktop only) ─────────────────────────
@@ -809,16 +744,9 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   :root { --sidebar-width: 216px; }
   .content { padding-left: 38px; padding-right: 38px; }
   .topbar { padding: 0 38px; }
-  .player-bar { padding-left: 20px; padding-right: 20px; column-gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(260px, 460px) minmax(0, 1fr); }
+  .player-bar { padding-left: 20px; padding-right: 20px; gap: 14px; }
   .jump-grid { gap: 16px; }
   .mood { padding: 30px 36px; gap: 34px; }
-}
-@media (max-width: 1000px) {
-  .extra-opt { display: none; }
-}
-@media (max-width: 900px) {
-  .np-side { display: none; }
-  .np-body { grid-template-columns: var(--np-art); }
 }
 @media (max-width: 760px) {
   :root { --sidebar-width: 72px; --float: 14px; }
@@ -834,9 +762,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .search-trigger { width: 220px; }
   .welcome .page-title { font-size: 44px; }
   .jump-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .player-bar { grid-template-columns: minmax(0, 1fr) minmax(220px, 340px) auto; column-gap: 12px; padding-left: 16px; padding-right: 16px; }
+  .player-extra .crumb { display: none; }
+  .volume-slider { width: 60px; }
   .player-controls { gap: 4px; }
-  .player-scrub { grid-template-columns: 34px minmax(0, 1fr) 34px; gap: 8px; }
+  .now-playing-body { gap: 40px; }
 }
 @media (max-width: 620px) {
   :root { --sidebar-width: 0px; --float: 10px; --player-h: 68px; }
@@ -872,18 +801,15 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .mood-copy h2 { font-size: 24px; }
   .home-section { margin-top: 34px; }
 
-  /* Compact player on phones: artwork + title and the transport only; the scrubber becomes a hairline on the bottom edge. */
+  /* Reset the player bar for mobile to normal flow */
   .player-bar { height: var(--player-h); padding: 0 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border-radius: 22px; }
-  .player-center { display: contents; }
-  .player-controls { gap: 5px; }
-  .player-scrub { position: absolute; left: 18px; right: 18px; bottom: 3px; display: block; height: 10px; }
-  .player-scrub > span { display: none; }
-  .player-scrub .seek { position: absolute; inset: 0; height: 10px; }
+  .player-controls { position: static; transform: none; gap: 5px; }
   .player-track { max-width: none; }
+
   .player-track > span { max-width: 150px; }
   .player-track .track-title, .player-track .track-sub { max-width: 140px; }
   .player-track .cover-mini { width: 42px; height: 42px; }
-  .player-bar .player-controls > :first-child, .player-bar .player-controls > :last-child { display: none; }
+  .player-bar > .player-controls > :first-child, .player-bar > .player-controls > :last-child { display: none; }
   .player-extra { display: none; }
   .player-controls .play-button { width: 44px; height: 44px; margin: 0 2px; }
   .track-table th:nth-child(3), .track-table td:nth-child(3) { display: none; }
@@ -914,17 +840,15 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .font-select { gap: 12px; padding: 10px; }
   .font-preview { font-size: 18px; }
   .font-import small { display: none; }
-
-  /* Expanded player on phones: a near-full-height glass sheet, single column, lyrics below the controls. */
-  .np-layer { padding: 10px; }
-  .np-panel { height: 100%; --np-art: min(290px, 74vw); }
-  .np-glass { border-radius: 26px; }
-  .np-top { height: 58px; padding: 0 14px; }
-  .np-body { grid-template-columns: 1fr; justify-items: center; align-content: start; align-items: start; row-gap: 24px; overflow: auto; padding: 4px 22px 76px; }
-  .np-main { width: var(--np-art); }
-  .np-side { display: flex; width: 100%; padding: 0; }
-  .np-lyrics { flex: none; min-height: 120px; font-size: 18px; overflow: visible; -webkit-mask-image: none; mask-image: none; }
-  .np-dock { right: 16px; bottom: 16px; }
+  .now-playing-top { height: 58px; padding: 0 18px; }
+  .now-playing-body { grid-template-columns: 1fr; gap: 22px; padding: 16px 22px 36px; overflow: auto; align-content: start; }
+  .now-playing-body .cover-large { width: min(270px, 74vw); margin: 4px auto 0; }
+  .now-playing-meta { text-align: center; }
+  .now-playing-meta h1 { font-size: 26px; }
+  .lyrics-box { font-size: 17px; margin-top: 24px; }
+  .now-playing-meta .player-controls { justify-content: center !important; }
+  .expanded-toggles, .expanded-volume { justify-content: center; }
+  .volume-slider { display: none; }
   .toast-stack { left: 12px; right: 12px; bottom: calc(var(--player-h) + var(--float) + 78px); }
   .toast-item { max-width: none; }
   .modal { padding: 22px; }
@@ -942,7 +866,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  :root { --glass-bg: hsl(40 20% 97%); --glass-bg-strong: hsl(40 20% 98%); --panel-bg: hsl(40 18% 94%); --np-scrim: hsl(40 20% 96% / .7); --np-glass: hsl(40 20% 98%); }
-  .dark { --glass-bg: hsl(0 0% 6%); --glass-bg-strong: hsl(0 0% 8%); --panel-bg: hsl(0 0% 5%); --np-scrim: hsl(0 0% 0% / .7); --np-glass: hsl(0 0% 7%); }
+  :root { --glass-bg: hsl(40 20% 97%); --glass-bg-strong: hsl(40 20% 98%); --panel-bg: hsl(40 18% 94%); }
+  .dark { --glass-bg: hsl(0 0% 6%); --glass-bg-strong: hsl(0 0% 8%); --panel-bg: hsl(0 0% 5%); }
   * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
