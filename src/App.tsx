@@ -60,16 +60,21 @@ const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s moo
 /* ───────────────────────── Procedural artwork ─────────────────────────
    Tracks (and albums / artists / playlists) without usable embedded artwork get a locally composed
    cover. Nothing is stored and no images are generated: a stable seed string drives a seeded PRNG,
-   and the PRNG chooses many independent things — dominant / secondary / accent hue, a composition
-   archetype (where the light sits), 0–2 "forms" out of ten kinds (orb, eclipse, light sweep, horizon
-   band, rays, rings, crescent, haze, spot, arc), glow sizes, alphas, shading direction and grain.
+   and the PRNG chooses many independent things — a warm-first dominant / secondary / accent hue, a
+   composition archetype (where the light sits), 0–2 soft light forms (bloom, sweep, pool, mist,
+   core, ember), glow sizes, alphas, shading direction and grain. Every light is a feathered bleed:
+   bright at its heart and dissolving into transparency, so a cover can never contain a dark disc,
+   a ring or a hard edge — only smooth red / gold / deep ambient light on a rich dark sleeve.
    The result is one layered CSS `background` string, so a cover costs a few gradients and no pixels.
-   The same seed always produces the same cover, different seeds produce different compositions
-   (not one template in many colours), and the dominant hues double as the global ambient colour. */
+   The same seed always produces the same cover; different seeds produce different compositions
+   (placement, hue, size, alpha and base all vary continuously, so no two covers match), and the
+   dominant hues double as the global ambient colour. */
 type Hue4 = readonly [number, number, number, number]; // [h1, h2, h3, saturation %]
 type ArtResult = { background: string; ambient: Hue4; grain: number };
-const ART_HUES = [350, 358, 8, 18, 28, 38, 46, 142, 156, 168, 180, 192, 204, 216, 228, 242, 256, 270, 284, 298, 314, 330];
-const ART_KINDS = ['orb', 'eclipse', 'sweep', 'band', 'rays', 'rings', 'crescent', 'haze', 'spot', 'arc'] as const;
+// Warm first — crimson, ember, amber, gold — with deep plum / violet / steel as rare counterpoints.
+const ART_WARM = [348, 354, 2, 8, 16, 24, 32, 40, 46] as const;
+const ART_DEEP = [332, 314, 296, 276, 258, 240, 222, 206] as const;
+const ART_KINDS = ['bloom', 'sweep', 'pool', 'mist', 'core', 'ember'] as const;
 const ART_LAYOUTS = ['corner', 'center', 'low', 'high', 'split', 'diagonal', 'edge', 'scatter'] as const;
 const hashOf = (seed: string) => { let hash = 2166136261; for (let i = 0; i < seed.length; i += 1) { hash ^= seed.charCodeAt(i); hash = Math.imul(hash, 16777619); } return hash >>> 0; };
 const mulberry32 = (seed: number) => () => {
@@ -92,18 +97,27 @@ function composeArt(seed: string): ArtResult {
   const sign = () => (rnd() < .5 ? -1 : 1);
   const wrap = (h: number) => ((h % 360) + 360) % 360;
 
-  const neutral = chance(.07);   // a few silver / ink covers keep the collection from being all colour
-  const lush = chance(.24);      // a rich, saturated colour field instead of a dark cover with a light in it
-  const h1 = wrap(pick(ART_HUES) + range(-9, 9));
+  const neutral = chance(.06);   // a few silver / ink covers keep the collection from being all colour
+  const lush = chance(.26);      // a rich, saturated colour field instead of a dark cover with a light in it
+  // Warm-first: three quarters of covers start from crimson / ember / amber / golden yellow, the rest
+  // from the deep plum / violet / steel counterpoints. Hue then drifts within (or just beside) that
+  // family, so reds stay reds and golds stay golds — only the balance shifts.
+  const warm = chance(.76);
+  const h1 = wrap((warm ? pick(ART_WARM) : pick(ART_DEEP)) + range(-8, 8));
   const spread = rnd();
-  const h2 = wrap(h1 + (spread < .52 ? sign() * range(16, 46) : spread < .86 ? sign() * range(70, 150) : range(-8, 8)));
-  const h3 = wrap(chance(.25) ? h1 + 180 + range(-24, 24) : h1 + sign() * range(8, 34));
-  const s1 = neutral ? range(4, 12) : range(68, 97);
-  const s2 = neutral ? s1 : Math.max(48, s1 - range(0, 18));
-  const lit = range(50, 64);
+  const h2 = wrap(h1 + (spread < .58 ? sign() * range(9, 32) : spread < .9 ? sign() * range(38, 84) : range(-6, 6)));
+  // The accent light is usually a second warm tone (amber over crimson, gold over ember); sometimes
+  // it simply sits close to the dominant hue. Never a hard complement, which would read as a clash.
+  const h3 = wrap(chance(.58) ? pick(ART_WARM) + range(-6, 6) : h1 + sign() * range(7, 30));
+  const s1 = neutral ? range(6, 14) : range(70, 96);
+  const s2 = neutral ? s1 : Math.max(50, s1 - range(0, 18));
+  const lit = range(54, 68);
 
-  const glow = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 70) =>
-    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(h, s, l, a)} 0, ${hsla(h, s, l - 12, a * .42)} ${num(end * .5)}%, transparent ${num(end)}%)`;
+  // One light bleed: bright warm heart, then four stops that soften outward into full transparency.
+  // There is no opaque rim and no cut-off edge anywhere in the ramp, so a light can never show a
+  // ring, a hole or a band — it just dissolves into the sleeve.
+  const glow = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 100) =>
+    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(h, s, Math.min(94, l + 6), a)} 0, ${hsla(h, s, l, a * .64)} ${num(end * .26)}%, ${hsla(h, s, Math.max(6, l - 8), a * .32)} ${num(end * .56)}%, ${hsla(h, s, Math.max(4, l - 16), a * .11)} ${num(end * .8)}%, transparent ${num(end)}%)`;
 
   // Where the light sits: eight archetypes, each with its own placement logic.
   const layout = pick(ART_LAYOUTS);
@@ -152,85 +166,65 @@ function composeArt(seed: string): ArtResult {
   }
   const t: [number, number] = [range(6, 94), range(6, 94)];
 
-  // Forms: zero, one or two distinct kinds, each with its own geometry and soft edges.
+  // Forms: zero, one or two soft light shapes. Every kind feathers into full transparency — there is
+  // deliberately no form here that can paint a dark disc, a bright rim, a ring or a hard-edged ray.
   const forms: string[] = [];
   const kinds = new Set<(typeof ART_KINDS)[number]>();
-  const kindCount = chance(.1) ? 0 : chance(.55) ? 1 : 2;
+  const kindCount = chance(.12) ? 0 : chance(.55) ? 1 : 2;
   while (kinds.size < kindCount) kinds.add(pick(ART_KINDS));
   for (const kind of kinds) {
     const fx = range(26, 74), fy = range(24, 72);
     switch (kind) {
-      case 'orb': {
-        const r = range(9, 24);
+      case 'bloom': {                       // a wide, warm flower of light
+        const r = range(26, 60);
         forms.push(
-          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2 * .6, 90, .96)} 0, ${hsla(h2, s2, 66, .86)} 34%, ${hsla(h1, s1, 48, .34)} 72%, transparent 100%)`,
-          glow(fx, fy, r * 2.8, r * 2.8, h1, s1, lit, .4, 70),
+          glow(fx, fy, r, r * range(.84, 1.18), h1, s1, lit, range(.5, .85), range(76, 100)),
+          glow(fx, fy, r * 1.8, r * 1.8, h2, s2, lit - 6, range(.28, .5), 100),
         );
         break;
       }
-      case 'eclipse': {
-        const r = range(14, 28);
+      case 'sweep': {                       // a soft diagonal drift of light across the sleeve
+        const angle = range(0, 180), c = range(32, 66), w = range(24, 46);
+        const lo = Math.max(0, c - w), hi = Math.min(100, c + w);
+        forms.push(`linear-gradient(${num(angle)}deg, transparent ${num(lo)}%, ${hsla(h2, s2 * .8, 78, range(.1, .24))} ${num(Math.max(lo, c - w * .4))}%, ${hsla(h3, s2, 84, range(.14, .3))} ${num(c)}%, ${hsla(h2, s2 * .6, 76, range(.06, .16))} ${num(Math.min(hi, c + w * .4))}%, transparent ${num(hi)}%)`);
+        break;
+      }
+      case 'pool': {                        // light gathered in one corner, spilling inward
+        const left = chance(.5), top = chance(.5);
+        forms.push(glow(left ? range(-16, 8) : range(92, 116), top ? range(-12, 12) : range(88, 114), range(72, 124), range(58, 112), chance(.5) ? h1 : h2, s1, lit, range(.4, .7), 100));
+        break;
+      }
+      case 'mist':                          // two overlapping veils, barely there
         forms.push(
-          `radial-gradient(ellipse ${num(r * 1.22)}% ${num(r * 1.22)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h1, 30, 3)} 0, ${hsla(h1, 30, 3)} 80%, ${hsla(h2, s2, 72, .9)} 85%, ${hsla(h2, s2, 58, .3)} 93%, transparent 100%)`,
-          glow(fx, fy, r * 2.6, r * 2.6, h2, s2, lit, .42, 72),
+          glow(fx, fy, range(72, 124), range(40, 82), h3, s2, 66, range(.18, .38), 100),
+          glow(100 - fx, 100 - fy, range(60, 112), range(52, 104), h2, s2, 60, range(.15, .32), 100),
+        );
+        break;
+      case 'core': {                        // a bright heart sitting inside a wide halo
+        const r = range(6, 15);
+        forms.push(
+          glow(fx, fy, r, r * range(.9, 1.15), h2, Math.min(100, s2 + 8), 82, range(.55, .85), 58),
+          glow(fx, fy, r * 5.2, r * 5.2, h1, s1, lit, range(.28, .5), 100),
         );
         break;
       }
-      case 'sweep': {
-        const angle = range(0, 180), c = range(26, 62), w = range(7, 20);
-        forms.push(`linear-gradient(${num(angle)}deg, transparent ${num(c - w)}%, ${hsla(h2, s2 * .8, 82, range(.12, .3))} ${num(c)}%, transparent ${num(c + w * 1.4)}%)`);
-        break;
-      }
-      case 'band': {
-        const tilt = range(-16, 16), c = range(34, 72), w = range(6, 16);
-        forms.push(`linear-gradient(${num(180 + tilt)}deg, transparent ${num(c - w)}%, ${hsla(h3, s2, 64, range(.22, .42))} ${num(c)}%, ${hsla(h1, s1, 52, .12)} ${num(c + w)}%, transparent ${num(c + w * 2.2)}%)`);
-        break;
-      }
-      case 'rays': {
-        const from = range(0, 360), w1 = range(18, 44), gap = range(40, 120);
-        forms.push(`conic-gradient(from ${num(from)}deg at ${num(fx, 1)}% ${num(fy, 1)}%, transparent 0deg, ${hsla(h2, s2, 70, .26)} ${num(w1 / 2)}deg, transparent ${num(w1)}deg, transparent ${num(gap)}deg, ${hsla(h3, s2, 66, .18)} ${num(gap + w1 * .6)}deg, transparent ${num(gap + w1 * 1.3)}deg)`);
-        break;
-      }
-      case 'rings': {
-        const gap = range(3.5, 9);
-        forms.push(`repeating-radial-gradient(ellipse at ${num(fx, 1)}% ${num(fy, 1)}%, transparent 0 ${num(gap, 1)}%, ${hsla(h2, s2 * .7, 84, range(.07, .15))} ${num(gap, 1)}% ${num(gap + .7, 1)}%)`);
-        break;
-      }
-      case 'crescent': {
-        const r = range(16, 28), dx = range(5, 11) * sign(), dy = range(-6, 6);
+      default: {                            // 'ember' — a small warm spark with a long fade
+        const r = range(3, 8);
         forms.push(
-          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx + dx, 1)}% ${num(fy + dy, 1)}%, ${hsla(h1, 40, 4)} 0, ${hsla(h1, 40, 4)} 90%, transparent 100%)`,
-          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2, 80, .95)} 0, ${hsla(h2, s2, 64, .85)} 88%, transparent 100%)`,
-          glow(fx, fy, r * 2.4, r * 2.4, h2, s2, lit, .36, 70),
+          glow(fx, fy, r, r * range(.85, 1.2), h3, s2 * .7, 90, range(.5, .8), 46),
+          glow(fx, fy, r * 7, r * 6, h1, s1, lit - 4, range(.24, .46), 100),
         );
-        break;
-      }
-      case 'haze':
-        forms.push(
-          glow(fx, fy, range(60, 100), range(26, 46), h3, s2, 62, range(.22, .4), 78),
-          glow(100 - fx, 100 - fy, range(40, 80), range(40, 80), h2, s2, 58, range(.16, .3), 75),
-        );
-        break;
-      case 'spot': {
-        const r = range(3.5, 7);
-        forms.push(
-          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2 * .5, 94, .98)} 0, ${hsla(h2, s2, 70, .6)} 45%, transparent 100%)`,
-          glow(fx, fy, r * 6, r * 6, h2, s2, lit, .5, 70),
-        );
-        break;
-      }
-      default: {
-        const radius = range(56, 110), ax = range(-10, 110), ay = range(40, 130);
-        forms.push(`radial-gradient(ellipse ${num(radius)}% ${num(radius)}% at ${num(ax, 1)}% ${num(ay, 1)}%, transparent 0, transparent 84%, ${hsla(h2, s2, 78, .5)} 92%, ${hsla(h1, s1, 60, .12)} 97%, transparent 100%)`);
       }
     }
   }
 
-  const primary = glow(p[0], p[1], range(40, lush ? 118 : 84), range(34, lush ? 118 : 84), h1, s1, lit, range(lush ? .8 : .56, lush ? 1 : .9), lush ? 86 : 70);
-  const secondary = glow(q[0], q[1], range(36, 92), range(30, 92), h2, s2, lit - 4, range(.34, .7), 72);
-  const accent = chance(.62) ? glow(t[0], t[1], range(14, 34), range(14, 34), h3, s2, 64, range(.3, .62), 70) : '';
-  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(.02, .08), 2)}), transparent ${num(range(26, 44))}%, hsl(0 0% 0% / ${num(range(.18, .5), 2)}))`;
-  const baseL = lush ? range(10, 20) : range(4, 11);
+  const primary = glow(p[0], p[1], range(44, lush ? 124 : 92), range(38, lush ? 124 : 88), h1, s1, lit, range(lush ? .78 : .54, lush ? 1 : .88), lush ? 100 : 84);
+  const secondary = glow(q[0], q[1], range(38, 98), range(32, 96), h2, s2, lit - 4, range(.32, .66), 92);
+  const accent = chance(.62) ? glow(t[0], t[1], range(16, 38), range(16, 38), h3, s2, 66, range(.28, .58), 86) : '';
+  // One full-cover directional shade: a smooth light-to-dark ramp with no midpoint edge, so the
+  // sleeve gains depth without ever showing a cut, a ring or a hole.
+  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(.02, .08), 2)}), transparent ${num(range(30, 48))}%, hsl(0 0% 0% / ${num(range(.14, .4), 2)}))`;
+  const baseL = lush ? range(12, 22) : range(5, 12);
   const base = `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, neutral ? 6 : range(26, 52), baseL)}, ${hsla(h2, neutral ? 6 : range(24, 46), Math.max(2, baseL - range(1, 6)))})`;
 
   return {
@@ -459,13 +453,18 @@ type RowActions = {
   menu: (track: Track) => void;
 };
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions, fly = false }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions; fly?: boolean;
 }) {
   return <div className="table-wrap">
     <table className="track-table">
       <thead><tr><th>{showIndex ? ' ' : 'Title'}</th><th>Album</th><th>Time</th><th aria-label="Actions" /></tr></thead>
-      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
+      {/* `fly` rows declare their entrance edge (alternating sides) and stagger delay here; App.tsx
+          arms the section before paint and an IntersectionObserver marks data-revealed per row as it
+          scrolls into view. */}
+      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}
+        data-fly={fly ? (index % 2 ? 'right' : 'left') : undefined}
+        style={fly ? ({ '--fly-delay': `${index * 60}ms` } as CSSProperties) : undefined}>
         <td><div className="track-main">
           {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
           <Cover track={track} />
@@ -1276,6 +1275,55 @@ function App() {
     return [...played, ...tracks.filter(track => !played.includes(track))].slice(0, 4);
   }, [tracks]);
   const recentlyAdded = useMemo(() => tracks.slice(0, 4), [tracks]);
+
+  /* ───────────── Home: cinematic scroll reveal ─────────────
+     Home cards and rows render with data-fly="left|right" but are only hidden once this layout
+     effect arms the section ([data-fly-armed]) — so without JS nothing is ever invisible. An
+     IntersectionObserver then marks data-revealed on each element as it crosses into the viewport
+     and the CSS glides it in from its side with a per-item stagger. Elements are observed one frame
+     late so anything already on screen still gets its entrance; reduced motion (or a missing
+     IntersectionObserver) simply shows everything. The armed marker also clips the table card
+     sideways while rows are in flight, so a half-flown row can never open a scrollbar. */
+  useLayoutEffect(() => {
+    if (page !== 'home' || detail) return;
+    const root = document.querySelector('.home-content');
+    if (!root) return;
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-fly]:not([data-revealed])'));
+    if (!nodes.length) return;
+    let disarm = 0;
+    const reveal = (node: HTMLElement) => {
+      node.dataset.revealed = '';
+      // Once the last flyer is on screen, drop the armed marker shortly after the longest
+      // entrance finishes (delay + duration) to hand the table's own horizontal scroll back.
+      if (root.querySelector('[data-fly]:not([data-revealed])')) return;
+      window.clearTimeout(disarm);
+      disarm = window.setTimeout(() => {
+        if (!root.querySelector('[data-fly]:not([data-revealed])')) delete root.dataset.flyArmed;
+      }, 1500);
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+      nodes.forEach(reveal);
+      return;
+    }
+    root.dataset.flyArmed = '';
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        reveal(entry.target as HTMLElement);
+        observer.unobserve(entry.target);
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: .14 });
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => nodes.forEach(node => observer.observe(node)));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(disarm);
+      observer.disconnect();
+    };
+  }, [page, detail, jumpBack, recentlyAdded]);
   // Uses the existing playback path: a random starting song with the whole library queued.
   const playSomething = () => {
     if (!tracks.length) { notify('Import audio files to begin your library.'); return; }
@@ -1410,10 +1458,11 @@ function App() {
             </section>
             {tracks.length ? <>
               <div className="home-section"><div className="section-heading"><h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2></div>
-                <div className="jump-grid">{jumpBack.map(track => <button className="jump-tile" key={track.id} onClick={() => void playTrack(track)} aria-label={`Play ${track.title}`} data-testid={`tile-jump-${track.id}`}><Cover track={track} large /><span className="jump-title">{track.title}</span><span className="jump-sub">{track.artist}</span></button>)}</div>
+                <div className="jump-grid">{jumpBack.map((track, index) => <button className="jump-tile" key={track.id} onClick={() => void playTrack(track)} aria-label={`Play ${track.title}`} data-testid={`tile-jump-${track.id}`}
+                  data-fly={index % 2 ? 'right' : 'left'} style={{ '--fly-delay': `${index * 90}ms` } as CSSProperties}><Cover track={track} large /><span className="jump-title">{track.title}</span><span className="jump-sub">{track.artist}</span></button>)}</div>
               </div>
               <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
-                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
+                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} fly />
               </div>
             </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
           </>}
