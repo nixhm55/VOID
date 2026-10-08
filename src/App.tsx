@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
   ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
-  Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume2, VolumeX, X,
+  Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -42,6 +42,8 @@ const formatTime = (seconds: number) => {
   if (!Number.isFinite(seconds) || seconds <= 0) return '—:—';
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 };
+// Elapsed time reads 0:00 at the start of a song instead of a dash.
+const formatElapsed = (seconds: number) => (!Number.isFinite(seconds) || seconds <= 0) ? '0:00' : formatTime(seconds);
 const compactBytes = (bytes: number) => bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 
 const countLabel = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
@@ -55,29 +57,250 @@ const moods = [
 ];
 const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
 
-/* ───────────────────────── Fallback artwork ─────────────────────────
-   Tracks without usable embedded artwork get one of ART_VARIANTS locally generated looks (see
-   .art-fallback in index.css). The choice is a pure function of the album/file identity, so the same
-   song always gets the same artwork. Tracks of one album share a look; tracks with no album tag are
-   keyed by file name + size. */
-const ART_VARIANTS = 13;
-// Very low-intensity light under the player for the playing track's fallback artwork (index-aligned with the CSS).
-const ART_GLOW = [
-  'hsl(30 95% 56% / .16)', 'hsl(270 85% 64% / .16)', 'hsl(350 85% 56% / .15)', 'hsl(180 80% 50% / .13)', 'hsl(222 88% 62% / .15)',
-  'hsl(0 0% 85% / .10)', 'hsl(210 70% 66% / .13)', 'hsl(32 98% 58% / .17)', 'hsl(215 40% 80% / .10)', 'hsl(34 40% 80% / .10)',
-  'hsl(340 70% 58% / .14)', 'hsl(36 92% 66% / .14)', 'hsl(165 40% 50% / .12)',
-];
-// Home atmosphere per fallback-art variant (same order as ART_GLOW / the CSS): [h1, h2, h3, saturation %]
-const ART_AMBIENT: readonly (readonly [number, number, number, number])[] = [
-  [32, 18, 10, 96], [272, 246, 260, 86], [352, 330, 345, 84], [176, 196, 184, 76], [220, 240, 230, 84],
-  [215, 215, 215, 5], [205, 290, 222, 60], [32, 40, 18, 96], [212, 215, 218, 30], [34, 30, 30, 34],
-  [340, 24, 300, 74], [38, 20, 24, 80], [165, 170, 175, 40],
-];
+/* ───────────────────────── Procedural artwork ─────────────────────────
+   Tracks (and albums / artists / playlists) without usable embedded artwork get a locally composed
+   cover. Nothing is stored and no images are generated: a stable seed string drives a seeded PRNG,
+   and the PRNG chooses many independent things — dominant / secondary / accent hue, a composition
+   archetype (where the light sits), 0–2 "forms" out of ten kinds (orb, eclipse, light sweep, horizon
+   band, rays, rings, crescent, haze, spot, arc), glow sizes, alphas, shading direction and grain.
+   The result is one layered CSS `background` string, so a cover costs a few gradients and no pixels.
+   The same seed always produces the same cover, different seeds produce different compositions
+   (not one template in many colours), and the dominant hues double as the global ambient colour. */
+type Hue4 = readonly [number, number, number, number]; // [h1, h2, h3, saturation %]
+type ArtResult = { background: string; ambient: Hue4; grain: number };
+const ART_HUES = [350, 358, 8, 18, 28, 38, 46, 142, 156, 168, 180, 192, 204, 216, 228, 242, 256, 270, 284, 298, 314, 330];
+const ART_KINDS = ['orb', 'eclipse', 'sweep', 'band', 'rays', 'rings', 'crescent', 'haze', 'spot', 'arc'] as const;
+const ART_LAYOUTS = ['corner', 'center', 'low', 'high', 'split', 'diagonal', 'edge', 'scatter'] as const;
 const hashOf = (seed: string) => { let hash = 2166136261; for (let i = 0; i < seed.length; i += 1) { hash ^= seed.charCodeAt(i); hash = Math.imul(hash, 16777619); } return hash >>> 0; };
-const artFor = (track: Track) => {
-  const seed = track.album && track.album !== 'Unknown album' ? `${track.album}|${track.artist}` : `${track.fileName}|${track.fileSize}`;
-  const hash = hashOf(seed);
-  return { variant: hash % ART_VARIANTS, x: 22 + ((hash >>> 8) % 56), y: 22 + ((hash >>> 16) % 56) };
+const mulberry32 = (seed: number) => () => {
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+const num = (value: number, digits = 0) => value.toFixed(digits);
+const hsla = (h: number, s: number, l: number, a?: number) => a === undefined
+  ? `hsl(${num(h)} ${num(s)}% ${num(l)}%)`
+  : `hsl(${num(h)} ${num(s)}% ${num(l)}% / ${num(a, 2)})`;
+
+function composeArt(seed: string): ArtResult {
+  const rnd = mulberry32(hashOf(seed) ^ 0x9e3779b9);
+  for (let i = 0; i < 4; i += 1) rnd();
+  const range = (a: number, b: number) => a + rnd() * (b - a);
+  const chance = (p: number) => rnd() < p;
+  const pick = <T,>(list: readonly T[]): T => list[Math.floor(rnd() * list.length)];
+  const sign = () => (rnd() < .5 ? -1 : 1);
+  const wrap = (h: number) => ((h % 360) + 360) % 360;
+
+  const neutral = chance(.07);   // a few silver / ink covers keep the collection from being all colour
+  const lush = chance(.24);      // a rich, saturated colour field instead of a dark cover with a light in it
+  const h1 = wrap(pick(ART_HUES) + range(-9, 9));
+  const spread = rnd();
+  const h2 = wrap(h1 + (spread < .52 ? sign() * range(16, 46) : spread < .86 ? sign() * range(70, 150) : range(-8, 8)));
+  const h3 = wrap(chance(.25) ? h1 + 180 + range(-24, 24) : h1 + sign() * range(8, 34));
+  const s1 = neutral ? range(4, 12) : range(68, 97);
+  const s2 = neutral ? s1 : Math.max(48, s1 - range(0, 18));
+  const lit = range(50, 64);
+
+  const glow = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 70) =>
+    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(h, s, l, a)} 0, ${hsla(h, s, l - 12, a * .42)} ${num(end * .5)}%, transparent ${num(end)}%)`;
+
+  // Where the light sits: eight archetypes, each with its own placement logic.
+  const layout = pick(ART_LAYOUTS);
+  let p: [number, number];
+  let q: [number, number];
+  switch (layout) {
+    case 'corner': {
+      const left = chance(.5), top = chance(.5);
+      p = [left ? range(2, 22) : range(78, 98), top ? range(2, 24) : range(76, 98)];
+      q = [100 - p[0] + range(-14, 14), 100 - p[1] + range(-14, 14)];
+      break;
+    }
+    case 'center':
+      p = [range(36, 64), range(34, 64)];
+      q = [p[0] + sign() * range(24, 42), p[1] + sign() * range(24, 40)];
+      break;
+    case 'low':
+      p = [range(14, 86), range(78, 104)];
+      q = [range(0, 100), range(-6, 26)];
+      break;
+    case 'high':
+      p = [range(14, 86), range(-6, 22)];
+      q = [range(0, 100), range(78, 106)];
+      break;
+    case 'split': {
+      const first = chance(.5);
+      p = [first ? range(8, 30) : range(70, 92), range(20, 80)];
+      q = [100 - p[0] + range(-8, 8), range(20, 80)];
+      break;
+    }
+    case 'diagonal': {
+      const first = chance(.5);
+      p = [first ? range(4, 30) : range(70, 96), range(4, 30)];
+      q = [100 - p[0], range(70, 98)];
+      break;
+    }
+    case 'edge': {
+      const first = chance(.5);
+      p = [first ? range(-8, 6) : range(94, 108), range(14, 86)];
+      q = [first ? range(60, 100) : range(0, 40), range(0, 100)];
+      break;
+    }
+    default:
+      p = [range(8, 92), range(8, 92)];
+      q = [range(8, 92), range(8, 92)];
+  }
+  const t: [number, number] = [range(6, 94), range(6, 94)];
+
+  // Forms: zero, one or two distinct kinds, each with its own geometry and soft edges.
+  const forms: string[] = [];
+  const kinds = new Set<(typeof ART_KINDS)[number]>();
+  const kindCount = chance(.1) ? 0 : chance(.55) ? 1 : 2;
+  while (kinds.size < kindCount) kinds.add(pick(ART_KINDS));
+  for (const kind of kinds) {
+    const fx = range(26, 74), fy = range(24, 72);
+    switch (kind) {
+      case 'orb': {
+        const r = range(9, 24);
+        forms.push(
+          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2 * .6, 90, .96)} 0, ${hsla(h2, s2, 66, .86)} 34%, ${hsla(h1, s1, 48, .34)} 72%, transparent 100%)`,
+          glow(fx, fy, r * 2.8, r * 2.8, h1, s1, lit, .4, 70),
+        );
+        break;
+      }
+      case 'eclipse': {
+        const r = range(14, 28);
+        forms.push(
+          `radial-gradient(ellipse ${num(r * 1.22)}% ${num(r * 1.22)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h1, 30, 3)} 0, ${hsla(h1, 30, 3)} 80%, ${hsla(h2, s2, 72, .9)} 85%, ${hsla(h2, s2, 58, .3)} 93%, transparent 100%)`,
+          glow(fx, fy, r * 2.6, r * 2.6, h2, s2, lit, .42, 72),
+        );
+        break;
+      }
+      case 'sweep': {
+        const angle = range(0, 180), c = range(26, 62), w = range(7, 20);
+        forms.push(`linear-gradient(${num(angle)}deg, transparent ${num(c - w)}%, ${hsla(h2, s2 * .8, 82, range(.12, .3))} ${num(c)}%, transparent ${num(c + w * 1.4)}%)`);
+        break;
+      }
+      case 'band': {
+        const tilt = range(-16, 16), c = range(34, 72), w = range(6, 16);
+        forms.push(`linear-gradient(${num(180 + tilt)}deg, transparent ${num(c - w)}%, ${hsla(h3, s2, 64, range(.22, .42))} ${num(c)}%, ${hsla(h1, s1, 52, .12)} ${num(c + w)}%, transparent ${num(c + w * 2.2)}%)`);
+        break;
+      }
+      case 'rays': {
+        const from = range(0, 360), w1 = range(18, 44), gap = range(40, 120);
+        forms.push(`conic-gradient(from ${num(from)}deg at ${num(fx, 1)}% ${num(fy, 1)}%, transparent 0deg, ${hsla(h2, s2, 70, .26)} ${num(w1 / 2)}deg, transparent ${num(w1)}deg, transparent ${num(gap)}deg, ${hsla(h3, s2, 66, .18)} ${num(gap + w1 * .6)}deg, transparent ${num(gap + w1 * 1.3)}deg)`);
+        break;
+      }
+      case 'rings': {
+        const gap = range(3.5, 9);
+        forms.push(`repeating-radial-gradient(ellipse at ${num(fx, 1)}% ${num(fy, 1)}%, transparent 0 ${num(gap, 1)}%, ${hsla(h2, s2 * .7, 84, range(.07, .15))} ${num(gap, 1)}% ${num(gap + .7, 1)}%)`);
+        break;
+      }
+      case 'crescent': {
+        const r = range(16, 28), dx = range(5, 11) * sign(), dy = range(-6, 6);
+        forms.push(
+          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx + dx, 1)}% ${num(fy + dy, 1)}%, ${hsla(h1, 40, 4)} 0, ${hsla(h1, 40, 4)} 90%, transparent 100%)`,
+          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2, 80, .95)} 0, ${hsla(h2, s2, 64, .85)} 88%, transparent 100%)`,
+          glow(fx, fy, r * 2.4, r * 2.4, h2, s2, lit, .36, 70),
+        );
+        break;
+      }
+      case 'haze':
+        forms.push(
+          glow(fx, fy, range(60, 100), range(26, 46), h3, s2, 62, range(.22, .4), 78),
+          glow(100 - fx, 100 - fy, range(40, 80), range(40, 80), h2, s2, 58, range(.16, .3), 75),
+        );
+        break;
+      case 'spot': {
+        const r = range(3.5, 7);
+        forms.push(
+          `radial-gradient(ellipse ${num(r)}% ${num(r)}% at ${num(fx, 1)}% ${num(fy, 1)}%, ${hsla(h2, s2 * .5, 94, .98)} 0, ${hsla(h2, s2, 70, .6)} 45%, transparent 100%)`,
+          glow(fx, fy, r * 6, r * 6, h2, s2, lit, .5, 70),
+        );
+        break;
+      }
+      default: {
+        const radius = range(56, 110), ax = range(-10, 110), ay = range(40, 130);
+        forms.push(`radial-gradient(ellipse ${num(radius)}% ${num(radius)}% at ${num(ax, 1)}% ${num(ay, 1)}%, transparent 0, transparent 84%, ${hsla(h2, s2, 78, .5)} 92%, ${hsla(h1, s1, 60, .12)} 97%, transparent 100%)`);
+      }
+    }
+  }
+
+  const primary = glow(p[0], p[1], range(40, lush ? 118 : 84), range(34, lush ? 118 : 84), h1, s1, lit, range(lush ? .8 : .56, lush ? 1 : .9), lush ? 86 : 70);
+  const secondary = glow(q[0], q[1], range(36, 92), range(30, 92), h2, s2, lit - 4, range(.34, .7), 72);
+  const accent = chance(.62) ? glow(t[0], t[1], range(14, 34), range(14, 34), h3, s2, 64, range(.3, .62), 70) : '';
+  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(.02, .08), 2)}), transparent ${num(range(26, 44))}%, hsl(0 0% 0% / ${num(range(.18, .5), 2)}))`;
+  const baseL = lush ? range(10, 20) : range(4, 11);
+  const base = `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, neutral ? 6 : range(26, 52), baseL)}, ${hsla(h2, neutral ? 6 : range(24, 46), Math.max(2, baseL - range(1, 6)))})`;
+
+  return {
+    background: [...forms, shade, accent, secondary, primary, base].filter(Boolean).join(', '),
+    ambient: [Math.round(h1), Math.round(h2), Math.round(h3), neutral ? 6 : Math.round(Math.min(94, s1))],
+    grain: range(.08, .26),
+  };
+}
+const artCache = new Map<string, ArtResult>();
+const artForSeed = (seed: string) => {
+  let art = artCache.get(seed);
+  if (!art) { art = composeArt(seed); artCache.set(seed, art); }
+  return art;
+};
+// A song's cover is a pure function of stable file identity, so it never changes across reloads or rescans.
+const artFor = (track: Track, identity?: string) => artForSeed(identity ?? `${track.id}|${track.fileName}|${track.fileSize}`);
+
+// Real embedded artwork has no generator seed, so its colour is read once from a 20×20 downscale.
+// Weighted by chroma and mid-tone-ness; near-greyscale art falls back to a neutral light.
+async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const size = 20;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    const bins = new Array<number>(24).fill(0);
+    let satSum = 0, weightSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      if (d < .08) continue;
+      const l = (max + min) / 2;
+      const mid = 1 - Math.abs(2 * l - 1);
+      const s = d / (mid || 1);
+      let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+      const weight = d * mid;
+      bins[Math.floor(h / 15) % 24] += weight;
+      satSum += s * weight; weightSum += weight;
+    }
+    if (weightSum < 4) return [215, 215, 215, 6];
+    const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
+    let best = 0;
+    for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
+    let second = -1;
+    for (let i = 0; i < 24; i += 1) {
+      const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
+      if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
+    }
+    const h1 = best * 15 + 7.5;
+    const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
+    const h3 = (h1 + 338) % 360;
+    const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
+    return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
+  } catch { return null; }
+  finally { URL.revokeObjectURL(url); }
+}
+
+const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 };
 
 /* ───────────────────────── Auto Import ─────────────────────────
@@ -204,7 +427,8 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
 }
 
 // Memoized so playback-time re-renders (timeupdate) never remount or reload artwork.
-const Cover = memo(function Cover({ track, large = false, kind = 'disc' }: { track?: Track; large?: boolean; kind?: 'disc' | 'list' }) {
+// `identity` lets albums, artists and playlists seed their own fallback cover instead of borrowing a song's.
+const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: Track; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -215,15 +439,15 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc' }: { tra
     return () => URL.revokeObjectURL(url);
   }, [track?.artwork]);
   const Glyph = kind === 'list' ? ListMusic : Disc3;
-  // Real embedded artwork always wins; fallback art only when there is none or it cannot be decoded.
-  const art = track && (!track.artwork || failed) ? artFor(track) : null;
-  const style = track ? ({ '--cover-h': hueOf(`${track.album}|${track.artist}`), ...(art ? { '--ax': art.x, '--ay': art.y } : {}) } as CSSProperties) : undefined;
-  return <div className={`${large ? 'cover-large' : 'cover-mini'}${art ? ' art-fallback' : ''}`} style={style} data-art={art?.variant} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
+  // Real embedded artwork always wins; the composed cover only when there is none or it cannot be decoded.
+  const art = track && (!track.artwork || failed) ? artFor(track, identity) : null;
+  const style = track ? ({ '--cover-h': hueOf(identity ?? `${track.album}|${track.artist}`), ...(art ? { background: art.background, '--grain': art.grain.toFixed(2) } : {}) } as CSSProperties) : undefined;
+  return <div className={`${large ? 'cover-large' : 'cover-mini'}${art ? ' art-fallback' : ''}`} style={style} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
     {src && !failed
       ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
       : art ? (kind === 'list' ? <Glyph aria-hidden="true" /> : null) : <Glyph aria-hidden="true" />}
   </div>;
-}, (a, b) => a.large === b.large && a.kind === b.kind && a.track?.artwork === b.track?.artwork
+}, (a, b) => a.large === b.large && a.kind === b.kind && a.identity === b.identity && a.track?.artwork === b.track?.artwork
   && a.track?.id === b.track?.id && a.track?.album === b.track?.album && a.track?.artist === b.track?.artist);
 
 type RowActions = {
@@ -269,6 +493,54 @@ function VoidGlyph({ playing }: { playing: boolean }) {
   </svg>;
 }
 
+/* ───────────────────────── Volume control ─────────────────────────
+   Resting state is just the speaker icon. Clicking it grows a compact glass capsule to the left of
+   the icon with a thin slider (the icon stays put, neighbouring icons fade). While open, clicking the
+   icon toggles mute; the capsule folds away on outside click, Escape, or shortly after the pointer
+   or focus leaves. Volume and mute still flow through the app's existing preferences. */
+function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, inputTestId }: {
+  volume: number; muted: boolean; onVolume: (value: number) => void; onToggleMute: () => void; buttonTestId: string; inputTestId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const dragging = useRef(false);
+  const silent = muted || volume <= 0;
+  const Icon = silent ? VolumeX : volume < .4 ? Volume1 : Volume2;
+  const clearTimer = () => window.clearTimeout(timer.current);
+  const armClose = () => {
+    clearTimer();
+    timer.current = window.setTimeout(() => { if (!dragging.current) setOpen(false); }, 1800);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const label = open ? (silent ? 'Unmute' : 'Mute') : 'Volume';
+  return <div ref={root} className="vol" data-open={open ? '' : undefined} data-silent={silent ? '' : undefined}
+    onPointerEnter={clearTimer} onPointerLeave={() => { if (open) armClose(); }}
+    onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpen(false); } }}
+    onBlur={event => { if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) armClose(); }}>
+    <div className="vol-pop">
+      <input className="vol-slider" style={rangeStyle(silent ? 0 : volume)} type="range" min="0" max="1" step=".01" value={silent ? 0 : volume}
+        aria-label="Volume" tabIndex={open ? 0 : -1}
+        onChange={event => onVolume(Number(event.target.value))}
+        onPointerDown={() => {
+          dragging.current = true; clearTimer();
+          window.addEventListener('pointerup', () => { dragging.current = false; }, { once: true });
+        }}
+        data-testid={inputTestId} />
+    </div>
+    <button className="icon-button vol-button" aria-label={label} aria-expanded={open} title={label}
+      onClick={() => { if (open) onToggleMute(); else setOpen(true); }} data-testid={buttonTestId}>
+      <Icon key={silent ? 'silent' : 'sound'} />
+    </button>
+  </div>;
+}
+
 function App() {
   const [location, setLocation] = useLocation();
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -288,6 +560,7 @@ function App() {
   const [contextTrack, setContextTrack] = useState<Track | null>(null);
   const [detail, setDetail] = useState<{ kind: 'album' | 'artist' | 'playlist'; name: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState('');
   const [importing, setImporting] = useState(false);
@@ -306,6 +579,8 @@ function App() {
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  // Ambient colour of the playing track: [h1, h2, h3, saturation]. Drives the whole environment.
+  const [atmos, setAtmos] = useState<Hue4 | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
   const fontInput = useRef<HTMLInputElement>(null);
@@ -315,6 +590,13 @@ function App() {
   const audio = useRef<HTMLAudioElement>(null);
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+  const npArt = useRef<HTMLDivElement>(null);
+  const expandedRef = useRef(false);
+  const closingRef = useRef(false);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const themeTint = useRef<[number, number, number] | null>(null);
+  expandedRef.current = expanded;
+  closingRef.current = closing;
   const activeTrack = tracks.find(track => track.id === activeId) ?? null;
 
   const notify = useCallback((message: string) => {
@@ -420,6 +702,55 @@ function App() {
       audio.current.muted = prefs.muted;
     }
   }, [prefs.volume, prefs.muted]);
+
+  /* ───────────── Global ambient colour ─────────────
+     The playing track's colour (generated cover → its seed hues; real artwork → sampled once) is
+     written to --h1/--h2/--h3/--s on .void-app. Everything ambient (page light, orb, top band, player
+     reflection) derives from those through registered custom properties, so a track change is one
+     cross-fade. Below, the browser's own top chrome (Safari tints it from theme-color) follows. */
+  useEffect(() => {
+    if (!activeTrack) { setAtmos(null); return; }
+    const generated = artFor(activeTrack).ambient;
+    if (!activeTrack.artwork) { setAtmos(generated); return; }
+    let alive = true;
+    sampleArtworkAmbient(activeTrack.artwork)
+      .then(found => { if (alive) setAtmos(found ?? generated); })
+      .catch(() => { if (alive) setAtmos(generated); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTrack?.id, activeTrack?.artwork]);
+
+  useEffect(() => {
+    if (!atmos && !themeTint.current) return; // never touch the page's own theme-color until a track has played
+    const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const base: [number, number, number] = dark ? [0, 0, 0] : [246, 244, 239];
+    let target = base;
+    if (atmos) {
+      const tint = hslToRgb(atmos[0], atmos[3] / 100, dark ? .5 : .62);
+      const mix = dark ? .17 : .13;
+      target = [0, 1, 2].map(i => Math.round(base[i] + (tint[i] - base[i]) * mix)) as [number, number, number];
+    }
+    const apply = (color: number[]) => {
+      const value = `#${color.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+      let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
+      if (!metas.length) { const meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); metas = [meta]; }
+      metas.forEach(meta => { meta.content = value; });
+    };
+    const from = themeTint.current ?? target;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { themeTint.current = target; apply(target); return; }
+    const start = performance.now();
+    let frame = 0;
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - start) / 1400);
+      const eased = progress * progress * (3 - 2 * progress);
+      const current = [0, 1, 2].map(i => Math.round(from[i] + (target[i] - from[i]) * eased)) as [number, number, number];
+      themeTint.current = current;
+      apply(current);
+      if (progress < 1) frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
+  }, [atmos, prefs.theme]);
 
   /* ───────────── Fonts ───────────── */
   // Verify the bundled Savage Roses face is available. The other built-in fonts are
@@ -816,6 +1147,41 @@ function App() {
     setContextTrack(null);
   };
 
+  /* ───────────── Expanded player ─────────────
+     The compact artwork "flies" into the large artwork (and back) with one transform animation
+     measured from the real rectangles, so the two surfaces read as one object. Only the glass and the
+     surrounding text fade; the artwork itself never does. */
+  const flyArt = useCallback((direction: 'open' | 'close') => {
+    const art = npArt.current;
+    const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
+    if (!art || !source || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const from = source.getBoundingClientRect();
+    const to = art.getBoundingClientRect();
+    if (!from.width || !to.width) return;
+    const scale = from.width / to.width;
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const compact = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${13 / scale}px` };
+    const full = { transform: 'translate(0px, 0px) scale(1)', borderRadius: '24px' };
+    if (direction === 'open') art.animate([compact, full], { duration: 540, easing: 'cubic-bezier(.22,.8,.24,1)', fill: 'backwards' });
+    else art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+  }, []);
+  const openExpanded = useCallback(() => {
+    if (expandedRef.current) return;
+    window.clearTimeout(closeTimer.current);
+    setClosing(false);
+    setExpanded(true);
+  }, []);
+  const closeExpanded = useCallback(() => {
+    if (!expandedRef.current || closingRef.current) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setExpanded(false); setClosing(false); return; }
+    setClosing(true);
+    flyArt('close');
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => { setExpanded(false); setClosing(false); }, 300);
+  }, [flyArt]);
+  useLayoutEffect(() => { if (expanded) flyArt('open'); }, [expanded, flyArt]);
+
   useEffect(() => {
     const onKeys = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -825,7 +1191,7 @@ function App() {
         event.preventDefault(); setPaletteOpen(value => !value); setPaletteQuery(''); return;
       }
       if (event.key === 'Escape') {
-        setPaletteOpen(false); setModal(null); setContextTrack(null); setExpanded(false); setImportMenu(false); return;
+        setPaletteOpen(false); setModal(null); setContextTrack(null); closeExpanded(); setImportMenu(false); return;
       }
       if (editing || paletteOpen || modal || contextTrack || importMenu) return;
       if (event.code === 'Space') { event.preventDefault(); void togglePlay(); }
@@ -837,11 +1203,12 @@ function App() {
     };
     window.addEventListener('keydown', onKeys);
     return () => window.removeEventListener('keydown', onKeys);
-  }, [activeTrack, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
+  }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
 
   useEffect(() => () => {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     window.clearTimeout(toastTimer.current);
+    window.clearTimeout(closeTimer.current);
     window.cancelAnimationFrame(orbFrame.current);
   }, []);
 
@@ -962,10 +1329,15 @@ function App() {
     menu: track => latestActions.current!.menu(track),
   }), []);
   const moodIndex = Math.floor(greetingHour / 2);
-  // Fallback-art tracks lend the player a very faint local glow; real artwork does not.
-  const activeArt = activeTrack && !activeTrack.artwork ? artFor(activeTrack) : null;
-  // Home only: the playing track's generated-cover identity drives the page ambient and the mood orb.
-  const atmosphere = page === 'home' && !detail && activeTrack ? ART_AMBIENT[artFor(activeTrack).variant] : null;
+  // The playing track's colour drives the page ambient, the orb, the top band and the player reflection on every page.
+  const atmosphere = atmos;
+  const changeVolume = (value: number) => {
+    if (audio.current) audio.current.volume = value;
+    void updatePrefs({ ...prefs, volume: value, muted: false });
+  };
+  const toggleMute = () => void updatePrefs({ ...prefs, muted: !prefs.muted });
+  const cycleRepeat = () => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' });
+  const seekTo = (next: number) => { if (audio.current) audio.current.currentTime = next; setPosition(next); };
 
   const pageDescription: Record<Page, string> = {
     home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
@@ -1056,19 +1428,19 @@ function App() {
               </div>
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
-            {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
+            {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
             {page === 'songs' && <div className="track-toolbar"><span className="crumb">Audio files imported into VOID</span><button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button></div>}
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
             {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.album === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
+              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large identity={`album:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
             })}</div> : <EmptyLibrary label="No albums yet" onImport={openImport} /> : null}
             {page === 'artists' && !detail ? artistNames.length ? <div className="cover-grid">{artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.artist === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{countLabel(tracks.filter(track => track.artist === name).length, 'song')}</div></button>;
+              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`}><Cover track={representative} large identity={`artist:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{countLabel(tracks.filter(track => track.artist === name).length, 'song')}</div></button>;
             })}</div> : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
             {page === 'playlists' && !detail && <div className="cover-grid">
-              {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
+              {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
             {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
@@ -1116,24 +1488,30 @@ function App() {
         </section>
       </main>
     </div>
-    <div className="player-bar" data-testid="player-bar" data-idle={activeTrack ? undefined : ''} style={activeArt ? ({ '--art-glow': ART_GLOW[activeArt.variant] } as CSSProperties) : undefined}>
-      <div className="progress-row"><input aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} disabled={!activeTrack} onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="input-seek" /></div>
-      <div className="player-track" onClick={() => activeTrack && setExpanded(true)} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setExpanded(true); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
+    <div className="player-bar" data-testid="player-bar" data-idle={activeTrack ? undefined : ''} data-np={expanded ? '' : undefined}>
+      <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
-        <span style={{ minWidth: 0 }}><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
+        <span><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
       </div>
-      <div className="player-controls">
-        <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-label="Shuffle" title="Shuffle" aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="button-shuffle"><Shuffle /></button>
-        <button className="icon-button" aria-label="Previous track" title="Previous track" onClick={() => playRelative(-1)} data-testid="button-previous"><SkipBack /></button>
-        <button className="icon-button play-button" aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} onClick={() => void togglePlay()} data-testid="button-play-pause"><VoidGlyph playing={isPlaying} /></button>
-        <button className="icon-button" aria-label="Next track" title="Next track" onClick={() => playRelative(1)} data-testid="button-next"><SkipForward /></button>
-        <button className={`icon-button ${prefs.repeat !== 'off' ? 'active-control' : ''}`} aria-label={`Repeat ${prefs.repeat}`} title={`Repeat ${prefs.repeat}`} aria-pressed={prefs.repeat !== 'off'} onClick={() => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' })} data-testid="button-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}</button>
+      <div className="player-center">
+        <div className="player-controls">
+          <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-label="Shuffle" title="Shuffle" aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="button-shuffle"><Shuffle /></button>
+          <button className="icon-button" aria-label="Previous track" title="Previous track" onClick={() => playRelative(-1)} data-testid="button-previous"><SkipBack /></button>
+          <button className="icon-button play-button" aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} onClick={() => void togglePlay()} data-testid="button-play-pause"><VoidGlyph playing={isPlaying} /></button>
+          <button className="icon-button" aria-label="Next track" title="Next track" onClick={() => playRelative(1)} data-testid="button-next"><SkipForward /></button>
+          <button className={`icon-button ${prefs.repeat !== 'off' ? 'active-control' : ''}`} aria-label={`Repeat ${prefs.repeat}`} title={`Repeat ${prefs.repeat}`} aria-pressed={prefs.repeat !== 'off'} onClick={cycleRepeat} data-testid="button-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}</button>
+        </div>
+        <div className="player-scrub">
+          <span>{activeTrack ? formatElapsed(position) : '—:—'}</span>
+          <input className="seek" aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} disabled={!activeTrack} onChange={event => seekTo(Number(event.target.value))} data-testid="input-seek" />
+          <span>{activeTrack ? formatTime(duration) : '—:—'}</span>
+        </div>
       </div>
       <div className="player-extra">
-        <span className="crumb">{formatTime(position)} / {formatTime(duration)}</span>
-        <button className="icon-button" aria-label={prefs.muted ? 'Unmute' : 'Mute'} title={prefs.muted ? 'Unmute' : 'Mute'} onClick={() => void updatePrefs({ ...prefs, muted: !prefs.muted })} data-testid="button-mute">{prefs.muted ? <VolumeX /> : <Volume2 />}</button>
-        <input className="volume-slider" style={rangeStyle(prefs.volume)} type="range" min="0" max="1" step=".01" value={prefs.volume} aria-label="Volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="input-volume" />
-        <button className="icon-button" aria-label="Expand now playing" onClick={() => setExpanded(true)} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
+        <button className="icon-button extra-fade extra-opt" aria-label={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} disabled={!activeTrack} onClick={() => activeTrack && void toggleFavorite(activeTrack)} data-testid="button-player-favorite"><Heart fill={activeTrack?.favorite ? 'currentColor' : 'none'} /></button>
+        <button className="icon-button extra-fade extra-opt" aria-label="Open queue" title="Queue" onClick={() => setPageAndRoute('queue')} data-testid="button-open-queue"><ListMusic /></button>
+        <button className="icon-button extra-fade" aria-label="Expand now playing" title="Now playing" onClick={openExpanded} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
+        <VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="button-mute" inputTestId="input-volume" />
       </div>
     </div>
     <input ref={fileInput} type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.alac" multiple hidden onChange={event => { if (event.target.files) void importFiles(event.target.files); event.target.value = ''; }} data-testid="input-import-files" />
@@ -1197,21 +1575,44 @@ function App() {
       <button className="palette-result" onClick={() => { void deleteTrack(contextTrack); setContextTrack(null); }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
       <div className="modal-actions"><button className="button" onClick={() => setContextTrack(null)} data-testid="button-close-track-menu">Close</button></div>
     </div></div>}
-    {expanded && <div className="now-playing-overlay" data-testid="now-playing-expanded">
-      <div className="now-playing-top"><span className="brand"><span className="eclipse" /><span className="brand-word">VOID</span></span><button className="icon-button" aria-label="Close now playing" onClick={() => setExpanded(false)} data-testid="button-close-expanded"><X /></button></div>
-       {activeTrack ? <div className="now-playing-body">
-        <Cover track={activeTrack} large />
-        <div className="now-playing-meta"><div className="eyebrow">Now playing</div><h1>{activeTrack.title}</h1><p>{activeTrack.artist} · {activeTrack.album}</p>
-          <div className="lyrics-box">{activeTrack.lyrics || 'Lyrics unavailable'}</div>
-           <div className="expanded-progress"><input type="range" min="0" max={duration || 0} step=".1" style={rangeStyle(duration ? position / duration : 0)} value={Math.min(position, duration || 0)} aria-label="Now playing position" onChange={event => { const next = Number(event.target.value); if (audio.current) audio.current.currentTime = next; setPosition(next); }} data-testid="expanded-seek" /><div><span>{formatTime(position)}</span><span>{formatTime(duration)}</span></div></div>
-            <div className="player-controls" style={{ justifyContent: 'flex-start', marginTop: 15 }}><button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button><button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play"><VoidGlyph playing={isPlaying} /></button><button className="icon-button" onClick={() => playRelative(1)} aria-label="Next track" title="Next track" data-testid="expanded-next"><SkipForward /></button><button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button><button className="icon-button" onClick={() => { setExpanded(false); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>
-            <div className="expanded-toggles">
-              <button className={`button ${prefs.shuffle ? 'selected' : ''}`} aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle />Shuffle</button>
-              <button className={`button ${prefs.repeat !== 'off' ? 'selected' : ''}`} aria-pressed={prefs.repeat !== 'off'} onClick={() => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' })} data-testid="expanded-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}Repeat{prefs.repeat === 'one' ? ' one' : prefs.repeat === 'all' ? ' queue' : ''}</button>
-            </div>
-           <label className="expanded-volume"><Volume2 size={15} /><input type="range" min="0" max="1" step=".01" style={rangeStyle(prefs.volume)} value={prefs.volume} aria-label="Now playing volume" onChange={event => { const value = Number(event.target.value); if (audio.current) audio.current.volume = value; void updatePrefs({ ...prefs, volume: value, muted: false }); }} data-testid="expanded-volume" /></label>
+    {expanded && <div className="np-layer" data-closing={closing ? '' : undefined} data-testid="now-playing-expanded">
+      <div className="np-scrim" aria-hidden="true" onMouseDown={closeExpanded} />
+      <section className="np-panel" role="dialog" aria-modal="true" aria-label="Now playing">
+        <div className="np-glass" aria-hidden="true" />
+        <div className="np-top np-fade">
+          <button className="icon-button np-close" aria-label="Close now playing" title="Close" onClick={closeExpanded} data-testid="button-close-expanded"><X /></button>
+          <span className="brand"><span className="eclipse" /><span className="brand-word">VOID</span></span>
+          <div className="np-top-end"><VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="expanded-mute" inputTestId="expanded-volume" /></div>
         </div>
-      </div> : <div className="empty-state" style={{ width: 'min(500px,90%)', margin: 'auto' }}><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { setExpanded(false); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div>}
+        {activeTrack ? <div className="np-body">
+          <div className="np-main">
+            <div className="np-art" ref={npArt}><Cover track={activeTrack} large /></div>
+            <div className="np-meta np-fade">
+              <div className="np-info">
+                <div className="np-titles"><h1>{activeTrack.title}</h1><p>{activeTrack.artist} · {activeTrack.album}</p></div>
+                <button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button>
+              </div>
+              <div className="np-scrub">
+                <input className="np-seek" type="range" min="0" max={duration || 0} step=".1" style={rangeStyle(duration ? position / duration : 0)} value={Math.min(position, duration || 0)} aria-label="Now playing position" onChange={event => seekTo(Number(event.target.value))} data-testid="expanded-seek" />
+                <div className="np-times"><span>{formatElapsed(position)}</span><span>{formatTime(duration)}</span></div>
+              </div>
+              <div className="np-controls">
+                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
+                <div className="np-transport">
+                  <button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button>
+                  <button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play"><VoidGlyph playing={isPlaying} /></button>
+                  <button className="icon-button" onClick={() => playRelative(1)} aria-label="Next track" title="Next track" data-testid="expanded-next"><SkipForward /></button>
+                </div>
+                <button className={`icon-button ${prefs.repeat !== 'off' ? 'active-control' : ''}`} aria-pressed={prefs.repeat !== 'off'} aria-label={`Repeat ${prefs.repeat}`} title={`Repeat ${prefs.repeat}`} onClick={cycleRepeat} data-testid="expanded-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}</button>
+              </div>
+            </div>
+          </div>
+          <div className="np-side np-fade">
+            <div className="np-lyrics" data-empty={activeTrack.lyrics ? undefined : ''}>{activeTrack.lyrics || 'Lyrics unavailable'}</div>
+          </div>
+        </div> : <div className="np-body np-body-empty np-fade"><div className="empty-state"><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { closeExpanded(); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div></div>}
+        {activeTrack && <div className="np-dock np-fade"><button className="icon-button" onClick={() => { closeExpanded(); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>}
+      </section>
     </div>}
     {toast && <div className="toast-stack" aria-live="polite"><div className="toast-item" data-testid="status-toast">{toast}</div></div>}
   </div>;
