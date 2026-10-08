@@ -1057,7 +1057,19 @@ const toggleFavorite = async (track: Track | any) => {
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
             {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
-            {page === 'songs' && <div className="track-toolbar"><span className="crumb">Audio files imported into VOID</span><button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button></div>}
+            {page === 'songs' && (
+              <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="crumb">Audio files imported into VOID</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {selectedSongIds.length > 0 && (
+                    <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
+                      <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
+                    </button>
+                  )}
+                  <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>
+                </div>
+              </div>
+            )}
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
             {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.album === name);
@@ -1071,7 +1083,20 @@ const toggleFavorite = async (track: Track | any) => {
               {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? (
+              <TrackRows 
+                items={page === 'queue' ? queueTracks : filteredTracks} 
+                showIndex={page === 'queue'} 
+                reorder={page === 'queue' || detail?.kind === 'playlist'} 
+                activeId={activeId} 
+                page={page} 
+                actions={rowActions} 
+                selectedIds={selectedSongIds}
+                toggleSelect={toggleSelectSong}
+                toggleSelectAll={() => toggleSelectAllSongs(filteredTracks)}
+                isAllSelected={filteredTracks.length > 0 && selectedSongIds.length === filteredTracks.length}
+              />
+            ) : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
           {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>

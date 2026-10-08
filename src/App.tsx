@@ -885,34 +885,102 @@ type RowActions = {
   removeFromList: (id: string) => void;
   favorite: (track: Track) => void;
   menu: (track: Track) => void;
+  selectedIds?: string[];
+  toggleSelect?: (id: string) => void;
+  toggleSelectAll?: () => void;
+  isAllSelected?: boolean;
 };
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions;
+const SelectionEmblem = ({ selected }: { selected: boolean }) => (
+  <div style={{
+    width: 18, height: 18, borderRadius: '50%',
+    border: selected ? 'none' : '1.5px solid hsl(var(--muted-foreground) / 0.4)',
+    background: selected ? 'hsl(142 71% 45%)' : 'transparent',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: '#fff', transition: 'all 0.2s ease', flexShrink: 0
+  }}>
+    {selected && <Check size={12} strokeWidth={3} />}
+  </div>
+);
+
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean;
 }) {
+  const isSelectionMode = selectedIds.length > 0;
+  
   return <div className="table-wrap">
     <table className="track-table">
-      <thead><tr><th>{showIndex ? ' ' : 'Title'}</th><th>Album</th><th>Time</th><th aria-label="Actions" /></tr></thead>
-      <tbody>{items.map((track, index) => <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
-        <td><div className="track-main">
-          {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
-          <Cover track={track} />
-          <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}
-          onClick={() => {
-          actions.play(track, items.map(item => item.id));
-          }}
-           aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
-            <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
-          </button>
-        </div></td>
-        <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={() => actions.openAlbum(track.album)} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
-        <td>{formatTime(track.duration)}</td>
-        <td><div className="row-actions">
-          {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={() => actions.move(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={() => actions.move(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => actions.removeFromList(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
-          <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
-          <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
-        </div></td>
-      </tr>)}</tbody>
+      <thead>
+        <tr>
+          <th>{showIndex ? ' ' : 'Title'}</th>
+          <th>Album</th>
+          <th>Time</th>
+          <th aria-label="Actions">
+            {page === 'songs' && toggleSelectAll && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingRight: 8 }}>
+                <button
+                  style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
+                  onClick={toggleSelectAll}
+                  aria-label="Select all"
+                  title="Select All"
+                >
+                  <SelectionEmblem selected={!!isAllSelected} />
+                </button>
+              </div>
+            )}
+          </th>
+        </tr>
+      </thead>
+      <tbody>{items.map((track, index) => {
+        const isSelected = selectedIds.includes(track.id);
+        return (
+          <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
+            <td>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                {page === 'songs' && toggleSelect && (
+                  <div style={{
+                    width: isSelectionMode ? 32 : 0,
+                    opacity: isSelectionMode ? 1 : 0,
+                    overflow: 'hidden',
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    flexShrink: 0
+                  }}>
+                    <button
+                      style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
+                      onClick={() => toggleSelect(track.id)}
+                      aria-label={`Select ${track.title}`}
+                    >
+                      <SelectionEmblem selected={isSelected} />
+                    </button>
+                  </div>
+                )}
+                <div className="track-main">
+                  {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
+                  <Cover track={track} />
+                  <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}
+                  onClick={() => {
+                    try {
+                      const audioEl = document.querySelector('audio');
+                      if (audioEl) { audioEl.load(); }
+                    } catch {}
+                    actions.play(track, items.map(item => item.id));
+                  }}
+                   aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
+                    <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
+                  </button>
+                </div>
+              </div>
+            </td>
+            <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={() => actions.openAlbum(track.album)} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
+            <td>{formatTime(track.duration)}</td>
+            <td><div className="row-actions">
+              {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={() => actions.move(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={() => actions.move(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => actions.removeFromList(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
+              <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
+              <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
+            </div></td>
+          </tr>
+        );
+      })}</tbody>
     </table>
   </div>;
 });
@@ -980,6 +1048,37 @@ function App() {
   const [prefs, setPrefs] = useState<Preferences>(defaults);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [streamingTrack, setStreamingTrack] = useState<any>(null);
+  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+
+  const toggleSelectSong = (id: string) => {
+    setSelectedSongIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllSongs = (items: Track[]) => {
+    if (selectedSongIds.length === items.length) {
+      setSelectedSongIds([]);
+    } else {
+      setSelectedSongIds(items.map(t => t.id));
+    }
+  };
+
+  const deleteSelectedSongs = async () => {
+    if (!selectedSongIds.length) return;
+    if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
+    try {
+      for (const id of selectedSongIds) {
+        await removeTrack(id);
+      }
+      setTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
+      setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
+      setSelectedSongIds([]);
+      notify('Selected songs removed.');
+    } catch {
+      notify('Could not remove selected songs.');
+    }
+  };
   const [queue, setQueue] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-queue') || '[]') as string[]; } catch { return []; }
   });
@@ -1997,7 +2096,19 @@ const toggleFavorite = async (track: Track | any) => {
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
             {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
-            {page === 'songs' && <div className="track-toolbar"><span className="crumb">Audio files imported into VOID</span><button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button></div>}
+            {page === 'songs' && (
+              <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="crumb">Audio files imported into VOID</span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {selectedSongIds.length > 0 && (
+                    <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
+                      <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
+                    </button>
+                  )}
+                  <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>
+                </div>
+              </div>
+            )}
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
             {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
               const representative = tracks.find(track => track.album === name);
@@ -2011,7 +2122,20 @@ const toggleFavorite = async (track: Track | any) => {
               {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? <TrackRows items={page === 'queue' ? queueTracks : filteredTracks} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} activeId={activeId} page={page} actions={rowActions} /> : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? (
+              <TrackRows 
+                items={page === 'queue' ? queueTracks : filteredTracks} 
+                showIndex={page === 'queue'} 
+                reorder={page === 'queue' || detail?.kind === 'playlist'} 
+                activeId={activeId} 
+                page={page} 
+                actions={rowActions} 
+                selectedIds={selectedSongIds}
+                toggleSelect={toggleSelectSong}
+                toggleSelectAll={() => toggleSelectAllSongs(filteredTracks)}
+                isAllSelected={filteredTracks.length > 0 && selectedSongIds.length === filteredTracks.length}
+              />
+            ) : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
           {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
