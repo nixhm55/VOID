@@ -945,4 +945,4 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   :root { --glass-bg: hsl(40 20% 97%); --glass-bg-strong: hsl(40 20% 98%); --panel-bg: hsl(40 18% 94%); --np-scrim: hsl(40 20% 96% / .7); --np-glass: hsl(40 20% 98%); }
   .dark { --glass-bg: hsl(0 0% 6%); --glass-bg-strong: hsl(0 0% 8%); --panel-bg: hsl(0 0% 5%); --np-scrim: hsl(0 0% 0% / .7); --np-glass: hsl(0 0% 7%); }
   * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
-}
+}.
