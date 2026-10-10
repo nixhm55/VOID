@@ -3,7 +3,7 @@ import { searchYouTube } from "./api/youtubeApi";
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
-  ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
+  Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -41,6 +41,18 @@ const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 
   { id: 'favorites', label: 'Favorites', icon: Heart, group: 'collection', compact: true },
   { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection', compact: false },
 ];
+// Mobile bottom bar: five primary destinations. Library is the one hub for the collection views
+// (albums, artists, playlists, recently played, queue) that stay individually routable.
+const mobileNavItems: { id: Page | 'library'; label: string; icon: typeof Home }[] = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'songs', label: 'Music', icon: Music2 },
+  { id: 'favorites', label: 'Favorites', icon: Heart },
+  { id: 'library', label: 'Library', icon: LibraryIcon },
+  { id: 'settings', label: 'Settings', icon: Settings },
+];
+// Pages that the Library hub owns, so its tab stays lit while browsing inside the collection.
+const LIBRARY_PAGES: Page[] = ['albums', 'artists', 'playlists', 'recent', 'queue'];
+
 const pathFor = (page: Page) => page === 'home' ? '/' : `/${page}`;
 const formatTime = (seconds: number) => {
   if (!Number.isFinite(seconds) || seconds <= 0) return '—:—';
@@ -677,8 +689,8 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </div>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean;
 }) {
   const isSelectionMode = selectedIds.length > 0;
   return <div className="table-wrap">
@@ -706,11 +718,20 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
       </thead>
       <tbody>{items.map((track, index) => {
         const isSelected = selectedIds.includes(track.id);
+        // The playing row is the only one that animates: the equalizer is tied to the audio element's
+        // real play state, not to the last row that was clicked.
+        const current = activeId === track.id;
         // Each row owns its play action: the row's card area (artwork + title) passes THIS track
         // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
         const playRowTrack = () => actions.play(track, items.map(item => item.id));
         return (
-          <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
+          <tr
+            key={track.id}
+            className={`dg-row${current ? ' current' : ''}`}
+            style={{ '--dg-i': Math.min(index, 8) } as CSSProperties}
+            aria-current={current ? 'true' : undefined}
+            data-testid={`row-track-${track.id}`}
+          >
             <td onClick={playRowTrack}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 {page === 'songs' && toggleSelect && (
@@ -737,6 +758,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                    aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
                     <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
                   </button>
+                  {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
                 </div>
               </div>
             </td>
@@ -950,6 +972,9 @@ useEffect(() => {
   const [detail, setDetail] = useState<{ kind: 'album' | 'artist' | 'playlist'; name: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [closing, setClosing] = useState(false);
+  // Deep Glass hub for the mobile Library tab (the underlying albums / artists / playlists
+  // pages and routes are untouched — this only decides which screen the shell shows).
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState('');
   const [importing, setImporting] = useState(false);
@@ -976,6 +1001,7 @@ useEffect(() => {
   const fontFaces = useRef(new Map<string, FontFace>());
   const orbRef = useRef<HTMLDivElement>(null);
   const orbFrame = useRef(0);
+  const contentRef = useRef<HTMLElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -1687,6 +1713,7 @@ useEffect(() => {
 
   const openCollection = (kind: 'album' | 'artist', name: string) => {
     const target: Page = kind === 'album' ? 'albums' : 'artists';
+    setLibraryOpen(false);
     setDetail({ kind, name });
     setQuery('');
     setPage(target);
@@ -1761,6 +1788,26 @@ useEffect(() => {
     return () => window.removeEventListener('keydown', onKeys);
   }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
 
+  // Home hero follows the scroll depth of the main column (same idea as the Paper Glass scroll
+  // variable): one rAF write per frame, one custom property, no layout reads.
+  useEffect(() => {
+    if (page !== 'home' || detail || libraryOpen) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const scroller = document.querySelector<HTMLElement>('.main-area');
+    const target = contentRef.current;
+    if (!scroller || !target) return;
+    let frame = 0;
+    const write = () => { frame = 0; target.style.setProperty('--dg-sy', String(Math.min(720, Math.round(scroller.scrollTop)))); };
+    const onScroll = () => { if (!frame) frame = window.requestAnimationFrame(write); };
+    write();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+      target.style.removeProperty('--dg-sy');
+    };
+  }, [detail, libraryOpen, page]);
+
   useEffect(() => () => {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     window.clearTimeout(toastTimer.current);
@@ -1784,7 +1831,7 @@ useEffect(() => {
     el.style.setProperty('--ox', '0'); el.style.setProperty('--oy', '0');
   };
 
-  const setPageAndRoute = (target: Page) => { setDetail(null); setPage(target); setLocation(pathFor(target)); };
+  const setPageAndRoute = (target: Page) => { setLibraryOpen(false); setDetail(null); setPage(target); setLocation(pathFor(target)); };
   const splitArtists = useCallback((raw: string): string[] => {
     if (!raw) return [];
     return raw.split(/(?:,\s*|;\s*|\s+\/\s+|\s+&\s+|\s+feat\.?\s+|\s+ft\.?\s+)/i).map(a => a.trim()).filter(Boolean);
@@ -1904,6 +1951,16 @@ useEffect(() => {
 
   const moodIndex = Math.floor(greetingHour / 2);
   const atmosphere = atmos;
+  // The row indicator and the equalizer borrow the colour the app already derives from the
+  // playing artwork (sampled hue, or the seeded cover palette when a song has no artwork),
+  // so the accent always belongs to the music instead of a fixed purple.
+  const rowAccent = useMemo(() => {
+    const source = atmos ?? (activeTrack ? artFor(activeTrack).ambient : null);
+    if (!source) return null;
+    const hue = Math.round(source[0]);
+    const saturation = Math.max(58, Math.min(92, Math.round(source[3])));
+    return `hsl(${hue} ${saturation}% 64%)`;
+  }, [atmos, activeTrack]);
   const changeVolume = (value: number) => {
     if (audio.current) audio.current.volume = value;
     void updatePrefs({ ...prefs, volume: value, muted: false });
@@ -1919,8 +1976,8 @@ useEffect(() => {
     playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, settings: 'A few quiet preferences.',
   };
 
-  const renderDeepGlass = () => <div className="void-app" data-ambient={page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
-    style={atmosphere ? ({ '--h1': atmosphere[0], '--h2': atmosphere[1], '--h3': atmosphere[2], '--s': `${atmosphere[3]}%` } as CSSProperties) : undefined}>
+  const renderDeepGlass = () => <div className="void-app" data-ambient={libraryOpen && !detail ? 'library' : page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'} data-playing={isPlaying ? '' : undefined} data-library={libraryOpen && !detail ? '' : undefined}
+    style={{ ...(atmosphere ? { '--h1': atmosphere[0], '--h2': atmosphere[1], '--h3': atmosphere[2], '--s': `${atmosphere[3]}%` } : null), ...(rowAccent ? { '--row-accent': rowAccent } : null) } as CSSProperties}>
     
     <div className="ambient" aria-hidden="true" />
 
@@ -1961,6 +2018,9 @@ useEffect(() => {
           <div className="top-left"><span className="eclipse mobile-eclipse" /><span className="brand-word mobile-brand">VOID</span><span className="crumb">{detail ? title : page === 'home' ? 'A quiet place for your music' : 'Your library'}</span></div>
           <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
+
+            {/* Phones get the compact add action beside search; the desktop button below stays as it is. */}
+            <button className="icon-button mobile-add-music" onClick={openImport} disabled={importing} aria-label="Add music" title="Add music" data-testid="button-add-music-compact"><Plus /></button>
             
             {/* --- LAPTOP SCREEN VIDEO TOGGLE BUTTON --- */}
             <button
@@ -1992,15 +2052,15 @@ useEffect(() => {
             {page !== 'settings' && <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setPageAndRoute('settings')} data-testid="button-open-settings"><SlidersHorizontal /></button>}
           </div>
         </header>
-        <section className={`content ${page === 'home' && !detail ? 'home-content' : ''}`}>
+        <section className={`content ${page === 'home' && !detail && !libraryOpen ? 'home-content' : ''}`} ref={contentRef}>
           {storageError ? <div className="empty-state" role="alert" data-testid="status-storage-error"><strong>Local storage unavailable</strong><p>{storageError} Your browser may be in private mode or storage may be disabled. VOID does not upload your music.</p><button className="button" onClick={() => { setStorageError(''); void reload(); }} data-testid="button-retry-storage">Try again</button></div> : null}
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
-          {isReady && page === 'home' && !detail && <>
+          {isReady && page === 'home' && !detail && !libraryOpen && <>
             <div className="welcome">
-              <div><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
-              <button className="button add-music" onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
+              <div className="dg-rise" style={{ '--dg-i': 0 } as CSSProperties}><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
+              <button className="button add-music dg-rise" style={{ '--dg-i': 1 } as CSSProperties} onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
             </div>
-            <section className="mood" aria-label={moodLabelFor(greetingHour)}>
+            <section className="mood dg-rise" aria-label={moodLabelFor(greetingHour)} style={{ '--dg-i': 1 } as CSSProperties}>
   <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
     <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
       <div className="vinyl-disc">
@@ -2013,7 +2073,7 @@ useEffect(() => {
   </div>
   <div className="mood-copy">
     <div className="mood-label">{moodLabelFor(greetingHour)}</div>
-    <h2>{moods[moodIndex]}</h2>
+    <h2 className="glass-ink">{moods[moodIndex]}</h2>
     <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something">
       <Play />Play something for me
     </button>
@@ -2021,7 +2081,7 @@ useEffect(() => {
 </section>
 
 {tracks.length ? <>
-  <div className="home-section">
+  <div className="home-section dg-rise" style={{ '--dg-i': 2 } as CSSProperties}>
     <div className="section-heading">
       <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
     </div>
@@ -2040,14 +2100,14 @@ useEffect(() => {
     </div>
   </div>
 
-  <div className="home-section">
+  <div className="home-section dg-rise" style={{ '--dg-i': 3 } as CSSProperties}>
     <div className="section-heading">
       <h2>Recently added</h2>
       <button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">
         View library
       </button>
     </div>
-    <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
+    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} />
   </div>
 </> : isReady && !storageError ? <div className="empty-state">
   <strong>Your library is waiting.</strong>
@@ -2058,7 +2118,37 @@ useEffect(() => {
   <span className="empty-formats">MP3 · M4A · FLAC · WAV</span>
 </div> : null}
 </>}
-{page !== 'home' && page !== 'settings' && <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+{libraryOpen && !detail && <div className="dg-page library-hub" key="library">
+            <div className="library-head">
+              <div className="eyebrow">Your collection</div>
+              <h1 className="page-title">Library</h1>
+              <p className="page-subtitle">{countLabel(albumNames.length, 'album')} · {countLabel(artistNames.length, 'artist')} · {countLabel(playlists.length, 'playlist')}</p>
+            </div>
+            <div className="library-grid">
+              {([
+                { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(albumNames.length, 'album') },
+                { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(artistNames.length, 'artist') },
+                { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
+                { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(track => track.lastPlayedAt).length} played` },
+                { id: 'queue' as Page, label: 'Queue', icon: AudioLines, count: countLabel(queueTracks.length, 'song') },
+                { id: 'songs' as Page, label: 'All songs', icon: Music2, count: countLabel(tracks.length, 'song') },
+              ]).map((entry, index) => {
+                const Icon = entry.icon;
+                return <button
+                  className="library-card dg-rise"
+                  key={entry.id}
+                  style={{ '--dg-i': Math.min(index, 6) } as CSSProperties}
+                  onClick={() => setPageAndRoute(entry.id)}
+                  data-testid={`library-${entry.id}`}
+                >
+                  <span className="library-card-icon"><Icon /></span>
+                  <span className="library-card-copy"><strong>{entry.label}</strong><small>{entry.count}</small></span>
+                  <ChevronDown className="library-card-chevron" aria-hidden="true" />
+                </button>;
+              })}
+            </div>
+          </div>}
+          {!libraryOpen && page !== 'home' && page !== 'settings' && <div className="dg-page" key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div className="eyebrow" style={{ marginBottom: 2 }}>{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
             <div className="section-heading" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
               <div><h1 className="page-title" style={{ margin: 0 }}>{title}</h1><p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{pageDescription[page]}</p></div>
@@ -2131,6 +2221,7 @@ useEffect(() => {
                 showIndex={page === 'queue'} 
                 reorder={page === 'queue' || detail?.kind === 'playlist'} 
                 activeId={activeId} 
+                isPlaying={isPlaying}
                 page={page} 
                 actions={rowActions} 
                 selectedIds={selectedSongIds}
@@ -2141,7 +2232,7 @@ useEffect(() => {
             ) : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
-          {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
+          {!libraryOpen && page === 'settings' && <div className="dg-page" key="settings"><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
             <div className="settings-section">
               <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
              <div className="setting-row">
@@ -2237,39 +2328,27 @@ useEffect(() => {
         </section>
       </main>
 
-      <nav 
-        className="mobile-bottom-nav" 
-        aria-label="Mobile navigation" 
-        style={{ 
-          display: expanded ? 'none' : 'flex',
-          background: 'transparent',
-          backgroundColor: 'transparent',
-          border: 'none',
-          boxShadow: 'none',
-          backdropFilter: 'none',
-          WebkitBackdropFilter: 'none'
-        }}
+      {/* Visibility follows the app state (data-hidden), so opening the expanded player takes the
+          bar out of the layout instead of covering it with another layer. */}
+      <nav
+        className="mobile-bottom-nav"
+        aria-label="Mobile navigation"
+        data-hidden={expanded ? '' : undefined}
       >
-        {[
-          { id: 'home', icon: Home },
-          { id: 'songs', icon: Music2 },
-          { id: 'playlists', icon: ListMusic },
-          { id: 'settings', icon: Settings }
-        ].map(item => {
+        {mobileNavItems.map(item => {
           const Icon = item.icon;
-          const active = page === item.id && !detail;
+          const active = item.id === 'library'
+            ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
+            : page === item.id && !detail && !libraryOpen;
           return (
-            <button 
-              key={item.id} 
-              className={`mobile-nav-item ${active ? 'active' : ''}`} 
-              onClick={() => setPageAndRoute(item.id as Page)} 
-              aria-label={item.id}
-              style={{
-                background: 'transparent',
-                filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.8))'
-              }}
+            <button
+              key={item.id}
+              className={`mobile-nav-item ${active ? 'active' : ''}`}
+              onClick={() => { if (item.id === 'library') { setDetail(null); setLibraryOpen(true); } else setPageAndRoute(item.id as Page); }}
+              aria-label={item.label}
+              aria-current={active ? 'page' : undefined}
             >
-              <Icon size={24} strokeWidth={active ? 2.5 : 2} />
+              <Icon />
             </button>
           );
         })}
@@ -2572,19 +2651,17 @@ useEffect(() => {
               </div>
             </div>
           </div>
-          <div className="np-side np-fade">
-            {syncedLyrics ? (
-              <div className="np-lyrics-synced" ref={sideLyricsRef} onWheel={handleLyricsScroll} onTouchMove={handleLyricsScroll}>
-                {syncedLyrics.map((line, i) => (
-                  <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => seekTo(line.time)}>
-                    {line.text}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="np-lyrics" data-empty={activeTrack.lyrics ? undefined : ''}>{activeTrack.lyrics || 'Lyrics unavailable'}</div>
-            )}
-          </div>
+          {/* No lyrics area at all when a song has none: the panel keeps only real content
+              (synced lines, when the track actually has them). */}
+          {syncedLyrics ? <div className="np-side np-fade">
+            <div className="np-lyrics-synced" ref={sideLyricsRef} onWheel={handleLyricsScroll} onTouchMove={handleLyricsScroll}>
+              {syncedLyrics.map((line, i) => (
+                <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => seekTo(line.time)}>
+                  {line.text}
+                </div>
+              ))}
+            </div>
+          </div> : null}
         </div> : <div className="np-body np-body-empty np-fade"><div className="empty-state"><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { closeExpanded(); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div></div>}
         {activeTrack && <div className="np-dock np-fade"><button className="icon-button" onClick={() => { closeExpanded(); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>}
       </section>

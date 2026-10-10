@@ -79,6 +79,10 @@
   --float: 20px;
   --player-h: 84px;
   --ease: cubic-bezier(.2, .7, .2, 1);
+  /* Signature ease of the VOID motion system (shared with Paper Glass): long, soft settle. */
+  --ease-out-soft: cubic-bezier(.16, 1, .3, 1);
+  /* Height of the floating mobile bar; the mini player and the content offset build on it. */
+  --nav-h: 56px;
 
   /* Liquid Glass (light) */
   --blur: 24px;
@@ -147,12 +151,14 @@
 }
 
 /* ───────────────────────── Base ───────────────────────── */
+/* `text-size-adjust` keeps mobile Safari / Chrome from inflating text inside the fixed
+   layout, which is the usual cause of text that looks like the wrong size or face on phones. */
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; }
+html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   font-family: var(--void-font); font-size: 13px; line-height: 1.5;
   background: #000; color: hsl(var(--foreground));
-  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 button, input, select { font: inherit; }
 button { color: inherit; -webkit-tap-highlight-color: transparent; }
@@ -1038,14 +1044,11 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
       display: none !important;
     }
     
-    /* Make space for Mini Player + Bottom Nav + padding */
-    .main-area {
-      padding-bottom: 140px !important;
-    }
-
-    /* Bottom Navigation - Exactly 4 items */
+    /* Bottom Navigation - five destinations, styled by the Deep Glass mobile block below.
+       `display` is intentionally NOT !important here, so the app state can take the bar away
+       when the expanded player opens (see .mobile-bottom-nav[data-hidden]). */
     .mobile-bottom-nav {
-      display: flex !important;
+      display: flex;
       position: fixed;
       bottom: 0;
       left: 0;
@@ -1059,6 +1062,12 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
       justify-content: space-around;
       align-items: center;
       padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* Expanded player open: the mobile bar and the mini player leave the layout entirely.
+       Both rules live in this layer and follow their base rules, so they win on specificity. */
+    .mobile-bottom-nav[data-hidden] {
+      display: none !important;
     }
 
     .mobile-nav-item {
@@ -1096,6 +1105,11 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
       justify-content: space-between !important;
       padding: 0 12px !important;
       z-index: 45 !important;
+    }
+
+    /* Expanded player open: the mini player steps out of the layout as well. */
+    .player-bar[data-np] {
+      display: none !important;
     }
 
     /* Hide desktop controls on mobile mini player */
@@ -1186,7 +1200,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     .mobile-bottom-nav, 
     .mobile-mini-play, 
     .mobile-font-trigger,
-    .mobile-font-header {
+    .mobile-font-header,
+    .mobile-add-music {
       display: none !important;
     }
   }
@@ -1363,4 +1378,235 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .canvas-container *,
 .canvas-iframe {
   pointer-events: none !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   DEEP GLASS — MOBILE REFINEMENT + MOTION
+   Appended last on purpose: unlayered rules win over the older
+   `@layer utilities` mobile block for normal declarations, so this block is
+   the single place that describes the current phone layout. Nothing here is
+   allowed to change the desktop / laptop composition, with one exception:
+   the liquid-glass treatment of the mood line, which was asked for on every size.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ───────────────────────── Motion primitives ─────────────────────────
+   Adapted from the Paper Glass motion system: one long soft ease, a short rise per
+   screen and per block, staggered with --dg-i. Transform/opacity only, so nothing
+   here can trigger layout work while it runs. */
+.dg-page { animation: dg-page-in .62s var(--ease-out-soft) both; }
+@keyframes dg-page-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+.dg-rise { animation: dg-rise .7s var(--ease-out-soft) both; animation-delay: calc(var(--dg-i, 0) * 60ms); }
+@keyframes dg-rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Rows of the song table are table-row boxes, so their entrance stays opacity-only. */
+.dg-row { animation: dg-row-in .5s var(--ease-out-soft) both; animation-delay: calc(var(--dg-i, 0) * 28ms); }
+@keyframes dg-row-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── Home hero: follows the scroll depth of the main column (--dg-sy from App.tsx). ── */
+.home-content .welcome {
+  transform: translate3d(0, calc(var(--dg-sy, 0) * -.06px), 0);
+  opacity: max(.35, calc(1 - var(--dg-sy, 0) / 900));
+}
+
+/* ── Liquid-glass type for the mood line ("Golden hour, low glare") ──
+   A thin light gradient is clipped to the glyphs: a bright top edge, a translucent
+   middle that carries the ambient hue of the playing track, and a soft return at the
+   baseline. Contrast stays high because every stop is a high-opacity foreground tone. */
+.glass-ink {
+  background-image: linear-gradient(177deg,
+    hsl(var(--foreground) / .97) 0%,
+    hsl(var(--foreground) / .72) 33%,
+    color-mix(in srgb, var(--orb-1) 88%, hsl(var(--foreground) / .14)) 55%,
+    hsl(var(--foreground) / .93) 100%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 1px 1px hsl(0 0% 0% / .26));
+}
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .glass-ink { background-image: none; color: hsl(var(--foreground)); -webkit-text-fill-color: currentColor; filter: none; }
+}
+
+/* ── Library hub: the collection views the mobile bar folds into one tab. ── */
+.void-app[data-ambient='library'] { --h1: 232; --h2: 264; --h3: 206; --s: 84%; }
+.library-head { padding: 4px 0 0; }
+.library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 12px; margin-top: 26px; }
+.library-card {
+  display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px 16px; text-align: left; cursor: pointer;
+  border: 1px solid var(--glass-border); border-radius: var(--r-lg); background: var(--panel-bg); color: hsl(var(--foreground));
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+  transition: background-color .18s var(--ease), border-color .18s var(--ease), transform .34s var(--ease-out-soft);
+}
+.library-card:hover { background: var(--hover); border-color: hsl(var(--foreground) / .18); }
+.library-card:active { transform: scale(.985); }
+.library-card-icon {
+  display: grid; place-items: center; width: 40px; height: 40px; flex: none;
+  border: 1px solid var(--glass-border); border-radius: var(--r-md); background: var(--control); color: hsl(var(--foreground));
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+.library-card-icon svg { width: 18px; height: 18px; stroke-width: 1.6; }
+.library-card-copy { flex: 1; min-width: 0; }
+.library-card-copy strong { display: block; font-size: 13.5px; font-weight: 600; }
+.library-card-copy small { display: block; margin-top: 2px; font-size: 11.5px; color: hsl(var(--muted-foreground)); }
+.library-card-chevron { width: 15px; height: 15px; flex: none; color: hsl(var(--muted-foreground)); transform: rotate(-90deg); }
+
+/* ── Playback accent: the vertical line and the equalizer of the playing row. ──
+   --row-accent is derived in App.tsx from the artwork hue the app already samples
+   (or the seeded cover palette), with the neutral glass accent as the last resort. */
+.track-table td:first-child { position: relative; }
+.track-table tr.current td:first-child::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 3px; height: 62%; border-radius: 3px;
+  background: var(--row-accent, hsl(268 80% 62%));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--row-accent, hsl(268 80% 62%)) 45%, transparent);
+  transform: translateY(-50%) scaleY(0);
+  animation: dg-mark .38s var(--ease-out-soft) forwards;
+}
+@keyframes dg-mark { to { transform: translateY(-50%) scaleY(1); } }
+
+.dg-eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; flex: none; margin-left: 2px; }
+.dg-eq i {
+  width: 3px; height: 100%; border-radius: 2px; transform-origin: bottom center;
+  background: var(--row-accent, hsl(268 80% 62%));
+  animation: dg-eq 1s ease-in-out infinite;
+}
+.dg-eq i:nth-child(2) { animation-delay: -.34s; }
+.dg-eq i:nth-child(3) { animation-delay: -.68s; }
+@keyframes dg-eq { 0%, 100% { transform: scaleY(.28); } 50% { transform: scaleY(1); } }
+
+/* ── Expanded player surface: one coherent rounded panel inside the visible viewport. ── */
+.np-layer { height: 100dvh; }
+
+@keyframes dg-np-in { from { opacity: 0; transform: translate3d(0, 18px, 0) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes dg-np-out { to { opacity: 0; transform: translate3d(0, 12px, 0) scale(.995); } }
+
+/* ───────────────────────── Phones: the mobile bar ───────────────────────── */
+@media (max-width: 768px) {
+  .mobile-bottom-nav {
+    position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto; height: var(--nav-h); padding: 0 6px; z-index: 50;
+    display: flex; align-items: center; justify-content: space-around;
+    border: 1px solid var(--glass-border); border-top: 1px solid var(--glass-border); border-radius: 20px;
+    background: var(--glass-bg);
+    box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+    -webkit-backdrop-filter: blur(var(--blur)) saturate(1.6); backdrop-filter: blur(var(--blur)) saturate(1.6);
+    transition: opacity .3s var(--ease), transform .45s var(--ease-out-soft);
+  }
+  .dark .mobile-bottom-nav { background: hsl(0 0% 5% / .74); }
+
+  .mobile-nav-item {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    flex: 1 1 0; min-width: 0; height: 44px; margin: 0 2px; padding: 0;
+    border: 0; border-radius: 14px; background: transparent; color: hsl(var(--muted-foreground));
+    transition: color .24s var(--ease), background-color .24s var(--ease), transform .34s var(--ease-out-soft);
+  }
+  .mobile-nav-item svg { width: 20px; height: 20px; stroke-width: 1.85; transition: transform .34s var(--ease-out-soft); }
+  .mobile-nav-item:active { transform: scale(.93); }
+  .mobile-nav-item.active { color: hsl(var(--foreground)); background: var(--active); }
+  .mobile-nav-item.active svg { stroke-width: 2.2; transform: translateY(-1px); }
+  .mobile-nav-item.active::after {
+    content: ''; position: absolute; bottom: 5px; left: 50%; width: 14px; height: 2px; border-radius: 2px;
+    background: hsl(var(--foreground) / .5); transform: translateX(-50%);
+  }
+
+  /* The compact add action takes over from the hero button on phones. */
+  .welcome .add-music { display: none; }
+  .mobile-add-music { color: hsl(var(--foreground)); }
+
+  /* Room for the floating bar and the mini player above it. */
+  .content { padding-bottom: calc(142px + env(safe-area-inset-bottom)); }
+}
+
+/* ───────────────────────── Phones: layout refinements ───────────────────────── */
+@media (max-width: 620px) {
+  /* Hero heading: smaller, lighter, still deliberate. */
+  .welcome { padding: 4px 0 20px; }
+  .welcome .page-title {
+    font-size: clamp(26px, 8.2vw, 32px); font-weight: 540; letter-spacing: -.022em; line-height: 1.13;
+    overflow-wrap: anywhere;
+  }
+  .welcome-copy { margin-top: 10px; font-size: 13px; }
+
+  /* Mood card: a more prominent record, quieter copy. */
+  .mood { padding: 18px 20px; gap: 18px; }
+  .mood-orb-stage { width: 92px; height: 92px; }
+  .mood-orb-stage::before { width: 82px; height: 82px; }
+  .vinyl { --vinyl: 80px; }
+  .mood-copy h2 { font-size: 20px; margin: 6px 0 10px; }
+
+  /* Song list: one continuous column of songs — no album or time column, and column widths are
+     fixed, so a long title can never push the row past the viewport. */
+  .table-wrap { overflow-x: hidden; padding: 4px 6px 6px; }
+  .track-table { table-layout: fixed; }
+  .track-table th:nth-child(2), .track-table td:nth-child(2),
+  .track-table th:nth-child(3), .track-table td:nth-child(3) { display: none; }
+  .track-table td:first-child { padding-left: 10px; overflow: hidden; }
+  .track-table th:last-child, .track-table td:last-child { width: 78px; padding-left: 0; padding-right: 6px; white-space: nowrap; }
+  /* The row text is allowed to shrink instead of forcing the row wider (its min-content),
+     so titles ellipsize inside the fixed cell exactly like the Paper Glass list. */
+  .track-main { flex: 1 1 auto; min-width: 0; gap: 10px; }
+  .track-table .track-main > button.track-main { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  /* The text block is the flex item that has to give way, then the two lines ellipsize in it. */
+  .track-table .track-main > button.track-main > span { min-width: 0; max-width: 100%; overflow: hidden; }
+  .track-title, .track-sub { max-width: 100%; }
+  .row-actions { opacity: 1; }
+  .dg-eq { height: 12px; }
+
+  /* Expanded player: centred stack inside the visible viewport, safe areas respected. */
+  .np-layer { padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); }
+  /* `min-height: 0` matters: as a grid item the panel defaults to min-height:auto, which would
+     let a tall content (synced lyrics) push the sheet past the viewport on short phones. */
+  .np-panel { height: 100%; max-height: 100%; min-height: 0; border-radius: 26px; --np-art: min(290px, 74vw, 42dvh); }
+  .np-glass { animation: dg-np-in .42s var(--ease-out-soft) both; }
+  .np-layer[data-closing] .np-glass { animation: dg-np-out .26s var(--ease) both; }
+  .np-body {
+    align-content: safe center; align-items: center; justify-items: center;
+    row-gap: 22px; padding: 0 20px 68px;
+  }
+  .np-art { border-radius: 22px; }
+  /* Synced lyrics only ever exist as real content; they get a bounded, scrollable area below
+     the controls instead of sizing the whole sheet. */
+  .np-side { position: relative; height: min(240px, 30dvh); flex: none; padding: 0; overflow: hidden; }
+  /* On phones the lyrics are a small bounded scroller: the desktop's 50vh centring padding
+     would make the box five times taller than the area it is clipped to, so its lines could
+     never be reached. Compact padding keeps every line scrollable. */
+  .np-lyrics-synced {
+    position: relative; inset: auto; height: 100%; padding: 10px 0 18px; gap: 18px;
+    overflow-y: auto; scroll-behavior: auto;
+    -webkit-mask-image: none; mask-image: none;
+  }
+  .np-titles h1 { font-size: 17px; }
+  .np-titles p { font-size: 12.5px; margin-top: 2px; }
+  .np-info { gap: 10px; }
+  .np-controls .play-button { width: 52px; height: 52px; }
+  .np-controls .play-button .void-glyph { width: 30px; height: 30px; }
+  .np-dock { right: 14px; bottom: 14px; }
+  .library-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 22px; }
+}
+
+@media (max-width: 380px) {
+  .welcome .page-title { font-size: clamp(24px, 8.6vw, 30px); }
+  .mood { padding: 16px 16px; gap: 14px; }
+  .mood-orb-stage { width: 84px; height: 84px; }
+  .mood-orb-stage::before { width: 74px; height: 74px; }
+  .vinyl { --vinyl: 72px; }
+  .mood-copy h2 { font-size: 18px; }
+  .np-titles h1 { font-size: 16px; }
+}
+
+/* Accessibility: the entrance and playback animations are decorative, so they stop. */
+@media (prefers-reduced-motion: reduce) {
+  .dg-page, .dg-rise, .dg-row, .track-table tr.current td:first-child::before,
+  .np-glass, .np-layer[data-closing] .np-glass {
+    animation: none !important;
+    transform: none;
+  }
+  .track-table tr.current td:first-child::before { transform: translateY(-50%); }
+  .home-content .welcome { transform: none; opacity: 1; }
+  .mobile-nav-item.active svg { transform: none; }
 }
