@@ -1,4 +1,4 @@
-const BACKEND_URL = (import.meta.env.VITE_YOUTUBE_API_URL || '').replace(/\/$/, '');
+const BACKEND_URL = 'https://void-backend-n0jb.onrender.com';
 
 export interface YouTubeSearchResult {
   id: string;
