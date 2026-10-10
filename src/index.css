@@ -151,7 +151,7 @@
 html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; }
 body {
   font-family: var(--void-font); font-size: 13px; line-height: 1.5;
-  background: hsl(var(--background)); color: hsl(var(--foreground));
+  background: #000; color: hsl(var(--foreground));
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 button, input, select { font: inherit; }
@@ -162,21 +162,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 button:disabled { cursor: not-allowed; opacity: .42; }
 ::selection { background: hsl(var(--foreground) / .16); }
 
-/* Theme change: Shadow Fight style sweep from Top-Right to Bottom-Left */
-::view-transition-old(root) {
-  animation: none;
-  z-index: 1;
-}
+::selection { background: hsl(var(--foreground) / .16); }
 
-::view-transition-new(root) {
-  animation: theme-sweep 1.5s cubic-bezier(0.25, 1, 0.30, 1) forwards;
-  z-index: 2;
-}
 
-@keyframes theme-sweep {
-  0% { clip-path: circle(0% at 100% 0%); }
-  100% { clip-path: circle(150% at 100% 0%); }
-}
 
 /* ───────────────────────── Page ambient ─────────────────────────
    One fixed, static layer. Colour is chosen per page and cross-faded; the UI
@@ -184,7 +172,12 @@ button:disabled { cursor: not-allowed; opacity: .42; }
    While a track is playing (data-track-ambient) its own hues replace the page hues everywhere:
    the page light, the orb, the top band below, and the player's reflection. */
 .void-app {
+  /* The sidebar is fixed to the viewport, while the main area occupies the
+     second grid track. This makes the content reflow when --sidebar-width changes. */
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   position: relative; isolation: isolate; width: 100%; height: 100dvh; min-height: 0; overflow: hidden;
+  transition: grid-template-columns .32s var(--ease);
   background: hsl(var(--background)); color: hsl(var(--foreground));
   --h1: 24; --h2: 38; --h3: 12; --s: 96%;
   --amb-1: hsl(var(--h1) var(--s) var(--amb-L) / var(--amb-A1));
@@ -380,7 +373,7 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 /* The orb reads as a glass/light object: --ox / --oy (-1…1, set from the cursor) move its
    highlight, shadow terminator, reflection and ring in small, opposing amounts. */
 .mood-orb-stage {
-  position: relative; flex: none; display: grid; place-items: center; width: 180px; height: 180px; margin: -28px;
+  position: relative; z-index: 1; flex: none; display: grid; place-items: center; width: 180px; height: 180px; margin: -28px;
   transition: --ox .9s var(--ease), --oy .9s var(--ease);
 }
 .mood-orb-stage::before {
@@ -388,24 +381,56 @@ button.crumb:hover { color: hsl(var(--foreground)); }
   border: 1px solid hsl(var(--foreground) / .10);
   transform: translate3d(calc(var(--ox) * -5px), calc(var(--oy) * -5px), 0);
 }
-.mood-orb {
-  position: relative; width: 124px; height: 124px; border-radius: 50%; overflow: hidden;
-  background: radial-gradient(circle at 32% 28%, var(--orb-1), var(--orb-2) 40%, var(--orb-3) 78%);
-  box-shadow:
-    inset calc(-30px + var(--ox) * 9px) calc(-14px + var(--oy) * 7px) 44px hsl(0 0% 0% / .78),
-    0 0 0 1px hsl(0 0% 100% / .10), 0 0 56px var(--orb-glow);
+/* ───────────── Vinyl (mood card) ─────────────
+   .vinyl      fixed: depth shadow, cursor parallax, rim bevel
+   .vinyl-disc rotates: grooves + printed label (the only moving layer)
+   .vinyl-light fixed: reflection wedges, so light stays still while the record turns */
+.vinyl {
+  --vinyl: 132px;
+  display: block; z-index: 1; isolation: isolate;
+  position: relative; width: var(--vinyl); height: var(--vinyl); flex: none; border-radius: 50%;
+  box-shadow: 0 0 0 1px hsl(0 0% 100% / .08), 0 14px 30px hsl(0 0% 0% / .5), 0 0 56px var(--orb-glow);
   transform: translate3d(calc(var(--ox) * 3px), calc(var(--oy) * 3px), 0);
-  scale: var(--orb-scale, 1);
+  scale: var(--vinyl-scale, 1);
   transition: scale .9s var(--ease);
 }
-.mood-orb-stage:hover .mood-orb { --orb-scale: 1.025; }
-.orb-highlight, .orb-sheen { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
-.orb-highlight {
-  background: radial-gradient(circle at calc(34% + var(--ox) * 16%) calc(28% + var(--oy) * 16%), var(--orb-hi), transparent 34%);
-  mix-blend-mode: screen;
+.mood-orb-stage:hover .vinyl { --vinyl-scale: 1.025; }
+.vinyl::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  box-shadow: inset 0 0 0 1px hsl(0 0% 100% / .10), inset 0 2px 3px hsl(0 0% 100% / .12), inset 0 -12px 20px hsl(0 0% 0% / .38);
 }
-.orb-sheen {
-  background: linear-gradient(calc(135deg + var(--ox) * 28deg + var(--oy) * 18deg), hsl(0 0% 100% / .16), transparent 34%, transparent 72%, var(--orb-sheen));
+.vinyl-disc {
+  position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
+  background:
+    /* smooth gaps between tracks */
+    radial-gradient(circle closest-side, transparent 0 21%, hsl(0 0% 0% / .55) 21% 23%, transparent 23% 46%, hsl(0 0% 0% / .45) 46% 47.2%, transparent 47.2% 71%, hsl(0 0% 0% / .45) 71% 72.2%, transparent 72.2% 93%, hsl(0 0% 0% / .6) 93% 100%),
+    /* fine grooves */
+    repeating-radial-gradient(circle at 50% 50%, hsl(0 0% 100% / .07) 0 .5px, transparent .5px 1.7px),
+    /* second, wider groove pitch tinted by the ambient colour */
+    repeating-radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--orb-2) 16%, transparent) 0 .4px, transparent .4px 3.1px);
+  background-color: color-mix(in srgb, var(--orb-3) 22%, hsl(0 0% 3%));
+  animation: vinyl-spin 14s linear infinite; animation-play-state: paused;
+}
+.vinyl[data-playing] .vinyl-disc { animation-play-state: running; will-change: transform; }
+@keyframes vinyl-spin { to { transform: rotate(360deg); } }
+.vinyl-label {
+  position: absolute; left: 50%; top: 50%; width: 38%; height: 38%; transform: translate(-50%, -50%);
+  border-radius: 50%; overflow: hidden;
+  box-shadow: 0 0 0 3px hsl(0 0% 4%), 0 0 0 4px hsl(0 0% 100% / .08);
+}
+.vinyl-label .cover-large { height: 100%; aspect-ratio: auto; border-radius: 0; box-shadow: none; transition: none; }
+.vinyl-label-blank { display: block; width: 100%; height: 100%; background: radial-gradient(circle at 35% 30%, var(--orb-1), var(--orb-2) 55%, var(--orb-3)); }
+.vinyl-label::after {
+  content: ''; position: absolute; left: 50%; top: 50%; z-index: 2; width: 6%; height: 6%; transform: translate(-50%, -50%);
+  border-radius: 50%; background: hsl(var(--background)); box-shadow: inset 0 1px 2px hsl(0 0% 0% / .6), 0 0 0 1px hsl(0 0% 0% / .35);
+}
+.vinyl-light {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none; mix-blend-mode: screen;
+  background: conic-gradient(from calc(24deg + var(--ox) * 16deg + var(--oy) * 10deg) at 50% 50%,
+    transparent 0deg, color-mix(in srgb, var(--orb-hi) 50%, transparent) 16deg, transparent 46deg,
+    transparent 180deg, var(--orb-sheen) 198deg, transparent 230deg, transparent 360deg);
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 0 24%, #000 25%);
+  mask-image: radial-gradient(circle closest-side, transparent 0 24%, #000 25%);
 }
 .mood-copy { position: relative; min-width: 0; }
 .mood-label { font-size: 12px; font-weight: 500; color: hsl(var(--muted-foreground)); }
@@ -499,63 +524,27 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .detail-hero h1 { font-size: 44px; letter-spacing: -.035em; font-weight: 600; margin: 8px 0; line-height: 1.06; overflow-wrap: anywhere; text-wrap: balance; }
 .detail-hero p { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 0; }
 
-/* Presentation only — home cards fly in from the sides as they scroll in; nothing else is touched.
-   Each flyer declares its side (left/right) with data-fly and a per-item delay with --fly-delay.
-   While hidden, the card is translated off its edge and faded; once [data-revealed] is present the
-   CSS glides it onto the grid and fades it in. The effect is scoped to the home section's parent
-   (data-fly-armed marks when home JS is actively driving it) so any flyer outside that section is
-   always fully visible. Reduced motion (or a missing IntersectionObserver) simply reveals everything. */
-[data-fly-armed] [data-fly]:not([data-revealed]) {
-  opacity: 0; transform: translate(calc(100% + clamp(32px, 9vw, 120px)), 0);
-  animation: none;
-}
-[data-fly-armed] [data-fly="right"]:not([data-revealed]) { transform: translate(calc(-100% - clamp(32px, 9vw, 120px)), 0); }
-[data-fly-armed] [data-fly]:not([data-revealed]) { transform-origin: left center; }
-[data-fly-armed] [data-fly="right"]:not([data-revealed]) { transform-origin: right center; }
 
-@keyframes fly-in-scale {
-  from { opacity: 0; transform: translate(calc(100% + clamp(32px, 9vw, 120px))) scale(.92); }
-  to { opacity: 1; transform: translate(0) scale(1); }
-}
-@keyframes fly-in-scale-from-right {
-  from { opacity: 0; transform: translate(calc(-100% - clamp(32px, 9vw, 120px))) scale(.92); }
-  to { opacity: 1; transform: translate(0) scale(1); }
-}
-[datalaunch-fly][data-fly="left"]:not([data-revealed]) {
-  animation-name: fly-in-scale;
-}
-[datalaunch-fly][data-fly="right"]:not([data-revealed]) {
-  animation-name: fly-in-scale-from-right;
+/* ───────────────────────── Home: luxury center fade ───────────────────────── */
+.home-content {
+  animation: home-center-fade 1.15s cubic-bezier(.16, 1, .3, 1) both;
+  transform-origin: center center;
+  will-change: opacity, filter, transform;
 }
 
-[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-iteration-count: 1; animation-timing-function: cubic-bezier(.1, .82, .2, 1); animation-duration: 0.92s; animation-delay: var(--fly-delay, 0s); }
+@keyframes home-center-fade {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: scale(.998);
+  }
 
-/* While hidden, the card keeps the grid ready but can't open the row; the table row is clipped
-   horizontally so a half-flown row can never open a scrollbar. */
-[data-fly-armed] tr[data-fly]:not([data-revealed]) {
-  opacity: 0; transform: translate3d(calc(100% + clamp(24px, 7vw, 80px)), 0, 0);
-  animation: none;
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: scale(1);
+  }
 }
-[data-fly-armed] tr[data-fly="right"]:not([data-revealed]) { transform: translate3d(calc(-100% - clamp(24px, 7vw, 80px)), 0, 0); }
-[data-fly-armed] tr[data-fly]:not([data-revealed]) { transform-origin: left center; }
-[data-fly-armed] tr[data-fly="right"]:not([data-revealed]) { transform-origin: right center; }
-
-@keyframes fly-row-scale {
-  from { opacity: 0; transform: translate3d(calc(100% + clamp(24px, 7vw, 80px)), 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-@keyframes fly-row-scale-from-right {
-  from { opacity: 0; transform: translate3d(calc(-100% - clamp(24px, 7vw, 80px)), 0, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
-}
-.datalaunch-fly tr[data-fly="left"]:not([data-revealed]) {
-  animation-name: fly-row-scale;
-}
-.datalaunch-fly tr[data-fly="right"]:not([data-revealed]) {
-  animation-name: fly-row-scale-from-right;
-}
-
-tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-iteration-count: 1; animation-timing-function: cubic-bezier(.1, .82, .2, 1); animation-duration: 0.8s; animation-delay: var(--fly-delay, 0s); }
 
 /* ───────────────────────── Settings ───────────────────────── */
 .settings-section { max-width: 720px; margin-top: 34px; }
@@ -898,6 +887,7 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
 }
 @media (max-width: 620px) {
   :root { --sidebar-width: 0px; --float: 10px; --player-h: 68px; }
+  .void-app { display: block; }
   .void-shell { display: block; height: 100dvh; }
   .main-area { grid-column: auto; height: 100dvh; width: 100%; }
   .sidebar {
@@ -923,15 +913,22 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
   .welcome { display: block; padding: 8px 0 26px; }
   .welcome .page-title { font-size: 38px; }
   .welcome .button { margin-top: 20px; }
-  .mood { flex-direction: column; align-items: flex-start; gap: 24px; padding: 26px 24px; min-height: 0; }
-  .mood-orb-stage { width: 144px; height: 144px; margin: -28px; }
-  .mood-orb-stage::before { width: 120px; height: 120px; }
-  .mood-orb { width: 88px; height: 88px; }
-  .mood-copy h2 { font-size: 24px; }
+  
+  /* Golden Hour Card minimized - Icon on left, text on right */
+  .mood { flex-direction: row; align-items: center; gap: 20px; padding: 20px 24px; min-height: 0; }
+  .mood-orb-stage { width: 80px; height: 80px; margin: 0; flex: none; }
+  .mood-orb-stage::before { width: 70px; height: 70px; }
+  .vinyl { --vinyl: 60px; }
+  .mood-copy h2 { font-size: 20px; margin: 4px 0 12px; }
+  .mood-copy .button { height: 34px; padding: 0 16px; font-size: 11px; }
+  
   .home-section { margin-top: 34px; }
 
+  /* Expanded Player active state: Hide Mini Player */
+  .player-bar[data-np] { display: none !important; opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; }
+
   /* Compact player on phones: artwork + title and the transport only; the scrubber becomes a hairline on the bottom edge. */
-  .player-bar { height: var(--player-h); padding: 0 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border-radius: 22px; }
+  .player-bar { height: var(--player-h); padding: 0 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border-radius: 22px; transition: opacity 0.2s; }
   .player-center { display: contents; }
   .player-controls { gap: 5px; }
   .player-scrub { position: absolute; left: 18px; right: 18px; bottom: 3px; display: block; height: 10px; }
@@ -1175,19 +1172,16 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
   }
 }
 
-
 /* 
 ========================================================
    DESKTOP PLAYER BAR REFINEMENTS
 ========================================================
 */
 @media (min-width: 769px) {
-  /* 1. പ്ലേ ബട്ടണിന്റെ ഗ്ലാസും സൈസും മാറ്റില്ല, വോയിഡിന്റെ എംബ്ലം (പകുതി സർക്കിൾ) മാത്രം കളയുന്നു */
   .player-bar .play-button .void-glyph .g-ring {
     display: none !important;
   }
 
-  /* 2. മിനി പ്ലെയറിന്റെ ഉള്ളിൽത്തന്നെ കൃത്യമായി താഴെ വരാൻ overflow: hidden കൊടുക്കുന്നു */
   .player-bar {
     overflow: hidden !important;
     padding-bottom: 0 !important;
@@ -1197,20 +1191,18 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
     position: static !important;
   }
 
-  /* 3. പ്രോഗ്രസ്സ് ബാർ ഏറ്റവും താഴെ ഫുൾ വീതിയിൽ ലൈൻ ആയി കൊടുക്കുന്നു */
   .player-bar .player-scrub {
     position: absolute !important;
     bottom: 0 !important;
     left: 0 !important;
     right: 0 !important;
     width: 100% !important;
-    height: 3px !important; /* വരയുടെ കനം */
+    height: 3px !important;
     padding: 0 !important;
     margin: 0 !important;
-    display: block !important; /* പഴയ Grid മാറ്റി Block ആക്കുന്നു */
+    display: block !important;
   }
 
-  /* പ്രോഗ്രസ്സ് ബാറിന്റെ നീളവും വീതിയും */
   .player-bar .player-scrub .seek {
     position: absolute !important;
     top: 0 !important;
@@ -1230,7 +1222,6 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
     border-radius: 0 !important;
   }
 
-  /* Thumb (വട്ടത്തിലുള്ള ഡോട്ട്) കളയുന്നു, വര മാത്രം മതി */
   .player-bar .seek::-webkit-slider-thumb {
     transform: scale(0) !important;
     opacity: 0 !important;
@@ -1240,8 +1231,99 @@ tr[data-fly]:not([data-revealed]) { animation-fill-mode: forwards; animation-ite
     opacity: 0 !important;
   }
 
-  /* 4. പഴയ സമയങ്ങൾ (0:00 - 3:00) ഹൈഡ് ചെയ്യുന്നു (App.tsx-ൽ Hover Time ചെയ്യാൻ വേണ്ടി) */
   .player-bar .player-scrub > span {
     display: none !important;
   }
+}
+
+/* ───────────────────────── Butter Smooth Locked Center Synced Lyrics ───────────────────────── */
+.np-side { 
+  position: relative;
+  min-width: 0; 
+  min-height: 0; 
+  height: 100%;
+  display: flex; 
+  flex-direction: column; 
+  padding: 4px 0 48px; 
+  overflow: hidden;
+}
+
+.np-lyrics-synced {
+  position: absolute;
+  inset: 4px 0 48px 0;
+  overflow-y: auto; 
+  scroll-behavior: smooth; 
+  scrollbar-width: none;
+  padding: 50vh 0 50vh 0; 
+  display: flex; 
+  flex-direction: column; 
+  align-items: center;
+  gap: 48px; 
+  
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 12%, #000 88%, transparent 100%);
+}
+
+.np-lyrics-synced::-webkit-scrollbar { display: none; }
+
+.side-lyric-line {
+  font-family: var(--void-font-serif); 
+  font-size: clamp(18px, 2vw, 24px); 
+  line-height: 1.4;
+  color: hsl(var(--muted-foreground)); 
+  opacity: 0.3; 
+  cursor: pointer;
+  text-align: center !important;
+  width: 100%;
+  transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), color 0.5s ease;
+  transform-origin: left center;
+}
+
+.side-lyric-line:hover { 
+  opacity: 0.6; 
+}
+
+.side-lyric-line.active {
+  opacity: 1; 
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0.8) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  
+  font-weight: 700; 
+  transform: scale(1.04);
+  
+  text-shadow: 0 4px 24px rgba(255, 255, 255, 0.3);
+  -webkit-text-stroke: 0.6px rgba(255, 255, 255, 0.5);
+}
+
+.side-lyric-line.passed { 
+  opacity: 0.15; 
+}
+
+/* ───────────────────────── Fixed Canvas Background Positioning ───────────────────────── */
+.canvas-container {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+  opacity: 0;
+  transition: opacity 1.2s ease-in-out;
+  overflow: hidden;
+  background: #000;
+}
+
+.canvas-container[data-ready="true"] {
+  opacity: 0.38;
+}
+
+.dark .canvas-container[data-ready="true"] {
+  opacity: 0.28;
+}
+
+.canvas-iframe {
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  transform: scale(1.6);
+  filter: blur(4px) saturate(1.4);
 }
