@@ -894,24 +894,56 @@ useEffect(() => {
   const [paletteQuery, setPaletteQuery] = useState('');
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
+  
   useEffect(() => {
     const q = paletteQuery.trim();
-    if (!q) { setMusicResults([]); return; }
+    if (!q) { 
+      setMusicResults([]); 
+      return; 
+    }
+    
     let cancelled = false;
+    
     const search = async () => {
       setMusicSearching(true);
+      setMusicResults([]); // Clear previous results
+      
       try {
-        const data = await searchMusic(q);
-        if (!cancelled) setMusicResults(data ?? []);
-      } catch (error) {
-        if (!cancelled) setMusicResults([]);
+        // 1. Fetch fast JioSaavn results first
+        searchMusic(q).then((jioData) => {
+          if (!cancelled && jioData && jioData.length > 0) {
+             setMusicResults(prev => {
+                const existingIds = new Set(prev.map(p => p.id));
+                const newItems = jioData.filter(item => !existingIds.has(item.id));
+                return [...prev, ...newItems];
+             });
+          }
+        }).catch(err => console.error("JioSaavn fetch error:", err));
+
+        // 2. Fetch slower YouTube results independently
+        searchYouTube(q).then((ytData) => {
+          if (!cancelled && ytData && ytData.length > 0) {
+             setMusicResults(prev => {
+                const existingIds = new Set(prev.map(p => p.id));
+                const newItems = ytData.filter(item => !existingIds.has(item.id));
+                return [...prev, ...newItems];
+             });
+          }
+        }).catch(err => console.error("YouTube fetch error:", err));
+
       } finally {
         if (!cancelled) setMusicSearching(false);
       }
     };
-    const timer = window.setTimeout(search, 350);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    
+    // Quick 200ms debounce for instant feel
+    const timer = window.setTimeout(search, 200);
+    return () => { 
+      cancelled = true; 
+      window.clearTimeout(timer); 
+    };
   }, [paletteQuery]);
+
   const [modal, setModal] = useState<'playlist' | 'rename' | 'add-to-playlist' | 'properties' | null>(null);
   const [modalValue, setModalValue] = useState('');
   const [contextTrack, setContextTrack] = useState<Track | null>(null);
@@ -1010,8 +1042,6 @@ useEffect(() => {
   }, [activeLyricIndex, lyricsManualScroll]);
 
   const handleLyricsScroll = () => { if (!lyricsManualScroll) setLyricsManualScroll(true); };
-
-
 
   // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
   const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
@@ -2344,38 +2374,45 @@ useEffect(() => {
             </button>
           ))}
 
-          {musicResults.map(track => (
-            <button
-              key={`saavn-${track.id}`}
-              className="palette-result"
-              onClick={() => {
-                const saavnTrack = {
-                  id: `saavn-${track.id}`,
-                  title: track.name,
-                  artist: track.artist,
-                  album: track.album,
-                  fileName: `${track.name}.mp4`,
-                  audioUrl: track.downloadUrl,
-                  src: track.downloadUrl,
-                  image: track.image,
-                  duration: track.duration,
-                };
+          {musicResults.map(track => {
+            // Determine the source based on the ID format
+            // YouTube IDs are typically 11 characters long
+            const isYouTube = /^[\w-]{11}$/.test(track.id);
+            const sourceLabel = isYouTube ? 'void' : 'VOID';
 
-                setPaletteOpen(false);
-                void playTrack(saavnTrack as any);
-              }}
-              data-testid={`search-music-${track.id}`}
-            >
-              <Cover track={{ image: track.image }} />
-              <span>
-                <span className="track-title">{track.name}</span>
-                <span className="track-sub">{track.artist}</span>
-              </span>
-              <span className="crumb" style={{ marginLeft: 'auto' }}>
-                JioSaavn
-              </span>
-            </button>
-          ))}
+            return (
+              <button
+                key={`api-${track.id}`}
+                className="palette-result"
+                onClick={() => {
+                  const apiTrack = {
+                    id: `api-${track.id}`,
+                    title: track.name,
+                    artist: track.artist,
+                    album: track.album,
+                    fileName: `${track.name}.mp4`,
+                    audioUrl: track.downloadUrl,
+                    src: track.downloadUrl,
+                    image: track.image,
+                    duration: track.duration,
+                  };
+
+                  setPaletteOpen(false);
+                  void playTrack(apiTrack as any);
+                }}
+                data-testid={`search-music-${track.id}`}
+              >
+                <Cover track={{ image: track.image }} />
+                <span>
+                  <span className="track-title">{track.name}</span>
+                  <span className="track-sub">{track.artist}</span>
+                </span>
+                <span className="crumb" style={{ marginLeft: 'auto' }}>
+                  {sourceLabel}
+                </span>
+              </button>
+            );
+          })}
 
           {albumSearchResults.map(name => (
             <button
