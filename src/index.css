@@ -75,7 +75,7 @@
   /* Geometry: one radius family, one spacing rhythm (4px base) */
   --radius: 14px;
   --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 26px;
-  --sidebar-width: 244px;
+  --sidebar-width: 230px;
   --float: 20px;
   --player-h: 84px;
   --ease: cubic-bezier(.2, .7, .2, 1);
@@ -239,6 +239,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   transition: grid-template-columns .32s var(--ease);
 }
 .main-area {
+  position: relative; z-index: 2;
   grid-column: 2; min-width: 0; min-height: 0; height: 100dvh; overflow-x: hidden; overflow-y: auto;
   overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-color: hsl(var(--foreground) / .18) transparent;
 }
@@ -249,12 +250,18 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .sidebar {
   position: fixed; z-index: 15; inset: 0 auto 0 0; width: var(--sidebar-width); height: 100dvh; min-height: 0; overflow: hidden;
   padding: 28px 14px 16px; display: flex; flex-direction: column;
-  background: var(--glass-bg); border-right: 1px solid var(--glass-border);
-  box-shadow: inset -1px 0 0 var(--glass-edge);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.5); backdrop-filter: blur(var(--blur)) saturate(1.5);
+  /* തിക്ക്നെസ്സ് കുറയ്ക്കാൻ ഒപ്പസിറ്റിയും ബ്ലറും കുറയ്ക്കുന്നു */
+  background: rgba(255, 255, 255, 0.04);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
   transition: width .32s var(--ease), background-color 0.45s ease, border-color 0.45s ease;
 }
-.dark .sidebar { background: hsl(var(--background) / .85); }
+.dark .sidebar { 
+  background: rgba(0, 0, 0, 0.15); 
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .sidebar::-webkit-scrollbar { display: none; }
 
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 34px; min-height: 34px; }
@@ -565,10 +572,23 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 
 /* Font selector — option names stay in the default UI face so the list is always legible;
    only the previews render in each font. */
+.font-dropdown-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 42px; margin-top: 12px; padding: 0 14px;
+  border: 1px solid var(--glass-border); border-radius: var(--r-md);
+  background: var(--field); color: hsl(var(--foreground));
+  box-shadow: inset 0 1px 0 var(--glass-edge); font: inherit; font-size: 12.5px;
+  text-align: left; cursor: pointer;
+}
+.font-dropdown-trigger svg { flex: none; transition: transform .18s var(--ease); }
+.font-dropdown-trigger.is-open svg { transform: rotate(180deg); }
 .font-panel {
-  padding: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-lg);
+  display: none;
+  padding: 8px; margin-top: 8px; border: 1px solid var(--glass-border); border-radius: var(--r-lg);
   background: var(--panel-bg); box-shadow: inset 0 1px 0 var(--glass-edge);
 }
+.font-panel.font-open { display: block; animation: font-panel-reveal .18s ease-out; }
+@keyframes font-panel-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .font-group-label { padding: 10px 12px 6px; font-family: var(--app-font-sans); font-size: 11px; font-weight: 500; letter-spacing: .02em; color: hsl(var(--muted-foreground)); }
 .font-option { display: flex; align-items: center; gap: 4px; padding-right: 6px; border: 1px solid transparent; border-radius: var(--r-md); transition: background-color .16s var(--ease), border-color .16s var(--ease); }
 .font-option + .font-option { margin-top: 2px; }
@@ -1109,8 +1129,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 
     /* --- Mobile Settings: Font Panel --- */
     
-    /* Button to open font panel on mobile */
-    .mobile-font-trigger {
+    /* Font selector trigger on mobile */
+    .font-dropdown-trigger {
       display: flex !important;
       justify-content: space-between;
       align-items: center;
@@ -1131,7 +1151,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     }
 
     /* Full screen font panel when active */
-    .font-panel.mobile-open {
+    .font-panel.font-open.mobile-open {
       display: flex !important;
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -1165,7 +1185,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   @media (min-width: 769px) {
     .mobile-bottom-nav, 
     .mobile-mini-play, 
-    .mobile-font-trigger, 
+    .mobile-font-trigger,
     .mobile-font-header {
       display: none !important;
     }
@@ -1306,24 +1326,41 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   inset: 0 !important;
   z-index: 0 !important;
   pointer-events: none !important;
-  opacity: 0;
-  transition: opacity 1.2s ease-in-out;
+  user-select: none !important;
+  opacity: 0 !important;
+  /* വീഡിയോ പെട്ടെന്ന് പോകാൻ */
+  transition: opacity 0.8s ease-in-out !important;
   overflow: hidden;
-  background: #000;
+  background: transparent !important;
 }
 
 .canvas-container[data-ready="true"] {
-  opacity: 0.38;
+  opacity: 0.45 !important;
+  /* പാട്ട് പ്ലേ ആകുമ്പോൾ ആ 5 സെക്കൻഡ് ഡിലേ കറക്റ്റ് ആയി വരാൻ */
+  transition: opacity 3s ease-in-out 5s !important;
 }
 
 .dark .canvas-container[data-ready="true"] {
-  opacity: 0.28;
+  opacity: 0.35 !important;
+  /* ഡാർക്ക് മോഡിലും അതേ 5 സെക്കൻഡ് ഡിലേ */
+  transition: opacity 3s ease-in-out 5s !important;
 }
 
+
+
 .canvas-iframe {
+  display: block;
   width: 100vw;
   height: 100vh;
-  pointer-events: none;
+  pointer-events: none !important;
   transform: scale(1.6);
   filter: blur(4px) saturate(1.4);
+  border: none;
+}
+
+/* The background YouTube canvas is decorative only: never let it intercept scroll/touch input. */
+.canvas-container,
+.canvas-container *,
+.canvas-iframe {
+  pointer-events: none !important;
 }

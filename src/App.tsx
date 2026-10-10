@@ -1024,6 +1024,23 @@ useEffect(() => {
   const canvasLoadedId = useRef<string | null>(null); // id currently loaded in the player
   const canvasWantedId = useRef<string | null>(null); // latest id requested by the track effect
 
+  // ഡെസ്ക്ടോപ്പ് മാറുമ്പോൾ വീഡിയോ ഹൈഡ് ചെയ്ത് വീണ്ടും ഫേഡ് ഇൻ ആക്കാൻ
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        setCanvasReady(false);
+      } else {
+        if (canvasPlayer.current && typeof canvasPlayer.current.playVideo === 'function') {
+          canvasPlayer.current.playVideo();
+        }
+        // 2 സെക്കൻഡ് കഴിഞ്ഞ് മാത്രം കാണിക്കാൻ
+        setTimeout(() => setCanvasReady(true), 2000);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
   useEffect(() => {
     let active = true;
     if (!activeTrack) {
@@ -2137,11 +2154,18 @@ useEffect(() => {
   <span>Applies across VOID</span>
 </div>
 
-<button className="mobile-font-trigger" onClick={() => setMobileFontOpen(true)}>
-  <span>Font</span> <ChevronDown size={16} />
+<button
+  className={`font-dropdown-trigger ${mobileFontOpen ? 'is-open' : ''}`}
+  onClick={() => setMobileFontOpen(open => !open)}
+  aria-expanded={mobileFontOpen}
+  aria-controls="void-font-options"
+  data-testid="button-toggle-fonts"
+>
+  <span>{fontOptions.find(option => option.id === fontId)?.name ?? 'Default'}</span>
+  <ChevronDown size={16} />
 </button>
-              
-              <div className={`font-panel ${mobileFontOpen ? 'mobile-open' : ''}`} role="radiogroup" aria-label="Font" data-testid="font-panel">
+
+              <div id="void-font-options" className={`font-panel ${mobileFontOpen ? 'font-open mobile-open' : ''}`} role="radiogroup" aria-label="Font" data-testid="font-panel">
                 <div className="mobile-font-header">
                   <h2>Select Font</h2>
                   <button className="icon-button" onClick={() => setMobileFontOpen(false)}><X /></button>

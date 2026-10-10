@@ -3,7 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <meta name="color-scheme" content="dark" />
     <title>VOID Music Player</title>
+    <style>
+      html, body { background: #000 !important; margin: 0; }
+    </style>
+
     <meta name="description" content="VOID is a quiet, local-first music player for the music you already own." />
     <meta name="robots" content="index, follow" />
     <meta property="og:title" content="VOID Music Player" />
@@ -13,16 +18,21 @@
     <meta name="twitter:title" content="VOID Music Player" />
     <meta name="twitter:description" content="A quiet, local-first music player for the music you already own." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      /* Prevents white flash on reload by locking background immediately */
+      html, body, #root { background: #000 !important; color: #f5f5f5; }
+    </style>
     <script>
       try {
         const theme = localStorage.getItem('void-theme') || 'system';
         const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.style.backgroundColor = dark ? '#000' : '#f6f4ef';
       } catch {}
     </script>
-  </head>
-  <body>
-    <div id="root"></div>
+    <body bgcolor="#000" style="background: #000 !important; margin: 0;">
+    <div id="root" style="background: #000 !important; width: 100vw; height: 100dvh;"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
+
 </html>
