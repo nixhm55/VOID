@@ -1,7 +1,7 @@
 import { searchMusic, fetchArtist } from './api/musicApi';
 import { searchYouTube } from "./api/youtubeApi";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import {
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
   ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
@@ -11,6 +11,8 @@ import {
   type Playlist, type Preferences, type Track, getPlaylists, getPreferences, getTracks,
   removePlaylist, removeTrack, resolveAudioMimeType, savePlaylist, savePreferences, saveTrack, trackFromFile,
 } from '@/lib/library';
+import { type DesignId, type VoidCore, readDesign, writeDesign } from './core/voidCore';
+const PaperGlassApp = lazy(() => import('./paper/PaperGlassApp'));
 
 type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings';
 const defaults: Preferences = { theme: 'system', autoplay: false, volume: 0.72, muted: false, shuffle: false, repeat: 'off' };
@@ -59,20 +61,6 @@ const moods = [
 ];
 const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
 
-/* ───────────────────────── Procedural artwork ─────────────────────────
-Songs, albums, artists and playlists WITHOUT embedded artwork get a locally composed cover.
-Songs that already have a real picture never reach this code (Cover uses the real image first).
-
-Look: soft feathered lights on a deep, tinted dark sleeve — the red glow, the golden-yellow glow,
-the red + gold + magenta mixes. Every light dissolves into transparency, so there is never a ring,
-a hard edge or a dark disc.
-
-Uniqueness: the seed is hashed into a 128-bit state (four 32-bit words), so two different seeds
-never share a random stream. From that stream, EVERYTHING is continuous: exact hue (not picked
-from a short list), saturation, brightness, light positions, sizes, alphas, base tint, shade
-angle, vignette, grain — plus one of eight composition archetypes and 0–3 optional extra layers.
-The same seed always gives the same cover (reload, restart, any browser).
-*/
 type Hue4 = readonly [number, number, number, number];
 type ArtResult = { background: string; ambient: Hue4; grain: number };
 type ArtFamily = { from: number; to: number; weight: number };
@@ -158,9 +146,7 @@ const hsla = (
 
 function composeArt(seed: string): ArtResult {
   const rnd = sfc32(...seedWords(seed));
-
   for (let i = 0; i < 12; i += 1) rnd();
-
   const range = (a: number, b: number) => a + rnd() * (b - a);
   const chance = (p: number) => rnd() < p;
   const sign = () => (rnd() < 0.5 ? -1 : 1);
@@ -169,25 +155,18 @@ function composeArt(seed: string): ArtResult {
   const pickFamily = (list: readonly ArtFamily[]) => {
     const total = list.reduce((sum, item) => sum + item.weight, 0);
     let roll = rnd() * total;
-
     for (const item of list) {
       roll -= item.weight;
       if (roll <= 0) return item;
     }
-
     return list[list.length - 1];
   };
 
-  const hueIn = (family: ArtFamily) =>
-    wrap(range(family.from, family.to));
-
+  const hueIn = (family: ArtFamily) => wrap(range(family.from, family.to));
   const family = pickFamily(ART_FAMILIES);
   const warmFamilies = ART_FAMILIES.slice(0, 4);
-
   const h1 = hueIn(family);
-
   const roll = rnd();
-
   const h2 =
     roll < 0.5
       ? hueIn(pickFamily(warmFamilies.filter((item) => item !== family)))
@@ -195,488 +174,154 @@ function composeArt(seed: string): ArtResult {
         ? wrap(h1 + sign() * range(14, 46))
         : wrap(h1 + sign() * range(70, 130));
 
-  const h3 = chance(0.5)
-    ? hueIn(ART_FAMILIES[2])
-    : wrap(h2 + sign() * range(12, 44));
-
+  const h3 = chance(0.5) ? hueIn(ART_FAMILIES[2]) : wrap(h2 + sign() * range(12, 44));
   const lush = chance(0.24);
-
   const s1 = range(74, 98);
   const s2 = range(66, 96);
   const s3 = range(62, 94);
-
   const lit = range(46, 60);
   const size = lush ? 1.26 : 1;
-
-  const alpha = (lo: number, hi: number) =>
-    Math.min(1, range(lo, hi) * (lush ? 1.2 : 1));
+  const alpha = (lo: number, hi: number) => Math.min(1, range(lo, hi) * (lush ? 1.2 : 1));
 
   const glow = (
-    x: number,
-    y: number,
-    rx: number,
-    ry: number,
-    h: number,
-    s: number,
-    l: number,
-    a: number,
-    end = 100,
+    x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 100,
   ) =>
     `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(
-      h,
-      s,
-      Math.min(94, l + 6),
-      a,
+      h, s, Math.min(94, l + 6), a,
     )} 0, ${hsla(h, s, l, a * 0.64)} ${num(end * 0.26)}%, ${hsla(
-      h,
-      s,
-      Math.max(6, l - 8),
-      a * 0.32,
+      h, s, Math.max(6, l - 8), a * 0.32,
     )} ${num(end * 0.56)}%, ${hsla(
-      h,
-      s,
-      Math.max(4, l - 16),
-      a * 0.11,
+      h, s, Math.max(4, l - 16), a * 0.11,
     )} ${num(end * 0.8)}%, transparent ${num(end)}%)`;
 
   const lights: string[] = [];
-
-  const add = (
-    x: number,
-    y: number,
-    rx: number,
-    ry: number,
-    h: number,
-    s: number,
-    l: number,
-    a: number,
-    end?: number,
-  ) => {
+  const add = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end?: number) => {
     lights.push(glow(x, y, rx, ry, h, s, l, a, end));
   };
-
   let focus: [number, number] = [50, 50];
 
-  switch (
-    ART_LAYOUTS[Math.floor(rnd() * ART_LAYOUTS.length)]
-  ) {
+  switch (ART_LAYOUTS[Math.floor(rnd() * ART_LAYOUTS.length)]) {
     case 'orb': {
       const x = range(24, 76);
       const y = range(32, 84);
       const r = range(34, 62) * size;
-
-      add(
-        x,
-        y,
-        r,
-        r * range(0.86, 1.14),
-        h1,
-        s1,
-        lit,
-        alpha(0.7, 0.95),
-        range(80, 100),
-      );
-
-      add(
-        100 - x + range(-14, 14),
-        100 - y + range(-14, 14),
-        range(40, 86),
-        range(36, 80),
-        h2,
-        s2,
-        lit - 6,
-        alpha(0.34, 0.6),
-      );
-
+      add(x, y, r, r * range(0.86, 1.14), h1, s1, lit, alpha(0.7, 0.95), range(80, 100));
+      add(100 - x + range(-14, 14), 100 - y + range(-14, 14), range(40, 86), range(36, 80), h2, s2, lit - 6, alpha(0.34, 0.6));
       focus = [x, y];
       break;
     }
-
     case 'duo': {
       const flip = chance(0.5);
       const xa = range(10, 40);
       const xb = range(60, 90);
       const ya = range(18, 78);
       const yb = range(18, 78);
-
-      add(
-        flip ? xb : xa,
-        ya,
-        range(30, 56) * size,
-        range(30, 56) * size,
-        h1,
-        s1,
-        lit,
-        alpha(0.62, 0.9),
-        96,
-      );
-
-      add(
-        flip ? xa : xb,
-        yb,
-        range(28, 54) * size,
-        range(28, 54) * size,
-        h2,
-        s2,
-        lit - 4,
-        alpha(0.55, 0.85),
-        96,
-      );
-
+      add(flip ? xb : xa, ya, range(30, 56) * size, range(30, 56) * size, h1, s1, lit, alpha(0.62, 0.9), 96);
+      add(flip ? xa : xb, yb, range(28, 54) * size, range(28, 54) * size, h2, s2, lit - 4, alpha(0.55, 0.85), 96);
       focus = [flip ? xb : xa, ya];
       break;
     }
-
     case 'corner': {
       const left = chance(0.5);
       const top = chance(0.5);
-
       const x = left ? range(-6, 18) : range(82, 106);
       const y = top ? range(-6, 20) : range(80, 106);
-
-      add(
-        x,
-        y,
-        range(70, 118) * size,
-        range(62, 110) * size,
-        h1,
-        s1,
-        lit,
-        alpha(0.66, 0.95),
-      );
-
-      add(
-        100 - x + range(-10, 10),
-        100 - y + range(-10, 10),
-        range(44, 82),
-        range(40, 78),
-        h2,
-        s2,
-        lit - 4,
-        alpha(0.5, 0.82),
-      );
-
+      add(x, y, range(70, 118) * size, range(62, 110) * size, h1, s1, lit, alpha(0.66, 0.95));
+      add(100 - x + range(-10, 10), 100 - y + range(-10, 10), range(44, 82), range(40, 78), h2, s2, lit - 4, alpha(0.5, 0.82));
       focus = [x, y];
       break;
     }
-
     case 'horizon': {
       const low = chance(0.5);
       const y = low ? range(80, 106) : range(-6, 20);
-
-      add(
-        range(24, 76),
-        y,
-        range(84, 130) * size,
-        range(26, 46) * size,
-        h1,
-        s1,
-        lit,
-        alpha(0.7, 0.95),
-      );
-
-      add(
-        range(10, 90),
-        low ? range(-8, 16) : range(84, 108),
-        range(36, 72),
-        range(30, 60),
-        h2,
-        s2,
-        lit - 6,
-        alpha(0.3, 0.56),
-      );
-
+      add(range(24, 76), y, range(84, 130) * size, range(26, 46) * size, h1, s1, lit, alpha(0.7, 0.95));
+      add(range(10, 90), low ? range(-8, 16) : range(84, 108), range(36, 72), range(30, 60), h2, s2, lit - 6, alpha(0.3, 0.56));
       focus = [50, y];
       break;
     }
-
     case 'trio': {
       const base = range(0, Math.PI * 2);
       const radius = range(22, 38);
-
       const hues = [h1, h2, h3];
       const sats = [s1, s2, s3];
-
       hues.forEach((h, i) => {
         const angle = base + i * 2.0944 + range(-0.5, 0.5);
-
         add(
           50 + Math.cos(angle) * radius + range(-6, 6),
           50 + Math.sin(angle) * radius + range(-6, 6),
           range(30, 52) * size,
           range(30, 52) * size,
-          h,
-          sats[i],
-          lit - i * 2,
-          alpha(0.5, 0.82),
-          98,
+          h, sats[i], lit - i * 2, alpha(0.5, 0.82), 98,
         );
       });
-
       break;
     }
-
     case 'sun': {
       const x = range(28, 72);
       const y = range(28, 72);
       const r = range(7, 15);
-
-      add(
-        x,
-        y,
-        r,
-        r,
-        h3,
-        Math.min(100, s3 + 6),
-        84,
-        alpha(0.6, 0.9),
-        60,
-      );
-
-      add(
-        x,
-        y,
-        r * 4.6,
-        r * 4.6,
-        h1,
-        s1,
-        lit,
-        alpha(0.5, 0.8),
-      );
-
-      add(
-        range(-10, 110),
-        range(-10, 110),
-        range(60, 110),
-        range(54, 100),
-        h2,
-        s2,
-        lit - 8,
-        alpha(0.3, 0.56),
-      );
-
+      add(x, y, r, r, h3, Math.min(100, s3 + 6), 84, alpha(0.6, 0.9), 60);
+      add(x, y, r * 4.6, r * 4.6, h1, s1, lit, alpha(0.5, 0.8));
+      add(range(-10, 110), range(-10, 110), range(60, 110), range(54, 100), h2, s2, lit - 8, alpha(0.3, 0.56));
       focus = [x, y];
       break;
     }
-
     case 'edge': {
       const left = chance(0.5);
       const x = left ? range(-12, 6) : range(94, 112);
       const y = range(18, 82);
-
-      add(
-        x,
-        y,
-        range(52, 90) * size,
-        range(46, 84) * size,
-        h1,
-        s1,
-        lit,
-        alpha(0.7, 0.95),
-      );
-
-      add(
-        left ? range(70, 100) : range(0, 30),
-        range(10, 90),
-        range(34, 66),
-        range(32, 64),
-        h2,
-        s2,
-        lit - 4,
-        alpha(0.4, 0.7),
-        96,
-      );
-
+      add(x, y, range(52, 90) * size, range(46, 84) * size, h1, s1, lit, alpha(0.7, 0.95));
+      add(left ? range(70, 100) : range(0, 30), range(10, 90), range(34, 66), range(32, 64), h2, s2, lit - 4, alpha(0.4, 0.7), 96);
       focus = [x, y];
       break;
     }
-
     default: {
       lights.push(
-        `linear-gradient(${num(
-          range(0, 360),
-        )}deg, ${hsla(
-          h1,
-          s1,
-          lit - 8,
-          alpha(0.5, 0.8),
-        )}, transparent ${num(
-          range(48, 70),
-        )}%, ${hsla(
-          h2,
-          s2,
-          lit - 10,
-          alpha(0.45, 0.75),
-        )})`,
+        `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, s1, lit - 8, alpha(0.5, 0.8))}, transparent ${num(range(48, 70))}%, ${hsla(h2, s2, lit - 10, alpha(0.45, 0.75))})`,
       );
-
       const x = range(20, 80);
       const y = range(20, 80);
-
-      add(
-        x,
-        y,
-        range(28, 52) * size,
-        range(28, 52) * size,
-        h3,
-        s3,
-        lit,
-        alpha(0.5, 0.8),
-        96,
-      );
-
+      add(x, y, range(28, 52) * size, range(28, 52) * size, h3, s3, lit, alpha(0.5, 0.8), 96);
       focus = [x, y];
     }
   }
 
   const extras: string[] = [];
-
   if (chance(0.45)) {
     extras.push(
-      glow(
-        range(10, 90),
-        range(10, 90),
-        range(70, 120),
-        range(40, 84),
-        h3,
-        s3,
-        64,
-        alpha(0.14, 0.3),
-      ),
-      glow(
-        range(10, 90),
-        range(10, 90),
-        range(60, 110),
-        range(52, 104),
-        h2,
-        s2,
-        58,
-        alpha(0.12, 0.26),
-      ),
+      glow(range(10, 90), range(10, 90), range(70, 120), range(40, 84), h3, s3, 64, alpha(0.14, 0.3)),
+      glow(range(10, 90), range(10, 90), range(60, 110), range(52, 104), h2, s2, 58, alpha(0.12, 0.26)),
     );
   }
-
   if (chance(0.5)) {
     const left = chance(0.5);
     const top = chance(0.5);
-
-    extras.push(
-      glow(
-        left ? range(-10, 8) : range(92, 110),
-        top ? range(-10, 10) : range(90, 110),
-        range(40, 80),
-        range(36, 74),
-        h3,
-        s3,
-        lit,
-        alpha(0.28, 0.55),
-      ),
-    );
+    extras.push(glow(left ? range(-10, 8) : range(92, 110), top ? range(-10, 10) : range(90, 110), range(40, 80), range(36, 74), h3, s3, lit, alpha(0.28, 0.55)));
   }
 
-  const clamp = (value: number) =>
-    Math.max(20, Math.min(80, value));
-
-  const strength =
-    range(0.3, 0.62) * (lush ? 0.7 : 1);
-
-  const vignette =
-    `radial-gradient(ellipse ${num(
-      range(78, 110),
-    )}% ${num(
-      range(78, 110),
-    )}% at ${num(
-      clamp(focus[0]),
-      1,
-    )}% ${num(
-      clamp(focus[1]),
-      1,
-    )}%, transparent 0, transparent 34%, ${hsla(
-      h1,
-      50,
-      3,
-      strength * 0.45,
-    )} 70%, ${hsla(
-      h1,
-      50,
-      2,
-      strength,
-    )} 100%)`;
-
-  const shade =
-    `linear-gradient(${num(
-      range(0, 360),
-    )}deg, hsl(0 0% 100% / ${num(
-      range(0.02, 0.07),
-      2,
-    )}), transparent ${num(
-      range(30, 48),
-    )}%, hsl(0 0% 0% / ${num(
-      range(0.12, 0.34),
-      2,
-    )}))`;
-
-  const baseL = lush
-    ? range(10, 18)
-    : range(4, 9);
-
-  const base =
-    `linear-gradient(${num(
-      range(0, 360),
-    )}deg, ${hsla(
-      h1,
-      range(34, 60),
-      baseL + range(0, 3),
-    )}, ${hsla(
-      h2,
-      range(30, 56),
-      Math.max(2, baseL - range(1, 4)),
-    )})`;
+  const clamp = (value: number) => Math.max(20, Math.min(80, value));
+  const strength = range(0.3, 0.62) * (lush ? 0.7 : 1);
+  const vignette = `radial-gradient(ellipse ${num(range(78, 110))}% ${num(range(78, 110))}% at ${num(clamp(focus[0]), 1)}% ${num(clamp(focus[1]), 1)}%, transparent 0, transparent 34%, ${hsla(h1, 50, 3, strength * 0.45)} 70%, ${hsla(h1, 50, 2, strength)} 100%)`;
+  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(0.02, 0.07), 2)}), transparent ${num(range(30, 48))}%, hsl(0 0% 0% / ${num(range(0.12, 0.34), 2)}))`;
+  const baseL = lush ? range(10, 18) : range(4, 9);
+  const base = `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, range(34, 60), baseL + range(0, 3))}, ${hsla(h2, range(30, 56), Math.max(2, baseL - range(1, 4)))})`;
 
   return {
-    background: [
-      vignette,
-      shade,
-      ...extras,
-      ...lights,
-      base,
-    ].join(', '),
-
-    ambient: [
-      Math.round(h1),
-      Math.round(h2),
-      Math.round(h3),
-      Math.round(Math.min(94, s1)),
-    ],
-
+    background: [vignette, shade, ...extras, ...lights, base].join(', '),
+    ambient: [Math.round(h1), Math.round(h2), Math.round(h3), Math.round(Math.min(94, s1))],
     grain: range(0.1, 0.26),
   };
 }
 
 const artCache = new Map<string, ArtResult>();
-
 const artForSeed = (seed: string) => {
   let art = artCache.get(seed);
-
-  if (!art) {
-    art = composeArt(seed);
-    artCache.set(seed, art);
-  }
-
+  if (!art) { art = composeArt(seed); artCache.set(seed, art); }
   return art;
 };
+const artFor = (track: Track, identity?: string) => artForSeed(identity ?? `${track.id}|${track.fileName}|${track.fileSize}`);
 
-const artFor = (
-  track: Track,
-  identity?: string,
-) =>
-  artForSeed(
-    identity ??
-      `${track.id}|${track.fileName}|${track.fileSize}`,
-  );
-
-// Real embedded artwork has no generator seed, so its colour is read once from a 20×20 downscale.
-// Weighted by chroma and mid-tone-ness; near-greyscale art falls back to a neutral light.
+// Sample artwork ambient from local blob
 async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
   const url = URL.createObjectURL(blob);
   try {
@@ -723,6 +368,52 @@ async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
   finally { URL.revokeObjectURL(url); }
 }
 
+// Sample ambient from remote image URL (JioSaavn / streaming cover)
+async function sampleImageUrlAmbient(url: string): Promise<Hue4 | null> {
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = url;
+    await img.decode();
+    const size = 20;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    const bins = new Array<number>(24).fill(0);
+    let satSum = 0, weightSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      if (d < .08) continue;
+      const l = (max + min) / 2;
+      const mid = 1 - Math.abs(2 * l - 1);
+      const s = d / (mid || 1);
+      let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+      const weight = d * mid;
+      bins[Math.floor(h / 15) % 24] += weight;
+      satSum += s * weight; weightSum += weight;
+    }
+    if (weightSum < 4) return [215, 215, 215, 6];
+    const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
+    let best = 0;
+    for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
+    let second = -1;
+    for (let i = 0; i < 24; i += 1) {
+      const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
+      if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
+    }
+    const h1 = best * 15 + 7.5;
+    const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
+    const h3 = (h1 + 338) % 360;
+    const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
+    return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
+  } catch { return null; }
+}
+
 const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
   const k = (n: number) => (n + h / 30) % 12;
   const a = s * Math.min(l, 1 - l);
@@ -730,16 +421,8 @@ const hslToRgb = (h: number, s: number, l: number): [number, number, number] => 
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 };
 
-/* ───────────────────────── Auto Import ─────────────────────────
-   Only formats the browser can genuinely play are imported (checked with canPlayType), and hidden
-   files such as macOS "._" companions are ignored. */
 const AUTO_IMPORT_EXTENSIONS = new Set(['mp3', 'm4a', 'm4b', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'aif', 'aiff']);
 
-/* ───────────────────────── Fonts ─────────────────────────
-   "Default" and "Savage Roses" are permanent. Imported fonts are read locally, registered with
-   document.fonts, and persisted as Blobs in the existing 'void-local-library' IndexedDB (in the
-   'preferences' store under 'font:<id>' keys, so no library.ts change or schema bump is needed).
-   The active font is applied through --void-font / --void-font-serif on <html>. */
 type StoredFont = { id: string; name: string; fileName: string; format: string; size: number; addedAt: number; data: Blob };
 const FONT_EXTENSIONS = ['ttf', 'otf', 'woff', 'woff2'];
 const FONT_MIME: Record<string, string> = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
@@ -756,119 +439,92 @@ const FONT_PREVIEW = 'A quiet place for your music';
 const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
 const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
 
-
-// --- OFFICIAL ARTIST PHOTO FETCHER (ULTRA DEEP SEARCH: AudioDB + Wikipedia + Deezer) ---
 const artistPhotoCache = new Map<string, string | null>();
 
-async function fetchArtistPhoto(artistName: string): Promise<string | null> {
-  if (!artistName || artistName === 'Unknown Artist') return null;
-  if (artistPhotoCache.has(artistName)) return artistPhotoCache.get(artistName) || null;
-
+function fetchArtistPhoto(artistName: string): Promise<string | null> {
+  if (!artistName || artistName === 'Unknown Artist') return Promise.resolve(null);
+  if (artistPhotoCache.has(artistName)) return Promise.resolve(artistPhotoCache.get(artistName) || null);
   const cleanName = artistName.trim();
-
-  try {
-    // LAYER 1: TheAudioDB (Native CORS, 100% Official Spotify-level Artist Photos)
-    // Used by media players for perfectly accurate musician photos.
-    const adbRes = await fetch(`https://www.theaudiodb.com/api/v1/json/2/search.php?s=${encodeURIComponent(cleanName)}`);
-    if (adbRes.ok) {
-      const adbData = await adbRes.json();
-      if (adbData.artists && adbData.artists.length > 0) {
-        // Strictly match the name so Michael Jackson doesn't return a remix compilation
-        const artist = adbData.artists.find((a: any) => a.strArtist.toLowerCase() === cleanName.toLowerCase()) || adbData.artists[0];
-        if (artist.strArtistThumb) {
-          const imgUrl = artist.strArtistThumb;
-          artistPhotoCache.set(artistName, imgUrl);
-          return imgUrl;
+  return new Promise((resolve) => {
+    const callbackName = 'dz_cb_' + Math.round(1000000 * Math.random());
+    let resolved = false;
+    (window as any)[callbackName] = (data: any) => {
+      resolved = true;
+      delete (window as any)[callbackName];
+      const scriptEl = document.getElementById(callbackName);
+      if (scriptEl) document.body.removeChild(scriptEl);
+      if (data && data.data && data.data.length > 0) {
+        const topArtists = [...data.data].sort((a: any, b: any) => (b.nb_fan || 0) - (a.nb_fan || 0));
+        const matched = topArtists.find((a: any) => a.name.toLowerCase() === cleanName.toLowerCase()) || topArtists[0];
+        const imageUrl = matched.picture_xl || matched.picture_big;
+        if (imageUrl) {
+          artistPhotoCache.set(artistName, imageUrl);
+          resolve(imageUrl);
+          return;
         }
       }
-    }
-  } catch (e) { console.warn("AudioDB fetch failed"); }
+      fallbackWiki();
+    };
+    const script = document.createElement('script');
+    script.id = callbackName;
+    script.src = `https://api.deezer.com/search/artist?q=${encodeURIComponent(cleanName)}&output=jsonp&callback=${callbackName}`;
+    document.body.appendChild(script);
 
-  try {
-    // LAYER 2: Wikipedia API (Native CORS, Extremely Reliable Fallback)
-    // Fetches the primary profile picture of the artist from Wikipedia.
-    const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=600&format=json&origin=*`);
-    if (wikiRes.ok) {
-      const wikiData = await wikiRes.json();
-      if (wikiData.query && wikiData.query.pages) {
-        const pages = Object.values(wikiData.query.pages) as any[];
-        if (pages.length > 0 && pages[0].thumbnail?.source) {
-          const imgUrl = pages[0].thumbnail.source;
-          artistPhotoCache.set(artistName, imgUrl);
-          return imgUrl;
-        }
-      }
-    }
-  } catch (e) { console.warn("Wikipedia fetch failed"); }
-
-  try {
-    // LAYER 3: Deezer API with strict name matching (via AllOrigins)
-    const dzUrl = `https://api.deezer.com/search/artist?q=${encodeURIComponent(cleanName)}`;
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(dzUrl)}`;
-    const dzRes = await fetch(proxyUrl);
-    if (dzRes.ok) {
-      const proxyData = await dzRes.json();
-      if (proxyData.contents) {
-        const data = JSON.parse(proxyData.contents);
-        if (data && data.data && data.data.length > 0) {
-          // Strictly match to avoid taking album covers of similar names
-          const artist = data.data.find((a: any) => a.name.toLowerCase() === cleanName.toLowerCase()) || data.data[0];
-          if (artist.picture_xl) {
-            artistPhotoCache.set(artistName, artist.picture_xl);
-            return artist.picture_xl;
+    const fallbackWiki = async () => {
+      try {
+        const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=600&format=json&origin=*`);
+        if (wikiRes.ok) {
+          const wikiData = await wikiRes.json();
+          if (wikiData.query && wikiData.query.pages) {
+            const pages = Object.values(wikiData.query.pages) as any[];
+            if (pages.length > 0 && pages[0].thumbnail?.source) {
+              const imgUrl = pages[0].thumbnail.source;
+              artistPhotoCache.set(artistName, imgUrl);
+              resolve(imgUrl);
+              return;
+            }
           }
         }
-      }
-    }
-  } catch (e) { console.warn("Deezer fetch failed"); }
+      } catch (e) {}
+      artistPhotoCache.set(artistName, null);
+      resolve(null);
+    };
 
-  // If absolutely nothing is found, save as null to prevent spamming APIs
-  artistPhotoCache.set(artistName, null);
-  return null;
+    setTimeout(() => {
+      if (!resolved) {
+        delete (window as any)[callbackName];
+        const scriptEl = document.getElementById(callbackName);
+        if (scriptEl) document.body.removeChild(scriptEl);
+        fallbackWiki();
+      }
+    }, 4000);
+  });
 }
 
-const ArtistPhoto = memo(function ArtistPhoto({ artistName, fallbackTrack }: { artistName: string, fallbackTrack?: Track }) {
+const ArtistPhoto = memo(function ArtistPhoto({ artistName }: { artistName: string, fallbackTrack?: Track }) {
   const [photoUrl, setPhotoUrl] = useState<string | null>(artistPhotoCache.get(artistName) || null);
   const [loaded, setLoaded] = useState(false);
-
   useEffect(() => {
     let active = true;
-    if (!photoUrl) {
-      fetchArtistPhoto(artistName).then(url => {
-        if (active && url) setPhotoUrl(url);
-      });
-    }
+    setLoaded(false);
+    const cached = artistPhotoCache.get(artistName);
+    if (cached) { setPhotoUrl(cached); return () => { active = false; }; }
+    setPhotoUrl(null);
+    fetchArtistPhoto(artistName).then(url => { if (active && url) setPhotoUrl(url); });
     return () => { active = false; };
-  }, [artistName, photoUrl]);
-
-  if (photoUrl) {
-    return (
-      <img 
-        src={photoUrl} 
-        alt={artistName} 
-        style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-        className={loaded ? 'loaded' : ''} 
-        onLoad={() => setLoaded(true)} 
-      />
-    );
-  }
-
-  // If NO artist photo exists anywhere, fallback to track's embedded artwork
-  return <Cover track={fallbackTrack} large identity={`artist:${artistName}`} />;
+  }, [artistName]);
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden', background: 'hsl(var(--foreground) / .06)' }}>
+      {!photoUrl && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'hsl(var(--muted-foreground) / .45)' }}><Mic2 size={28} strokeWidth={1.2} /></div>}
+      {photoUrl && <img src={photoUrl} alt={artistName} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .28s ease' }} onLoad={() => setLoaded(true)} />}
+    </div>
+  );
 });
-// ----------------------------------------------------
 
-// ----------------------------------------------------
 async function materializeAudioFile(track: Track): Promise<{ file: File; mimeType: string }> {
   const mimeType = resolveAudioMimeType(track.fileName, track.mimeType || track.file.type);
-  // Safari can restore an IndexedDB Blob/File in a state that appears valid to JS but
-  // later fails inside the media decoder after a browser restart. Copy the persisted
-  // bytes into a fresh File with an explicit MIME type before handing it to <audio>.
   const buffer = await track.file.arrayBuffer();
-  const file = new File([buffer], track.fileName, {
-    type: mimeType,
-    lastModified: Number.isFinite(track.importedAt) ? track.importedAt : Date.now(),
-  });
+  const file = new File([buffer], track.fileName, { type: mimeType, lastModified: Number.isFinite(track.importedAt) ? track.importedAt : Date.now() });
   return { file, mimeType };
 }
 
@@ -876,7 +532,6 @@ function fontStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) 
   return new Promise<T>((resolve, reject) => {
     if (!('indexedDB' in window)) { reject(new Error('IndexedDB is not available.')); return; }
     const open = indexedDB.open('void-local-library');
-    // Never create the database from here; library.ts owns its schema.
     open.onupgradeneeded = () => open.transaction?.abort();
     open.onerror = () => reject(open.error ?? new Error('Could not open library storage.'));
     open.onsuccess = () => {
@@ -893,10 +548,7 @@ function fontStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) 
 }
 const listStoredFonts = async () => {
   const rows = await fontStore<{ id: string; value?: StoredFont }[]>('readonly', store => store.getAll());
-  return rows
-    .filter(row => typeof row.id === 'string' && row.id.startsWith(FONT_ROW_PREFIX) && row.value?.data)
-    .map(row => row.value as StoredFont)
-    .sort((a, b) => a.addedAt - b.addedAt);
+  return rows.filter(row => typeof row.id === 'string' && row.id.startsWith(FONT_ROW_PREFIX) && row.value?.data).map(row => row.value as StoredFont).sort((a, b) => a.addedAt - b.addedAt);
 };
 const putStoredFont = (font: StoredFont) => fontStore<IDBValidKey>('readwrite', store => store.put({ id: FONT_ROW_PREFIX + font.id, value: font }));
 const deleteStoredFont = (id: string) => fontStore<undefined>('readwrite', store => store.delete(FONT_ROW_PREFIX + id));
@@ -908,8 +560,6 @@ async function loadFontFace(id: string, data: ArrayBuffer) {
   return face;
 }
 
-// Reads the family name from the font's 'name' table (TTF/OTF, and WOFF where the browser can inflate it).
-// WOFF2 is Brotli-compressed and cannot be read here, so those fall back to the file name.
 async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
   try {
     const view = new DataView(buffer);
@@ -956,30 +606,51 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
   } catch { return null; }
 }
 
-// Memoized so playback-time re-renders (timeupdate) never remount or reload artwork.
-// `identity` lets albums, artists and playlists seed their own fallback cover instead of borrowing a song's.
 const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+
   useEffect(() => {
-    setLoaded(false); setFailed(false);
-    if (track?.image) { setSrc(track.image); return; }
-    if (!track?.artwork) { setSrc(null); return; }
-    const url = URL.createObjectURL(track.artwork); setSrc(url);
-    return () => URL.revokeObjectURL(url);
-  }, [track?.artwork, track?.image]);
+    let active = true;
+    setLoaded(false);
+    setFailed(false);
+    if (!track) { setSrc(null); return; }
+    if (track.image) { setSrc(track.image); return; }
+    if (!track.artwork || !(track.artwork instanceof Blob || track.artwork instanceof File)) { setSrc(null); return; }
+    const url = URL.createObjectURL(track.artwork);
+    if (active) setSrc(url);
+    return () => { active = false; URL.revokeObjectURL(url); };
+  }, [track?.artwork, track?.image, track?.id]);
+
   const Glyph = kind === 'list' ? ListMusic : Disc3;
-  // Real embedded artwork always wins; the composed cover only when there is none or it cannot be decoded.
-  const art = track && (!track.artwork || failed) ? artFor(track, identity) : null;
-  const style = track ? ({ '--cover-h': hueOf(identity ?? `${track.album}|${track.artist}`), ...(art ? { background: art.background, '--grain': art.grain.toFixed(2) } : {}) } as CSSProperties) : undefined;
-  return <div className={`${large ? 'cover-large' : 'cover-mini'}${art ? ' art-fallback' : ''}`} style={style} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
-    {src && !failed
-      ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
-      : art ? (kind === 'list' ? <Glyph aria-hidden="true" /> : null) : <Glyph aria-hidden="true" />}
-  </div>;
-}, (a, b) => a.large === b.large && a.kind === b.kind && a.identity === b.identity && a.track?.artwork === b.track?.artwork
-  && a.track?.id === b.track?.id && a.track?.album === b.track?.album && a.track?.artist === b.track?.artist);
+
+  return (
+    <div className={large ? 'cover-large' : 'cover-mini'} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
+      {src && !failed ? (
+        <img
+          src={src}
+          alt={`${track?.album ?? 'Album'} artwork`}
+          className={loaded ? 'loaded' : ''}
+          decoding="async"
+          onLoad={() => { if (src) setLoaded(true); }}
+          onError={() => { setFailed(true); }}
+        />
+      ) : (
+        <Glyph aria-hidden="true" />
+      )}
+    </div>
+  );
+}, (a, b) => (
+  a.large === b.large &&
+  a.kind === b.kind &&
+  a.identity === b.identity &&
+  a.track?.artwork === b.track?.artwork &&
+  a.track?.image === b.track?.image &&
+  a.track?.id === b.track?.id &&
+  a.track?.album === b.track?.album &&
+  a.track?.artist === b.track?.artist
+));
 
 type RowActions = {
   play: (track: Track, list: string[]) => void;
@@ -1010,7 +681,6 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
   items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean;
 }) {
   const isSelectionMode = selectedIds.length > 0;
-  
   return <div className="table-wrap">
     <table className="track-table">
       <thead>
@@ -1036,9 +706,12 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
       </thead>
       <tbody>{items.map((track, index) => {
         const isSelected = selectedIds.includes(track.id);
+        // Each row owns its play action: the row's card area (artwork + title) passes THIS track
+        // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
+        const playRowTrack = () => actions.play(track, items.map(item => item.id));
         return (
           <tr key={track.id} className={activeId === track.id ? 'current' : ''} data-testid={`row-track-${track.id}`}>
-            <td>
+            <td onClick={playRowTrack}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 {page === 'songs' && toggleSelect && (
                   <div style={{
@@ -1050,7 +723,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   }}>
                     <button
                       style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
-                      onClick={() => toggleSelect(track.id)}
+                      onClick={event => { event.stopPropagation(); toggleSelect(track.id); }}
                       aria-label={`Select ${track.title}`}
                     >
                       <SelectionEmblem selected={isSelected} />
@@ -1061,13 +734,6 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
                   <Cover track={track} />
                   <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}
-                  onClick={() => {
-                    try {
-                      const audioEl = document.querySelector('audio');
-                      if (audioEl) { audioEl.load(); }
-                    } catch {}
-                    actions.play(track, items.map(item => item.id));
-                  }}
                    aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
                     <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
                   </button>
@@ -1096,11 +762,6 @@ function VoidGlyph({ playing }: { playing: boolean }) {
   </svg>;
 }
 
-/* ───────────────────────── Volume control ─────────────────────────
-   Resting state is just the speaker icon. Clicking it grows a compact glass capsule to the left of
-   the icon with a thin slider (the icon stays put, neighbouring icons fade). While open, clicking the
-   icon toggles mute; the capsule folds away on outside click, Escape, or shortly after the pointer
-   or focus leaves. Volume and mute still flow through the app's existing preferences. */
 function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, inputTestId }: {
   volume: number; muted: boolean; onVolume: (value: number) => void; onToggleMute: () => void; buttonTestId: string; inputTestId: string;
 }) {
@@ -1144,19 +805,59 @@ function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, in
   </div>;
 }
 
+// Loads YouTube's IFrame Player API script once and resolves with the global YT object.
+let ytApiPromise: Promise<any> | null = null;
+function loadYouTubeIframeApi(): Promise<any> {
+  const w = window as any;
+  if (w.YT?.Player) return Promise.resolve(w.YT);
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve, reject) => {
+    const previous = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => { previous?.(); resolve(w.YT); };
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.onerror = () => { ytApiPromise = null; reject(new Error('YouTube API failed to load')); };
+    document.head.appendChild(tag);
+  });
+  return ytApiPromise;
+}
+
 function App() {
   const [location, setLocation] = useLocation();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [prefs, setPrefs] = useState<Preferences>(defaults);
+  const [prefs, setPrefs] = useState<Preferences>(() => {
+    try {
+      const storedTheme = localStorage.getItem('void-theme') as Preferences['theme'] | null;
+      const theme = storedTheme || defaults.theme;
+      if (theme === 'system') {
+        const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } else {
+        const dark = theme === 'dark';
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      }
+      return { ...defaults, theme };
+    } catch {
+      return defaults;
+    }
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [streamingTrack, setStreamingTrack] = useState<any>(null);
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [canvasEnabled, setCanvasEnabled] = useState(true);
+
+  const [design, setDesign] = useState<DesignId>(readDesign);
+
+useEffect(() => {
+  writeDesign(design);
+  document.documentElement.dataset.design = design;
+}, [design]);
 
   const toggleSelectSong = (id: string) => {
-    setSelectedSongIds(prev => 
-      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-    );
+    setSelectedSongIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
   };
 
   const toggleSelectAllSongs = (items: Track[]) => {
@@ -1171,9 +872,7 @@ function App() {
     if (!selectedSongIds.length) return;
     if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
     try {
-      for (const id of selectedSongIds) {
-        await removeTrack(id);
-      }
+      for (const id of selectedSongIds) await removeTrack(id);
       setTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
       setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
       setSelectedSongIds([]);
@@ -1185,7 +884,10 @@ function App() {
   const [queue, setQueue] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-queue') || '[]') as string[]; } catch { return []; }
   });
-  const [page, setPage] = useState<Page>('home');
+  const [page, setPage] = useState<Page>(() => {
+    const initialPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
+    return ['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'settings'].includes(initialPath) ? initialPath : 'home';
+  });
   const [greetingHour, setGreetingHour] = useState(() => new Date().getHours());
   const [query, setQuery] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1193,43 +895,23 @@ function App() {
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
   useEffect(() => {
-  const q = paletteQuery.trim();
-
-  if (!q) {
-    setMusicResults([]);
-    return;
-  }
-
-  let cancelled = false;
-
-  const search = async () => {
-    setMusicSearching(true);
-
-    try {
-      const data = await searchMusic(q);
-
-      if (!cancelled) {
-        setMusicResults(data ?? []);
+    const q = paletteQuery.trim();
+    if (!q) { setMusicResults([]); return; }
+    let cancelled = false;
+    const search = async () => {
+      setMusicSearching(true);
+      try {
+        const data = await searchMusic(q);
+        if (!cancelled) setMusicResults(data ?? []);
+      } catch (error) {
+        if (!cancelled) setMusicResults([]);
+      } finally {
+        if (!cancelled) setMusicSearching(false);
       }
-} catch (error) {
-  console.error("Jamendo search error:", error);
-
-  if (!cancelled) {
-    setMusicResults([]);
-  }
-} finally {      if (!cancelled) {
-        setMusicSearching(false);
-      }
-    }
-  };
-
-  const timer = window.setTimeout(search, 350);
-
-  return () => {
-    cancelled = true;
-    window.clearTimeout(timer);
-  };
-}, [paletteQuery]);
+    };
+    const timer = window.setTimeout(search, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [paletteQuery]);
   const [modal, setModal] = useState<'playlist' | 'rename' | 'add-to-playlist' | 'properties' | null>(null);
   const [modalValue, setModalValue] = useState('');
   const [contextTrack, setContextTrack] = useState<Track | null>(null);
@@ -1255,8 +937,6 @@ function App() {
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
-  // Hover time tracking
-  const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [atmos, setAtmos] = useState<Hue4 | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
@@ -1276,6 +956,143 @@ function App() {
   closingRef.current = closing;
   const activeTrack = streamingTrack?.id === activeId ? streamingTrack : (tracks.find(track => track.id === activeId) ?? null);
 
+   // --- SYNCED LYRICS STATE & LOGIC ---
+  const [syncedLyrics, setSyncedLyrics] = useState<{time: number, text: string}[] | null>(null);
+  const [lyricsManualScroll, setLyricsManualScroll] = useState(false);
+  const sideLyricsRef = useRef<HTMLDivElement>(null);
+  
+  const activeLyricIndex = useMemo(() => {
+    if (!syncedLyrics || syncedLyrics.length === 0) return -1;
+    // Always show the first line from time 0 so it sits waiting in position
+    if (position < syncedLyrics[0].time) return 0;
+    for (let i = 0; i < syncedLyrics.length; i++) {
+      const nextTime = syncedLyrics[i + 1]?.time ?? Infinity;
+      if (position >= syncedLyrics[i].time && position < nextTime) {
+        return i;
+      }
+    }
+    return syncedLyrics.length - 1;
+  }, [syncedLyrics, position]);
+
+  useEffect(() => {
+    if (!activeTrack) { setSyncedLyrics(null); setLyricsManualScroll(false); return; }
+    let alive = true;
+    const fetchLyrics = async () => {
+      try {
+        const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(activeTrack.title)}&artist_name=${encodeURIComponent(activeTrack.artist)}${activeTrack.duration ? `&duration=${Math.round(activeTrack.duration)}` : ''}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Not found');
+        const data = await res.json();
+        if (alive && data.syncedLyrics) {
+          const parsed = data.syncedLyrics.split('\n').map((line: string) => {
+            const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
+            if (match) return { time: parseInt(match[1], 10) * 60 + parseFloat(match[2]), text: match[3].trim() || '♪' };
+            return null;
+          }).filter(Boolean);
+          setSyncedLyrics(parsed.length > 0 ? parsed : null);
+        } else if (alive) setSyncedLyrics(null);
+      } catch { if (alive) setSyncedLyrics(null); }
+    };
+    fetchLyrics();
+    return () => { alive = false; };
+  }, [activeTrack?.title, activeTrack?.artist, activeTrack?.duration]);
+
+  useEffect(() => {
+    if (lyricsManualScroll || activeLyricIndex < 0 || !sideLyricsRef.current) return;
+    const container = sideLyricsRef.current;
+    const activeEl = container.children[activeLyricIndex] as HTMLElement;
+    if (activeEl) {
+      container.scrollTo({
+        top: activeEl.offsetTop - container.clientHeight * 0.18 + activeEl.clientHeight / 2,
+        behavior: 'smooth'
+      });
+    }
+  }, [activeLyricIndex, lyricsManualScroll]);
+
+  const handleLyricsScroll = () => { if (!lyricsManualScroll) setLyricsManualScroll(true); };
+
+
+
+  // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
+  const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+
+  // Persistent player: the iframe is created once per mount and then reused for every track.
+  const [canvasBootId, setCanvasBootId] = useState<string | null>(null); // video id baked into the iframe src (never changes while mounted)
+  const canvasFrame = useRef<HTMLIFrameElement>(null);
+  const canvasPlayer = useRef<any>(null);
+  const canvasLoadedId = useRef<string | null>(null); // id currently loaded in the player
+  const canvasWantedId = useRef<string | null>(null); // latest id requested by the track effect
+
+  useEffect(() => {
+    let active = true;
+    if (!activeTrack) {
+      setCanvasVideoId(null);
+      setCanvasReady(false);
+      return;
+    }
+    setCanvasReady(false); 
+    const query = `${activeTrack.title} ${activeTrack.artist} official music video`;
+    searchYouTube(query).then(results => {
+      if (active && results && results.length > 0) {
+        const vidId = results[0].id || (results[0] as any).videoId;
+        setCanvasVideoId(vidId);
+      } else if (active) {
+        setCanvasVideoId(null);
+      }
+    }).catch(() => {
+      if (active) setCanvasVideoId(null);
+    });
+    return () => { active = false; };
+  }, [activeTrack?.title, activeTrack?.artist]);
+
+  // Freeze the iframe's initial video id so React never changes its src (which would reload the iframe).
+  useEffect(() => {
+    if (!canvasEnabled || !canvasVideoId) setCanvasBootId(null);
+    else setCanvasBootId(current => current ?? canvasVideoId);
+  }, [canvasEnabled, canvasVideoId]);
+
+  // Attach one YT.Player to the existing iframe.
+  useEffect(() => {
+    if (!canvasBootId) return;
+    let cancelled = false;
+    canvasLoadedId.current = canvasBootId;
+    loadYouTubeIframeApi().then(YT => {
+      const frame = canvasFrame.current;
+      if (cancelled || !frame) return;
+      canvasPlayer.current = new YT.Player(frame, {
+        events: {
+          onReady: (event: any) => {
+            if (cancelled) return;
+            event.target.mute();
+            event.target.playVideo();
+            const wanted = canvasWantedId.current;
+            if (wanted && wanted !== canvasLoadedId.current) {
+              canvasLoadedId.current = wanted;
+              event.target.loadVideoById(wanted);
+            }
+          },
+          onStateChange: (event: any) => {
+            if (cancelled) return;
+            if (event.data === 1) setCanvasReady(true); // PLAYING
+            else if (event.data === 0) { event.target.seekTo(0); event.target.playVideo(); } // ENDED -> loop
+          },
+        },
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; canvasPlayer.current = null; canvasLoadedId.current = null; };
+  }, [canvasBootId]);
+
+  // Track change: reuse the same player instead of creating a new iframe.
+  useEffect(() => {
+    canvasWantedId.current = canvasVideoId;
+    const player = canvasPlayer.current;
+    if (!canvasVideoId || !player || typeof player.loadVideoById !== 'function') return;
+    if (canvasLoadedId.current === canvasVideoId) return;
+    canvasLoadedId.current = canvasVideoId;
+    player.loadVideoById(canvasVideoId);
+  }, [canvasVideoId]);
+
   const notify = useCallback((message: string) => {
     setToast(message);
     window.clearTimeout(toastTimer.current);
@@ -1285,19 +1102,14 @@ function App() {
   const reload = useCallback(async () => {
     try {
       const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
-      
       let remoteFavs: Track[] = [];
-      try {
-        remoteFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
-      } catch { remoteFavs = []; }
-
+      try { remoteFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]'); } catch { remoteFavs = []; }
       const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
       setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
-      
       setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
       if (storedPrefs) {
         setPrefs({ ...defaults, ...storedPrefs });
-        try { localStorage.setItem('void-theme', storedPrefs.theme); } catch { /* Theme still applies from IndexedDB. */ }
+        try { localStorage.setItem('void-theme', storedPrefs.theme); } catch {}
       }
       setIsReady(true);
     } catch (error) {
@@ -1313,21 +1125,11 @@ function App() {
     if (['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
   }, [location]);
 
-  // Handle theme transitions seamlessly
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = document.documentElement;
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-
-    const applyTheme = () => {
-      root.classList.toggle('dark', dark);
-      root.dataset.theme = dark ? 'dark' : 'light';
-    };
-
-    if ('startViewTransition' in document && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      (document as any).startViewTransition(applyTheme);
-    } else {
-      applyTheme();
-    }
+    root.classList.toggle('dark', dark);
+    root.dataset.theme = dark ? 'dark' : 'light';
   }, [prefs.theme]);
 
   useEffect(() => {
@@ -1340,41 +1142,23 @@ function App() {
       timer = window.setTimeout(refreshGreeting, Math.max(1000, nextChange.getTime() - now.getTime()));
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        window.clearTimeout(timer);
-        refreshGreeting();
-      }
+      if (document.visibilityState === 'visible') { window.clearTimeout(timer); refreshGreeting(); }
     };
     refreshGreeting();
     document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibilityChange); };
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('void-queue', JSON.stringify(queue));
-  }, [queue]);
-
-  useEffect(() => {
-    try { localStorage.setItem('void-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded'); } catch { /* Layout still works for this session. */ }
-  }, [sidebarCollapsed]);
+  useEffect(() => { localStorage.setItem('void-queue', JSON.stringify(queue)); }, [queue]);
+  useEffect(() => { try { localStorage.setItem('void-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded'); } catch {} }, [sidebarCollapsed]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const sync = (e: MediaQueryListEvent) => {
       if (prefs.theme === 'system') {
         const dark = e.matches;
-        const applyTheme = () => {
-          document.documentElement.classList.toggle('dark', dark);
-          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-        };
-        if ('startViewTransition' in document && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-          (document as any).startViewTransition(applyTheme);
-        } else {
-          applyTheme();
-        }
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       }
     };
     media.addEventListener('change', sync);
@@ -1382,31 +1166,41 @@ function App() {
   }, [prefs.theme]);
 
   useEffect(() => {
-    if (audio.current) {
-      audio.current.volume = prefs.volume;
-      audio.current.muted = prefs.muted;
-    }
+    if (audio.current) { audio.current.volume = prefs.volume; audio.current.muted = prefs.muted; }
   }, [prefs.volume, prefs.muted]);
 
-  /* ───────────── Global ambient colour ─────────────
-     The playing track's colour (generated cover → its seed hues; real artwork → sampled once) is
-     written to --h1/--h2/--h3/--s on .void-app. Everything ambient (page light, orb, top band, player
-     reflection) derives from those through registered custom properties, so a track change is one
-     cross-fade. Below, the browser's own top chrome (Safari tints it from theme-color) follows. */
+  // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn) or Local Artwork ---
   useEffect(() => {
-    if (!activeTrack) { setAtmos(null); return; }
-    const generated = artFor(activeTrack).ambient;
-    if (!activeTrack.artwork) { setAtmos(generated); return; }
+    if (!activeTrack) {
+      setAtmos(null);
+      return;
+    }
     let alive = true;
-    sampleArtworkAmbient(activeTrack.artwork)
-      .then(found => { if (alive) setAtmos(found ?? generated); })
-      .catch(() => { if (alive) setAtmos(generated); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTrack?.id, activeTrack?.artwork]);
+    const defaultAmbient: Hue4 = [24, 38, 12, 96];
+
+    if (activeTrack.image) {
+      sampleImageUrlAmbient(activeTrack.image).then(found => {
+        if (alive) setAtmos(found ?? defaultAmbient);
+      }).catch(() => {
+        if (alive) setAtmos(defaultAmbient);
+      });
+    } else if (activeTrack.artwork && activeTrack.artwork instanceof Blob) {
+      sampleArtworkAmbient(activeTrack.artwork).then(found => {
+        if (alive) setAtmos(found ?? defaultAmbient);
+      }).catch(() => {
+        if (alive) setAtmos(defaultAmbient);
+      });
+    } else {
+      setAtmos(null);
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork]);
 
   useEffect(() => {
-    if (!atmos && !themeTint.current) return; // never touch the page's own theme-color until a track has played
+    if (!atmos && !themeTint.current) return;
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     const base: [number, number, number] = dark ? [0, 0, 0] : [246, 244, 239];
     let target = base;
@@ -1437,21 +1231,17 @@ function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [atmos, prefs.theme]);
 
-  /* ───────────── Fonts ───────────── */
-  // Verify the bundled Savage Roses face is available. The other built-in fonts are
-  // declared directly in index.css and do not need IndexedDB/import handling.
   useEffect(() => {
     let alive = true;
     if (!('fonts' in document)) setSavageState('missing');
     else {
       document.fonts.load(`16px "${SAVAGE_FAMILY}"`)
         .then(faces => { if (alive) setSavageState(faces.length ? 'ready' : 'missing'); })
-        .catch(error => { console.info('[VOID] Savage Roses font could not be loaded.', error); if (alive) setSavageState('missing'); });
+        .catch(() => { if (alive) setSavageState('missing'); });
     }
     return () => { alive = false; };
   }, []);
 
-  // Restore imported fonts once the library database exists. Never blocks first paint.
   useEffect(() => {
     if (!isReady) return;
     let alive = true;
@@ -1464,28 +1254,25 @@ function App() {
           try {
             fontFaces.current.set(font.id, await loadFontFace(font.id, await font.data.arrayBuffer()));
             usable.push(font);
-          } catch (error) { console.warn('[VOID] Stored font could not be restored.', { name: font.name, fileName: font.fileName, error }); }
+          } catch {}
         }
         if (alive) { setCustomFonts(usable); setFontsStatus('ready'); }
-      } catch (error) {
-        console.warn('[VOID] Could not read stored fonts.', error);
+      } catch {
         if (alive) setFontsStatus('error');
       }
     })();
     return () => { alive = false; };
   }, [isReady, storageError]);
 
-  // A saved selection that no longer exists falls back to Default.
   useEffect(() => {
     if (fontId === 'savage-roses' && savageState === 'missing') setFontId('default');
     else if (fontId.startsWith('custom:') && fontsStatus === 'ready' && !customFonts.some(font => `custom:${font.id}` === fontId)) setFontId('default');
   }, [customFonts, fontId, fontsStatus, savageState]);
 
   useEffect(() => {
-    try { localStorage.setItem('void-font', fontId); } catch { /* Selection still applies for this session. */ }
+    try { localStorage.setItem('void-font', fontId); } catch {}
   }, [fontId]);
 
-  // The one place the selected font reaches the UI.
   useEffect(() => {
     const root = document.documentElement;
     let family: string | null = null;
@@ -1520,12 +1307,12 @@ function App() {
       setCustomFonts(items => [...items, font]);
       setFontId(`custom:${id}`);
       try { await putStoredFont(font); notify(`“${name}” added to My Fonts.`); }
-      catch (error) { console.warn('[VOID] Font loaded but could not be saved.', error); notify(`“${name}” is active, but could not be saved on this device.`); }
-    } catch (error) {
-      console.error('[VOID] Font import failed.', { fileName: file.name, size: file.size, extension, error });
+      catch { notify(`“${name}” is active, but could not be saved on this device.`); }
+    } catch {
       notify('That font couldn’t be loaded. Your current font is unchanged.');
     } finally { setFontBusy(false); }
   };
+
   const deleteFont = async (font: StoredFont) => {
     if (!window.confirm(`Remove “${font.name}” from VOID? Your original font file is not deleted.`)) return;
     try {
@@ -1536,11 +1323,11 @@ function App() {
       setCustomFonts(items => items.filter(item => item.id !== font.id));
       setFontId(current => current === `custom:${font.id}` ? 'default' : current);
       notify('Font removed.');
-    } catch (error) {
-      console.error('[VOID] Font removal failed.', { name: font.name, error });
+    } catch {
       notify('Could not remove this font.');
     }
   };
+
   const fontOptions = useMemo(() => [
     { id: 'default', name: 'Default', tag: 'Built in', family: 'var(--app-font-sans)', note: '', font: null as StoredFont | null },
     ...BUILTIN_FONTS.map(font => ({
@@ -1556,13 +1343,20 @@ function App() {
 
   const updatePrefs = useCallback(async (next: Preferences) => {
     setPrefs(next);
-    try { localStorage.setItem('void-theme', next.theme); } catch { /* IndexedDB remains the primary preference store. */ }
+    try { localStorage.setItem('void-theme', next.theme); } catch {}
     try { await savePreferences(next); } catch { notify('Could not save preferences on this device.'); }
   }, [notify]);
 
-  const playTrack = useCallback(async (track: any, list?: string[]) => {
-    if (!audio.current) return;
+    const playTrack = useCallback(async (track: any, list?: string[]) => {
+    const el = audio.current;
+    if (!el) return;
+
     if (list) setQueue(list);
+
+    // CRITICAL FIX FOR SAFARI: Capture the user's click intent immediately.
+    // Safari will block playback if we wait for `materializeAudioFile` to finish.
+    // By calling play() immediately on a silent/empty state, we unlock the audio context.
+    el.play().catch(() => {});
 
     const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
     const isRemote = !!remoteUrl;
@@ -1574,10 +1368,9 @@ function App() {
       try {
         const { file, mimeType } = await materializeAudioFile(playableTrack);
         playableTrack = { ...playableTrack, file, mimeType };
-      } catch (error) {
-        console.error('[VOID] Could not materialize persisted audio bytes.', { fileName: playableTrack.fileName, error });
+      } catch {
         setIsPlaying(false);
-        notify(`Could not restore “${playableTrack.fileName || playableTrack.title}” after Safari restarted. The saved audio data could not be read.`);
+        notify(`Could not restore “${playableTrack.fileName || playableTrack.title}” after Safari restarted.`);
         return;
       }
     }
@@ -1586,22 +1379,14 @@ function App() {
     setPosition(0);
     setDuration(playableTrack.duration || 0);
 
-    const el = audio.current;
     el.pause();
-    if (objectUrl.current) {
-      URL.revokeObjectURL(objectUrl.current);
-      objectUrl.current = null;
-    }
-
-    el.removeAttribute('src');
-    el.load();
-
+    
     let url = playableTrack.audioUrl;
     if (!isRemote) {
       url = URL.createObjectURL(playableTrack.file);
-      objectUrl.current = url;
     }
 
+    // Assign the new source and load it
     el.src = url;
     el.volume = prefs.volume;
     el.muted = prefs.muted;
@@ -1609,39 +1394,36 @@ function App() {
 
     try {
       await el.play();
+
+      // Revoke the old object URL only AFTER the new track has successfully started playing
+      if (objectUrl.current && objectUrl.current !== url) { 
+        URL.revokeObjectURL(objectUrl.current); 
+      }
+      objectUrl.current = isRemote ? null : url;
+
       const actualDuration = el.duration;
-      
       const persistedTrack = {
         ...playableTrack,
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
         lastPlayedAt: Date.now(),
       };
-
       setTracks(items => {
         const exists = items.some(item => item.id === persistedTrack.id);
-        const updatedItems = exists
-          ? items.map(item => item.id === persistedTrack.id ? persistedTrack : item)
-          : [persistedTrack, ...items];
-
+        const updatedItems = exists ? items.map(item => item.id === persistedTrack.id ? persistedTrack : item) : [persistedTrack, ...items];
         if (isRemote) {
           try {
             const favs = updatedItems.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
             localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
-          } catch { /* storage fallback */ }
+          } catch {}
         }
         return updatedItems;
       });
-
       if (!isRemote) {
-        void saveTrack(persistedTrack).catch(error => {
-          console.warn('[VOID] Could not persist refreshed audio source.', error);
-        });
+        void saveTrack(persistedTrack).catch(() => {});
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-
       setIsPlaying(false);
-      console.error('[VOID] Audio playback failed.', error);
       notify(`Unable to play track.`);
     }
   }, [notify, prefs.muted, prefs.volume]);
@@ -1657,8 +1439,7 @@ function App() {
       return;
     }
     if (el.paused) {
-      try { await el.play(); }
-      catch (error) { if (!(error instanceof DOMException && error.name === 'AbortError')) notify(`This browser could not play “${activeTrack.fileName}”. Check its format and try another file.`); }
+      try { await el.play(); } catch {}
     } else {
       el.pause();
     }
@@ -1683,7 +1464,6 @@ function App() {
     void playTrack(source[index], source.map(track => track.id));
   }, [activeId, playTrack, prefs.autoplay, prefs.repeat, prefs.shuffle, queue, tracks]);
 
-  // System / keyboard media keys. Handlers go through a ref so they always see the latest queue, shuffle and repeat.
   const mediaControls = useRef({ play: () => {}, pause: () => {}, previous: () => {}, next: () => {} });
   mediaControls.current = {
     play: () => { if (!audio.current || audio.current.paused) void togglePlay(); },
@@ -1698,9 +1478,10 @@ function App() {
       ['play', () => mediaControls.current.play()], ['pause', () => mediaControls.current.pause()],
       ['previoustrack', () => mediaControls.current.previous()], ['nexttrack', () => mediaControls.current.next()],
     ];
-    for (const [action, handler] of handlers) { try { session.setActionHandler(action, handler); } catch { /* unsupported action */ } }
-    return () => { for (const [action] of handlers) { try { session.setActionHandler(action, null); } catch { /* unsupported action */ } } };
+    for (const [action, handler] of handlers) { try { session.setActionHandler(action, handler); } catch {} }
+    return () => { for (const [action] of handlers) { try { session.setActionHandler(action, null); } catch {} } };
   }, []);
+
   useEffect(() => {
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
   }, [isPlaying]);
@@ -1713,11 +1494,8 @@ function App() {
     try {
       for (const file of chosen) {
         try { await saveTrack(await trackFromFile(file)); added += 1; }
-        catch (error) {
-          const message = error instanceof DOMException && error.name === 'QuotaExceededError'
-            ? 'Device storage is full. Remove files or free space, then try again.'
-            : `Could not add ${file.name}. Check browser storage permissions.`;
-          notify(message);
+        catch {
+          notify(`Could not add ${file.name}. Check browser storage permissions.`);
         }
       }
       await reload();
@@ -1725,8 +1503,6 @@ function App() {
     } finally { setImporting(false); }
   };
 
-  // Auto Import: the person picks a folder (webkitdirectory works in Safari, Chrome and Firefox);
-  // we keep only playable, non-hidden audio that is not already in the library, then reuse importFiles.
   const autoImport = async (files: FileList) => {
     const all = Array.from(files);
     const known = new Set(tracks.map(track => `${track.fileName}|${track.fileSize}`));
@@ -1751,47 +1527,37 @@ function App() {
   };
   const openImport = () => setImportMenu(true);
 
-const toggleFavorite = async (track: Track | any) => {
-  const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
-  const isRemote = !!remoteUrl;
-  const nextFavorite = !track.favorite;
-  const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
-
-  if (isRemote) {
-    setStreamingTrack((current: any) => current?.id === track.id ? updated : current);
-  }
-
-  setTracks(items => {
-    const exists = items.some(item => item.id === track.id);
-    const newItems = exists ? items.map(item => item.id === track.id ? updated : item) : (isRemote ? [updated, ...items] : items);
-    
-    if (isRemote) {
-      try {
-        const favs = newItems.filter(t => t.favorite && (t.audioUrl || t.downloadUrl || t.src));
-        localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
-      } catch { /* storage fallback */ }
+  const toggleFavorite = async (track: Track | any) => {
+    const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+    const isRemote = !!remoteUrl;
+    const nextFavorite = !track.favorite;
+    const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
+    if (isRemote) setStreamingTrack((current: any) => current?.id === track.id ? updated : current);
+    setTracks(items => {
+      const exists = items.some(item => item.id === track.id);
+      const newItems = exists ? items.map(item => item.id === track.id ? updated : item) : (isRemote ? [updated, ...items] : items);
+      if (isRemote) {
+        try {
+          const favs = newItems.filter(t => t.favorite && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+      }
+      return newItems;
+    });
+    try {
+      if (!isRemote) await saveTrack(updated);
+    } catch {
+      notify('Could not save favorite.');
     }
-    return newItems;
-  });
+  };
 
-  try {
-    if (!isRemote) {
-      await saveTrack(updated);
-    }
-  } catch (error) {
-    console.error('[VOID] Could not save favorite:', error);
-    notify('Could not save favorite.');
-  }
-};
   const deleteTrack = async (track: Track) => {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
     try {
       await removeTrack(track.id);
       setTracks(items => items.filter(item => item.id !== track.id));
       setQueue(items => items.filter(id => id !== track.id));
-      const changedPlaylists = playlists
-        .filter(playlist => playlist.trackIds.includes(track.id))
-        .map(playlist => ({ ...playlist, trackIds: playlist.trackIds.filter(id => id !== track.id) }));
+      const changedPlaylists = playlists.filter(playlist => playlist.trackIds.includes(track.id)).map(playlist => ({ ...playlist, trackIds: playlist.trackIds.filter(id => id !== track.id) }));
       await Promise.all(changedPlaylists.map(savePlaylist));
       setPlaylists(items => items.map(playlist => changedPlaylists.find(updated => updated.id === playlist.id) ?? playlist));
       if (activeId === track.id) {
@@ -1802,10 +1568,12 @@ const toggleFavorite = async (track: Track | any) => {
       notify('Audio file removed from this library.');
     } catch { notify('Could not remove this file from local storage.'); }
   };
+
   const addToQueue = (track: Track) => {
     setQueue(items => items.includes(track.id) ? items : [...items, track.id]);
     notify(`Added “${track.title}” to the queue.`);
   };
+
   const playNext = (track: Track) => {
     if (activeId === track.id) { notify('That song is already playing.'); return; }
     setQueue(items => {
@@ -1816,6 +1584,7 @@ const toggleFavorite = async (track: Track | any) => {
     });
     notify(`“${track.title}” will play next.`);
   };
+
   const createPlaylist = async () => {
     const name = modalValue.trim();
     if (!name) return;
@@ -1823,6 +1592,7 @@ const toggleFavorite = async (track: Track | any) => {
     try { await savePlaylist(playlist); await reload(); setModal(null); setModalValue(''); notify('Playlist created.'); }
     catch { notify('Could not save this playlist.'); }
   };
+
   const renamePlaylist = async () => {
     const target = playlists.find(item => item.name === detail?.name);
     if (!target || !modalValue.trim()) return;
@@ -1831,41 +1601,35 @@ const toggleFavorite = async (track: Track | any) => {
       setDetail({ ...detail!, name: modalValue.trim() }); setModal(null); setModalValue(''); await reload();
     } catch { notify('Could not rename this playlist.'); }
   };
+
   const deletePlaylistById = async (playlist: Playlist) => {
     if (!window.confirm(`Delete the playlist “${playlist.name}”? Your audio files will stay in your library.`)) return;
     try { await removePlaylist(playlist.id); setDetail(null); await reload(); notify('Playlist deleted.'); }
     catch { notify('Could not delete this playlist.'); }
   };
+
   const addTrackToPlaylist = async (playlist: Playlist, track: Track) => {
     if (playlist.trackIds.includes(track.id)) { notify('That song is already in this playlist.'); return; }
     try { await savePlaylist({ ...playlist, trackIds: [...playlist.trackIds, track.id] }); await reload(); setModal(null); setContextTrack(null); notify('Added to playlist.'); }
     catch { notify('Could not update this playlist.'); }
   };
+
   const rescanLibrary = async () => {
     try {
       for (const track of tracks) {
         const file = new File([track.file], track.fileName, { type: track.mimeType });
         const scanned = await trackFromFile(file);
-        await saveTrack({
-          ...track,
-          title: scanned.title,
-          artist: scanned.artist,
-          album: scanned.album,
-          duration: scanned.duration || track.duration,
-          artwork: scanned.artwork ?? track.artwork,
-        });
+        await saveTrack({ ...track, title: scanned.title, artist: scanned.artist, album: scanned.album, duration: scanned.duration || track.duration, artwork: scanned.artwork ?? track.artwork });
       }
       await reload();
       notify('Library scan complete.');
     } catch { notify('Could not finish scanning this library.'); }
   };
+
   const clearLibrary = async () => {
     if (!window.confirm('Clear the local VOID library and playlists? The original files on your Mac will not be deleted.')) return;
     try {
-      await Promise.all([
-        ...tracks.map(track => removeTrack(track.id)),
-        ...playlists.map(playlist => removePlaylist(playlist.id)),
-      ]);
+      await Promise.all([...tracks.map(track => removeTrack(track.id)), ...playlists.map(playlist => removePlaylist(playlist.id))]);
       audio.current?.pause();
       setActiveId(null); setIsPlaying(false); setPosition(0); setDuration(0);
       if (objectUrl.current) { URL.revokeObjectURL(objectUrl.current); objectUrl.current = null; }
@@ -1873,6 +1637,7 @@ const toggleFavorite = async (track: Track | any) => {
       notify('Local library and playlists cleared.');
     } catch { notify('Could not clear the local library.'); }
   };
+
   const openCollection = (kind: 'album' | 'artist', name: string) => {
     const target: Page = kind === 'album' ? 'albums' : 'artists';
     setDetail({ kind, name });
@@ -1882,31 +1647,39 @@ const toggleFavorite = async (track: Track | any) => {
     setContextTrack(null);
   };
 
-  /* ───────────── Expanded player ─────────────
-     The compact artwork "flies" into the large artwork (and back) with one transform animation
-     measured from the real rectangles, so the two surfaces read as one object. Only the glass and the
-     surrounding text fade; the artwork itself never does. */
   const flyArt = useCallback((direction: 'open' | 'close') => {
     const art = npArt.current;
+    const playerBar = document.querySelector<HTMLElement>('.player-bar');
     const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
-    if (!art || !source || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!art || !source || !playerBar || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const originalDisplay = playerBar.style.getPropertyValue('display');
+    const originalPriority = playerBar.style.getPropertyPriority('display');
+    playerBar.style.setProperty('display', 'flex', 'important');
     const from = source.getBoundingClientRect();
     const to = art.getBoundingClientRect();
+    if (originalDisplay) playerBar.style.setProperty('display', originalDisplay, originalPriority);
+    else playerBar.style.removeProperty('display');
     if (!from.width || !to.width) return;
     const scale = from.width / to.width;
     const dx = from.left + from.width / 2 - (to.left + to.width / 2);
     const dy = from.top + from.height / 2 - (to.top + to.height / 2);
     const compact = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${13 / scale}px` };
     const full = { transform: 'translate(0px, 0px) scale(1)', borderRadius: '24px' };
-    if (direction === 'open') art.animate([compact, full], { duration: 540, easing: 'cubic-bezier(.22,.8,.24,1)', fill: 'backwards' });
-    else art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+    if (direction === 'open') {
+      art.animate([compact, full], { duration: 540, easing: 'cubic-bezier(.22,.8,.24,1)', fill: 'backwards' });
+    } else {
+      const anim = art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+      anim.onfinish = () => { art.style.opacity = '0'; };
+    }
   }, []);
+
   const openExpanded = useCallback(() => {
     if (expandedRef.current) return;
     window.clearTimeout(closeTimer.current);
     setClosing(false);
     setExpanded(true);
   }, []);
+
   const closeExpanded = useCallback(() => {
     if (!expandedRef.current || closingRef.current) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setExpanded(false); setClosing(false); return; }
@@ -1915,6 +1688,7 @@ const toggleFavorite = async (track: Track | any) => {
     window.clearTimeout(closeTimer.current);
     closeTimer.current = window.setTimeout(() => { setExpanded(false); setClosing(false); }, 300);
   }, [flyArt]);
+
   useLayoutEffect(() => { if (expanded) flyArt('open'); }, [expanded, flyArt]);
 
   useEffect(() => {
@@ -1947,8 +1721,6 @@ const toggleFavorite = async (track: Track | any) => {
     window.cancelAnimationFrame(orbFrame.current);
   }, []);
 
-  // Mood orb: the pointer position becomes --ox / --oy (-1…1); CSS eases and maps them to light,
-  // shadow and parallax. Mouse only, skipped entirely for reduced motion, one rAF-throttled write.
   const moveOrb = (event: ReactPointerEvent<HTMLDivElement>) => {
     const el = orbRef.current;
     if (!el || event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -1966,12 +1738,22 @@ const toggleFavorite = async (track: Track | any) => {
   };
 
   const setPageAndRoute = (target: Page) => { setDetail(null); setPage(target); setLocation(pathFor(target)); };
+  const splitArtists = useCallback((raw: string): string[] => {
+    if (!raw) return [];
+    return raw.split(/(?:,\s*|;\s*|\s+\/\s+|\s+&\s+|\s+feat\.?\s+|\s+ft\.?\s+)/i).map(a => a.trim()).filter(Boolean);
+  }, []);
+
   const filteredTracks = useMemo(() => {
     let list = tracks;
     if (page === 'favorites') list = list.filter(track => track.favorite);
     if (page === 'recent') list = list.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
     if (detail?.kind === 'album') list = list.filter(track => track.album === detail.name);
-    if (detail?.kind === 'artist') list = list.filter(track => track.artist === detail.name);
+    if (detail?.kind === 'artist') {
+      list = list.filter(track => {
+        const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+        return artists.includes(detail.name.toLowerCase()) || (track.artist || '').toLowerCase() === detail.name.toLowerCase();
+      });
+    }
     if (detail?.kind === 'playlist') {
       const playlist = playlists.find(item => item.name === detail.name);
       list = (playlist?.trackIds ?? []).map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track);
@@ -1979,10 +1761,18 @@ const toggleFavorite = async (track: Track | any) => {
     const q = query.trim().toLowerCase();
     if (q) list = list.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
     return list;
-  }, [detail, page, playlists, query, tracks]);
+  }, [detail, page, playlists, query, tracks, splitArtists]);
+
   const queueTracks = useMemo(() => queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track), [queue, tracks]);
   const albumNames = useMemo(() => [...new Set(tracks.map(track => track.album))], [tracks]);
-  const artistNames = useMemo(() => [...new Set(tracks.map(track => track.artist))], [tracks]);
+  const artistNames = useMemo(() => {
+    const set = new Set<string>();
+    tracks.forEach(track => {
+      const names = splitArtists(track.artist || '');
+      names.forEach(n => set.add(n));
+    });
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [tracks, splitArtists]);
   const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', settings: 'Settings' } as Record<Page, string>)[page];
   const allSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
@@ -2002,9 +1792,7 @@ const toggleFavorite = async (track: Track | any) => {
     return q ? playlists.filter(playlist => `${playlist.name} ${playlist.description}`.toLowerCase().includes(q)).slice(0, 3) : [];
   }, [paletteQuery, playlists]);
 
-  const playList = (list: Track[]) => {
-    if (list.length) void playTrack(list[0], list.map(track => track.id));
-  };
+  const playList = (list: Track[]) => { if (list.length) void playTrack(list[0], list.map(track => track.id)); };
   const hasPlayed = useMemo(() => tracks.some(track => track.lastPlayedAt), [tracks]);
   const jumpBack = useMemo(() => {
     const played = tracks.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0)).slice(0, 4);
@@ -2012,45 +1800,12 @@ const toggleFavorite = async (track: Track | any) => {
   }, [tracks]);
   const recentlyAdded = useMemo(() => tracks.slice(0, 4), [tracks]);
 
-  /* ───────────── Home: cinematic scroll reveal ─────────────
-     Home cards and rows render with data-fly="left|right" but are only hidden once this layout
-     effect arms the section ([data-fly-armed]) — so without JS nothing is ever invisible. An
-     IntersectionObserver then marks data-revealed on each element as it crosses into the viewport
-     and the CSS glides it in from its side with a per-item stagger. Elements are observed one frame
-     late so anything already on screen still gets its entrance; reduced motion (or a missing
-     IntersectionObserver) simply shows everything. The armed marker also clips the table card
-     sideways while rows are in flight, so a half-flown row can never open a scrollbar. */
-  useLayoutEffect(() => {
-    if (page !== 'home' || detail) return;
-    const root = document.querySelector('.home-content');
-    if (!root) return;
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-fly]:not([data-revealed])'));
-    if (!nodes.length) return;
-    const reveal = (node: HTMLElement) => {
-      node.dataset.revealed = '';
-      if (!root.querySelector('[data-fly]:not([data-revealed])')) (root as HTMLElement).dataset.flyArmed = undefined;
-    };
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
-      nodes.forEach(reveal);
-      return;
-    }
-    (root as HTMLElement).dataset.flyArmed = '';
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (!entry.isIntersecting) return;
-        reveal(entry.target as HTMLElement);
-        observer.unobserve(entry.target);
-      });
-    }, { rootMargin: '0px 0px -8% 0px', threshold: .14 });
-    requestAnimationFrame(() => requestAnimationFrame(() => nodes.forEach(node => observer.observe(node))));
-    return () => observer.disconnect();
-  }, [page, detail, jumpBack, recentlyAdded]);
-  // Uses the existing playback path: a random starting song with the whole library queued.
   const playSomething = () => {
     if (!tracks.length) { notify('Import audio files to begin your library.'); return; }
     const choices = tracks.length > 1 ? tracks.filter(track => track.id !== activeId) : tracks;
     void playTrack(choices[Math.floor(Math.random() * choices.length)], tracks.map(track => track.id));
   };
+
   const moveQueue = (index: number, step: number) => {
     const nextIndex = index + step;
     if (nextIndex < 0 || nextIndex >= queueTracks.length) return;
@@ -2058,6 +1813,7 @@ const toggleFavorite = async (track: Track | any) => {
     [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]];
     setQueue(ids);
   };
+
   const moveItem = (track: Track, index: number, step: number) => {
     if (page === 'queue') { moveQueue(index, step); return; }
     if (detail?.kind !== 'playlist') return;
@@ -2070,6 +1826,7 @@ const toggleFavorite = async (track: Track | any) => {
     [ids[currentIndex], ids[target]] = [ids[target], ids[currentIndex]];
     void savePlaylist({ ...playlist, trackIds: ids }).then(reload).catch(() => notify('Could not reorder this playlist.'));
   };
+
   const clearQueue = () => { setQueue([]); notify('Queue cleared.'); };
   const removeFromQueue = (id: string) => setQueue(ids => ids.filter(item => item !== id));
   const removeFromPlaylist = async (id: string) => {
@@ -2079,7 +1836,7 @@ const toggleFavorite = async (track: Track | any) => {
     try { await savePlaylist({ ...playlist, trackIds: playlist.trackIds.filter(item => item !== id) }); await reload(); }
     catch { notify('Could not remove this song from the playlist.'); }
   };
-  // Stable action bag so memoized rows keep their identity while handlers use the latest state.
+
   const latestActions = useRef<RowActions | null>(null);
   latestActions.current = {
     play: (track, list) => void playTrack(track, list),
@@ -2097,8 +1854,8 @@ const toggleFavorite = async (track: Track | any) => {
     favorite: track => latestActions.current!.favorite(track),
     menu: track => latestActions.current!.menu(track),
   }), []);
+
   const moodIndex = Math.floor(greetingHour / 2);
-  // The playing track's colour drives the page ambient, the orb, the top band and the player reflection on every page.
   const atmosphere = atmos;
   const changeVolume = (value: number) => {
     if (audio.current) audio.current.volume = value;
@@ -2115,29 +1872,27 @@ const toggleFavorite = async (track: Track | any) => {
     playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, settings: 'A few quiet preferences.',
   };
 
-  return <div className="void-app" data-ambient={page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
+  const renderDeepGlass = () => <div className="void-app" data-ambient={page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
     style={atmosphere ? ({ '--h1': atmosphere[0], '--h2': atmosphere[1], '--h3': atmosphere[2], '--s': `${atmosphere[3]}%` } as CSSProperties) : undefined}>
+    
     <div className="ambient" aria-hidden="true" />
-    <audio ref={audio} preload="none" onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
-      onPlay={() => setIsPlaying(true)} onPlaying={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)}
-      onDurationChange={() => { const value = audio.current?.duration ?? 0; if (Number.isFinite(value) && value > 0) setDuration(value); }}
-      onLoadedMetadata={() => {
-        const value = audio.current?.duration ?? 0;
-        setDuration(value);
-        if (activeId && Number.isFinite(value) && value > 0) {
-          setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
-          const loadedTrack = tracks.find(item => item.id === activeId);
-          if (loadedTrack) {
-            void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
-          }
-        }
-      }}
-      onEnded={() => {
-        if (prefs.repeat === 'one' && audio.current) { audio.current.currentTime = 0; void audio.current.play(); }
-        else playRelative(1);
-      }}
-      onError={() => { if (activeTrack) { setIsPlaying(false); notify(`Unable to decode “${activeTrack.fileName}”. This format may not be supported by your browser.`); } }} />
-    <div className="void-shell">
+
+    {/* --- GLOBAL SPOTIFY CANVAS BACKGROUND VIDEO --- */}
+    {canvasVideoId && canvasEnabled && canvasBootId && (
+      <div className="canvas-container" data-ready={canvasReady}>
+        <iframe
+          ref={canvasFrame}
+          className="canvas-iframe"
+          src={`https://www.youtube.com/embed/${canvasBootId}?autoplay=1&mute=1&loop=1&controls=0&disablekb=1&playsinline=1&modestbranding=1&iv_load_policy=3&rel=0&playlist=${canvasBootId}&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+          frameBorder="0"
+          allow="autoplay; encrypted-media; fullscreen"
+          onLoad={() => setCanvasReady(true)}
+          tabIndex={-1}
+        />
+      </div>
+    )}
+
+
       <aside className="sidebar" aria-label="Main navigation">
         <div className="sidebar-head">
           <button className="brand" aria-label="VOID home" onClick={() => setPageAndRoute('home')} data-testid="button-void-home"><span className="eclipse" /><span className="brand-word">VOID</span></button>
@@ -2157,37 +1912,106 @@ const toggleFavorite = async (track: Track | any) => {
       <main className="main-area">
         <header className="topbar">
           <div className="top-left"><span className="eclipse mobile-eclipse" /><span className="brand-word mobile-brand">VOID</span><span className="crumb">{detail ? title : page === 'home' ? 'A quiet place for your music' : 'Your library'}</span></div>
-          <div className="top-actions">
+          <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
+            
+            {/* --- LAPTOP SCREEN VIDEO TOGGLE BUTTON --- */}
+            <button
+              className="icon-button"
+              onClick={() => setCanvasEnabled(v => !v)}
+              aria-label={canvasEnabled ? "Stop background video" : "Play background video"}
+              title={canvasEnabled ? "Stop background video" : "Play background video"}
+              style={{ position: 'relative', width: 36, height: 36 }}
+              data-testid="button-toggle-canvas"
+            >
+              <svg width="18" height="13" viewBox="0 0 18 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1" y="1" width="16" height="10" rx="2" />
+                <path d="M5 12h8" />
+              </svg>
+              {!canvasEnabled && (
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '20%',
+                  right: '20%',
+                  height: '2px',
+                  background: 'currentColor',
+                  transform: 'rotate(-38deg)',
+                  borderRadius: '1px'
+                }} />
+              )}
+            </button>
+
             {page !== 'settings' && <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setPageAndRoute('settings')} data-testid="button-open-settings"><SlidersHorizontal /></button>}
           </div>
         </header>
         <section className={`content ${page === 'home' && !detail ? 'home-content' : ''}`}>
           {storageError ? <div className="empty-state" role="alert" data-testid="status-storage-error"><strong>Local storage unavailable</strong><p>{storageError} Your browser may be in private mode or storage may be disabled. VOID does not upload your music.</p><button className="button" onClick={() => { setStorageError(''); void reload(); }} data-testid="button-retry-storage">Try again</button></div> : null}
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
-          {page === 'home' && !detail && <>
+          {isReady && page === 'home' && !detail && <>
             <div className="welcome">
               <div><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
               <button className="button add-music" onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
             </div>
             <section className="mood" aria-label={moodLabelFor(greetingHour)}>
-              <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
-                <div className="mood-orb"><i className="orb-highlight" /><i className="orb-sheen" /></div>
-              </div>
-              <div className="mood-copy"><div className="mood-label">{moodLabelFor(greetingHour)}</div><h2>{moods[moodIndex]}</h2>
-                <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something"><Play />Play something for me</button></div>
-            </section>
-            {tracks.length ? <>
-              <div className="home-section"><div className="section-heading"><h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2></div>
-                <div className="jump-grid">{jumpBack.map((track, index) => <button className="jump-tile" key={track.id} onClick={() => void playTrack(track)} aria-label={`Play ${track.title}`} data-testid={`tile-jump-${track.id}`}
-                  data-fly={index % 2 ? 'right' : 'left'} style={{ '--fly-delay': `${index * 90}ms` } as CSSProperties}><Cover track={track} large /><span className="jump-title">{track.title}</span><span className="jump-sub">{track.artist}</span></button>)}</div>
-              </div>
-              <div className="home-section"><div className="section-heading"><h2>Recently added</h2><button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">View library</button></div>
-                <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
-              </div>
-            </> : isReady && !storageError ? <div className="empty-state"><strong>Your library is waiting.</strong><p>Bring your music into VOID and make this space yours.</p><button className="button glass" onClick={openImport} data-testid="button-import-empty"><Plus />Import music</button><span className="empty-formats">MP3 · M4A · FLAC · WAV</span></div> : null}
-          </>}
-          {page !== 'home' && page !== 'settings' && <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+  <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
+    <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
+      <div className="vinyl-disc">
+        <div className="vinyl-label">
+          {activeTrack ? <Cover track={activeTrack} large /> : <span className="vinyl-label-blank" />}
+        </div>
+      </div>
+      <i className="vinyl-light" />
+    </div>
+  </div>
+  <div className="mood-copy">
+    <div className="mood-label">{moodLabelFor(greetingHour)}</div>
+    <h2>{moods[moodIndex]}</h2>
+    <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something">
+      <Play />Play something for me
+    </button>
+  </div>
+</section>
+
+{tracks.length ? <>
+  <div className="home-section">
+    <div className="section-heading">
+      <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
+    </div>
+    <div className="jump-grid">
+      {jumpBack.map(track => <button
+        className="jump-tile"
+        key={track.id}
+        onClick={() => void playTrack(track)}
+        aria-label={`Play ${track.title}`}
+        data-testid={`tile-jump-${track.id}`}
+      >
+        <Cover track={track} large />
+        <span className="jump-title">{track.title}</span>
+        <span className="jump-sub">{track.artist}</span>
+      </button>)}
+    </div>
+  </div>
+
+  <div className="home-section">
+    <div className="section-heading">
+      <h2>Recently added</h2>
+      <button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">
+        View library
+      </button>
+    </div>
+    <TrackRows items={recentlyAdded} activeId={activeId} page={page} actions={rowActions} />
+  </div>
+</> : isReady && !storageError ? <div className="empty-state">
+  <strong>Your library is waiting.</strong>
+  <p>Bring your music into VOID and make this space yours.</p>
+  <button className="button glass" onClick={openImport} data-testid="button-import-empty">
+    <Plus />Import music
+  </button>
+  <span className="empty-formats">MP3 · M4A · FLAC · WAV</span>
+</div> : null}
+</>}
+{page !== 'home' && page !== 'settings' && <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div className="eyebrow" style={{ marginBottom: 2 }}>{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
             <div className="section-heading" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
               <div><h1 className="page-title" style={{ margin: 0 }}>{title}</h1><p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{pageDescription[page]}</p></div>
@@ -2220,42 +2044,26 @@ const toggleFavorite = async (track: Track | any) => {
             {page === 'artists' && !detail ? artistNames.length ? (
               <>
                 <style>{`
-                  .cover-card:hover .artist-badge {
-                    opacity: 0;
-                    visibility: hidden;
-                  }
-                  .artist-badge {
-                    transition: all 0.2s ease-in-out;
-                  }
+                  .cover-card:hover .artist-badge { opacity: 0; visibility: hidden; }
+                  .artist-badge { transition: all 0.2s ease-in-out; }
                 `}</style>
                 <div className="cover-grid">
                   {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
-                    const representative = tracks.find(track => track.artist === name);
-                    const songCount = tracks.filter(track => track.artist === name).length;
+                    const representative = tracks.find(track => {
+                      const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+                      return artists.includes(name.toLowerCase());
+                    });
+                    const songCount = tracks.filter(track => {
+                      const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+                      return artists.includes(name.toLowerCase());
+                    }).length;
                     return (
-                      <button 
-                        className="cover-card" 
-                        key={name} 
-                        onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} 
-                        data-testid={`card-artist-${name}`}
-                        style={{ alignItems: 'center', textAlign: 'center' }}
-                      >
+                      <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`} style={{ alignItems: 'center', textAlign: 'center' }}>
                         <div style={{ position: 'relative', width: '130px', height: '130px', margin: '0 auto 12px' }}>
                           <div style={{ width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden' }}>
                             <ArtistPhoto artistName={name} fallbackTrack={representative} />
                           </div>
-                          {/* Top-Right Badge (Number only, hides on hover) */}
-                          <div className="artist-badge" style={{
-                            position: 'absolute',
-                            top: '2px',
-                            right: '4px',
-                            transform: 'translate(50%, -50%)',
-                            color: 'hsl(142, 71%, 45%)',
-                            fontSize: '16px',
-                            fontWeight: '900',
-                            textShadow: '0px 2px 4px rgba(0,0,0,0.7)',
-                            zIndex: 2
-                          }}>
+                          <div className="artist-badge" style={{ position: 'absolute', top: '2px', right: '4px', transform: 'translate(50%, -50%)', color: 'hsl(142, 71%, 45%)', fontSize: '16px', fontWeight: '900', textShadow: '0px 2px 4px rgba(0,0,0,0.7)', zIndex: 2 }}>
                             {songCount}
                           </div>
                         </div>
@@ -2289,12 +2097,49 @@ const toggleFavorite = async (track: Track | any) => {
           {page === 'settings' && <div><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
             <div className="settings-section">
               <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
-              <div className="setting-row"><div><strong>Theme</strong><p>Follow your Mac, or choose a fixed appearance.</p></div><select className="select-control" value={prefs.theme} onChange={event => void updatePrefs({ ...prefs, theme: event.target.value as Preferences['theme'] })} aria-label="Theme" data-testid="select-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
-              
-              <div className="section-heading font-section-heading" style={{ marginTop: 30 }}><h2>Font</h2><span>Applies across VOID</span></div>
-              <button className="mobile-font-trigger" onClick={() => setMobileFontOpen(true)}>
-                <span>Font</span> <ChevronDown size={16} />
-              </button>
+             <div className="setting-row">
+  <div>
+    <strong>Theme</strong>
+    <p>Follow your Mac, or choose a fixed appearance.</p>
+  </div>
+  <select
+    className="select-control"
+    value={prefs.theme}
+    onChange={event => void updatePrefs({ ...prefs, theme: event.target.value as Preferences['theme'] })}
+    aria-label="Theme"
+    data-testid="select-theme"
+  >
+    <option value="system">System</option>
+    <option value="light">Light</option>
+    <option value="dark">Dark</option>
+  </select>
+</div>
+
+<div className="setting-row">
+  <div>
+    <strong>Design</strong>
+    <p>Change how VOID looks. Your music, queue and playback stay exactly as they are.</p>
+  </div>
+  <select
+    className="select-control"
+    value={design}
+    onChange={event => setDesign(event.target.value as DesignId)}
+    aria-label="Design"
+    data-testid="select-design"
+  >
+    <option value="deep">Deep Glass</option>
+    <option value="paper">Paper Glass</option>
+  </select>
+</div>
+
+<div className="section-heading font-section-heading" style={{ marginTop: 30 }}>
+  <h2>Font</h2>
+  <span>Applies across VOID</span>
+</div>
+
+<button className="mobile-font-trigger" onClick={() => setMobileFontOpen(true)}>
+  <span>Font</span> <ChevronDown size={16} />
+</button>
               
               <div className={`font-panel ${mobileFontOpen ? 'mobile-open' : ''}`} role="radiogroup" aria-label="Font" data-testid="font-panel">
                 <div className="mobile-font-header">
@@ -2338,8 +2183,19 @@ const toggleFavorite = async (track: Track | any) => {
         </section>
       </main>
 
-      {/* MOBILE BOTTOM NAVIGATION */}
-      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+      <nav 
+        className="mobile-bottom-nav" 
+        aria-label="Mobile navigation" 
+        style={{ 
+          display: expanded ? 'none' : 'flex',
+          background: 'transparent',
+          backgroundColor: 'transparent',
+          border: 'none',
+          boxShadow: 'none',
+          backdropFilter: 'none',
+          WebkitBackdropFilter: 'none'
+        }}
+      >
         {[
           { id: 'home', icon: Home },
           { id: 'songs', icon: Music2 },
@@ -2349,22 +2205,33 @@ const toggleFavorite = async (track: Track | any) => {
           const Icon = item.icon;
           const active = page === item.id && !detail;
           return (
-            <button key={item.id} className={`mobile-nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id as Page)} aria-label={item.id}>
+            <button 
+              key={item.id} 
+              className={`mobile-nav-item ${active ? 'active' : ''}`} 
+              onClick={() => setPageAndRoute(item.id as Page)} 
+              aria-label={item.id}
+              style={{
+                background: 'transparent',
+                filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.8))'
+              }}
+            >
               <Icon size={24} strokeWidth={active ? 2.5 : 2} />
             </button>
           );
         })}
       </nav>
-
-    </div>
     
-    <div className="player-bar" data-testid="player-bar" data-idle={activeTrack ? undefined : ''} data-np={expanded ? '' : undefined}>
+    <div 
+      className="player-bar" 
+      data-testid="player-bar" 
+      data-idle={activeTrack ? undefined : ''} 
+      data-np={expanded ? '' : undefined}
+    >
       <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
         <span><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
       </div>
       
-      {/* MOBILE MINI PLAY BUTTON */}
       <button className="icon-button mobile-mini-play" onClick={(e) => { e.stopPropagation(); void togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}>
         <VoidGlyph playing={isPlaying} />
       </button>
@@ -2399,181 +2266,181 @@ const toggleFavorite = async (track: Track | any) => {
       <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
       <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
     </div></div>}
-{paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
-  <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
-    <input
-      autoFocus
-      className="palette-input"
-      placeholder="Search your music…"
-      value={paletteQuery}
-      onChange={event => setPaletteQuery(event.target.value)}
-      onKeyDown={event => {
-        if (event.key !== 'Enter') return;
+    {paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
+        <input
+          autoFocus
+          className="palette-input"
+          placeholder="Search your music…"
+          value={paletteQuery}
+          onChange={event => setPaletteQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter') return;
 
-        if (allSearchResults[0]) {
-          void playTrack(allSearchResults[0]);
-          setPaletteOpen(false);
-        } else if (musicResults[0]) {
-          setPaletteOpen(false);
-        } else if (albumSearchResults[0]) {
-          setPaletteOpen(false);
-          openCollection('album', albumSearchResults[0]);
-        } else if (artistSearchResults[0]) {
-          setPaletteOpen(false);
-          openCollection('artist', artistSearchResults[0]);
-        } else if (playlistSearchResults[0]) {
-          const playlist = playlistSearchResults[0];
-          setPaletteOpen(false);
-          setPage('playlists');
-          setLocation('/playlists');
-          setDetail({ kind: 'playlist', name: playlist.name });
-        }
-      }}
-      data-testid="input-search-palette"
-    />
-
-    <div className="palette-results">
-
-      {allSearchResults.map(track => (
-        <button
-          key={track.id}
-          className="palette-result"
-          onClick={() => {
-            void playTrack(track);
-            setPaletteOpen(false);
+            if (allSearchResults[0]) {
+              void playTrack(allSearchResults[0]);
+              setPaletteOpen(false);
+            } else if (musicResults[0]) {
+              setPaletteOpen(false);
+            } else if (albumSearchResults[0]) {
+              setPaletteOpen(false);
+              openCollection('album', albumSearchResults[0]);
+            } else if (artistSearchResults[0]) {
+              setPaletteOpen(false);
+              openCollection('artist', artistSearchResults[0]);
+            } else if (playlistSearchResults[0]) {
+              const playlist = playlistSearchResults[0];
+              setPaletteOpen(false);
+              setPage('playlists');
+              setLocation('/playlists');
+              setDetail({ kind: 'playlist', name: playlist.name });
+            }
           }}
-          data-testid={`search-result-${track.id}`}
-        >
-          <Cover track={track} />
-          <span>
-            <span className="track-title">{track.title}</span>
-            <span className="track-sub">{track.artist} · {track.album}</span>
-          </span>
-          <Play size={13} />
-        </button>
-      ))}
+          data-testid="input-search-palette"
+        />
 
-      {musicResults.map(track => (
-        <button
-          key={`saavn-${track.id}`}
-          className="palette-result"
-          onClick={() => {
-            const saavnTrack = {
-              id: `saavn-${track.id}`,
-              title: track.name,
-              artist: track.artist,
-              album: track.album,
-              fileName: `${track.name}.mp4`,
-              audioUrl: track.downloadUrl,
-              src: track.downloadUrl,
-              image: track.image,
-              duration: track.duration,
-            };
+        <div className="palette-results">
 
-            setPaletteOpen(false);
-            void playTrack(saavnTrack as any);
-          }}
-          data-testid={`search-music-${track.id}`}
-        >
-          <Cover track={{ image: track.image }} />
-          <span>
-            <span className="track-title">{track.name}</span>
-            <span className="track-sub">{track.artist}</span>
-          </span>
-          <span className="crumb" style={{ marginLeft: 'auto' }}>
-            JioSaavn
-          </span>
-        </button>
-      ))}
+          {allSearchResults.map(track => (
+            <button
+              key={track.id}
+              className="palette-result"
+              onClick={() => {
+                void playTrack(track);
+                setPaletteOpen(false);
+              }}
+              data-testid={`search-result-${track.id}`}
+            >
+              <Cover track={track} />
+              <span>
+                <span className="track-title">{track.title}</span>
+                <span className="track-sub">{track.artist} · {track.album}</span>
+              </span>
+              <Play size={13} />
+            </button>
+          ))}
 
-      {albumSearchResults.map(name => (
-        <button
-          key={`album-${name}`}
-          className="palette-result"
-          onClick={() => {
-            setPaletteOpen(false);
-            openCollection('album', name);
-          }}
-          data-testid={`search-album-${name}`}
-        >
-          <Disc3 size={16} />
-          <span>{name}</span>
-          <span className="crumb" style={{ marginLeft: 'auto' }}>Album</span>
-        </button>
-      ))}
+          {musicResults.map(track => (
+            <button
+              key={`saavn-${track.id}`}
+              className="palette-result"
+              onClick={() => {
+                const saavnTrack = {
+                  id: `saavn-${track.id}`,
+                  title: track.name,
+                  artist: track.artist,
+                  album: track.album,
+                  fileName: `${track.name}.mp4`,
+                  audioUrl: track.downloadUrl,
+                  src: track.downloadUrl,
+                  image: track.image,
+                  duration: track.duration,
+                };
 
-      {artistSearchResults.map(name => (
-        <button
-          key={`artist-${name}`}
-          className="palette-result"
-          onClick={() => {
-            setPaletteOpen(false);
-            openCollection('artist', name);
-          }}
-          data-testid={`search-artist-${name}`}
-        >
-          <Mic2 size={16} />
-          <span>{name}</span>
-          <span className="crumb" style={{ marginLeft: 'auto' }}>Artist</span>
-        </button>
-      ))}
+                setPaletteOpen(false);
+                void playTrack(saavnTrack as any);
+              }}
+              data-testid={`search-music-${track.id}`}
+            >
+              <Cover track={{ image: track.image }} />
+              <span>
+                <span className="track-title">{track.name}</span>
+                <span className="track-sub">{track.artist}</span>
+              </span>
+              <span className="crumb" style={{ marginLeft: 'auto' }}>
+                JioSaavn
+              </span>
+            </button>
+          ))}
 
-      {playlistSearchResults.map(playlist => (
-        <button
-          key={playlist.id}
-          className="palette-result"
-          onClick={() => {
-            setPaletteOpen(false);
-            setPage('playlists');
-            setLocation('/playlists');
-            setDetail({ kind: 'playlist', name: playlist.name });
-            setQuery('');
-          }}
-          data-testid={`search-playlist-${playlist.id}`}
-        >
-          <ListMusic size={16} />
-          <span>{playlist.name}</span>
-          <span className="crumb" style={{ marginLeft: 'auto' }}>Playlist</span>
-        </button>
-      ))}
+          {albumSearchResults.map(name => (
+            <button
+              key={`album-${name}`}
+              className="palette-result"
+              onClick={() => {
+                setPaletteOpen(false);
+                openCollection('album', name);
+              }}
+              data-testid={`search-album-${name}`}
+            >
+              <Disc3 size={16} />
+              <span>{name}</span>
+              <span className="crumb" style={{ marginLeft: 'auto' }}>Album</span>
+            </button>
+          ))}
 
-      {musicSearching && paletteQuery && (
-        <div
-          className="crumb"
-          style={{ padding: '14px 12px' }}
-        >
-          Searching Jamendo…
+          {artistSearchResults.map(name => (
+            <button
+              key={`artist-${name}`}
+              className="palette-result"
+              onClick={() => {
+                setPaletteOpen(false);
+                openCollection('artist', name);
+              }}
+              data-testid={`search-artist-${name}`}
+            >
+              <Mic2 size={16} />
+              <span>{name}</span>
+              <span className="crumb" style={{ marginLeft: 'auto' }}>Artist</span>
+            </button>
+          ))}
+
+          {playlistSearchResults.map(playlist => (
+            <button
+              key={playlist.id}
+              className="palette-result"
+              onClick={() => {
+                setPaletteOpen(false);
+                setPage('playlists');
+                setLocation('/playlists');
+                setDetail({ kind: 'playlist', name: playlist.name });
+                setQuery('');
+              }}
+              data-testid={`search-playlist-${playlist.id}`}
+            >
+              <ListMusic size={16} />
+              <span>{playlist.name}</span>
+              <span className="crumb" style={{ marginLeft: 'auto' }}>Playlist</span>
+            </button>
+          ))}
+
+          {musicSearching && paletteQuery && (
+            <div
+              className="crumb"
+              style={{ padding: '14px 12px' }}
+            >
+              Searching Jamendo…
+            </div>
+          )}
+
+          {paletteQuery &&
+            !allSearchResults.length &&
+            !musicResults.length &&
+            !musicSearching &&
+            !albumSearchResults.length &&
+            !artistSearchResults.length &&
+            !playlistSearchResults.length && (
+              <div
+                className="empty-state"
+                style={{ margin: 8, padding: 20 }}
+              >
+                <strong>No match in your library</strong>
+                <p>Search your library and Jamendo.</p>
+              </div>
+            )}
+
+          {!paletteQuery && (
+            <div
+              className="crumb"
+              style={{ padding: '14px 12px' }}
+            >
+              Search your local songs and Jamendo.
+            </div>
+          )}
+
         </div>
-      )}
-
-      {paletteQuery &&
-        !allSearchResults.length &&
-        !musicResults.length &&
-        !musicSearching &&
-        !albumSearchResults.length &&
-        !artistSearchResults.length &&
-        !playlistSearchResults.length && (
-          <div
-            className="empty-state"
-            style={{ margin: 8, padding: 20 }}
-          >
-            <strong>No match in your library</strong>
-            <p>Search your library and Jamendo.</p>
-          </div>
-        )}
-
-      {!paletteQuery && (
-        <div
-          className="crumb"
-          style={{ padding: '14px 12px' }}
-        >
-          Search your local songs and Jamendo.
-        </div>
-      )}
-
-    </div>
-  </div>
-</div>}
+      </div>
+    </div>}
     {modal && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setModal(null); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
        {modal === 'add-to-playlist' ? <>
@@ -2645,7 +2512,17 @@ const toggleFavorite = async (track: Track | any) => {
             </div>
           </div>
           <div className="np-side np-fade">
-            <div className="np-lyrics" data-empty={activeTrack.lyrics ? undefined : ''}>{activeTrack.lyrics || 'Lyrics unavailable'}</div>
+            {syncedLyrics ? (
+              <div className="np-lyrics-synced" ref={sideLyricsRef} onWheel={handleLyricsScroll} onTouchMove={handleLyricsScroll}>
+                {syncedLyrics.map((line, i) => (
+                  <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => seekTo(line.time)}>
+                    {line.text}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="np-lyrics" data-empty={activeTrack.lyrics ? undefined : ''}>{activeTrack.lyrics || 'Lyrics unavailable'}</div>
+            )}
           </div>
         </div> : <div className="np-body np-body-empty np-fade"><div className="empty-state"><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { closeExpanded(); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div></div>}
         {activeTrack && <div className="np-dock np-fade"><button className="icon-button" onClick={() => { closeExpanded(); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>}
@@ -2653,6 +2530,164 @@ const toggleFavorite = async (track: Track | any) => {
     </div>}
     {toast && <div className="toast-stack" aria-live="polite"><div className="toast-item" data-testid="status-toast">{toast}</div></div>}
   </div>;
+const core: VoidCore = {
+  design,
+  setDesign,
+  tracks,
+  playlists,
+  queue,
+  queueTracks,
+  filteredTracks,
+  albumNames,
+  artistNames,
+  jumpBack,
+  recentlyAdded,
+  hasPlayed,
+  isReady,
+  storageError,
+  setStorageError,
+  reload,
+  importing,
+
+  activeId,
+  activeTrack,
+  isPlaying,
+  position,
+  duration,
+  prefs,
+  updatePrefs,
+  playTrack,
+  togglePlay,
+  playRelative,
+  playList,
+  playSomething,
+  seekTo,
+  changeVolume,
+  toggleMute,
+  cycleRepeat,
+
+  page,
+  detail,
+  setDetail,
+  query,
+  setQuery,
+  title,
+  pageDescription,
+  setPageAndRoute,
+  openCollection,
+  sidebarCollapsed,
+  setSidebarCollapsed,
+
+  greeting: greetings[moodIndex],
+  moodLabel: moodLabelFor(greetingHour),
+  moodLine: moods[moodIndex],
+
+  atmos: atmosphere,
+  canvasVideoId,
+  canvasEnabled,
+  setCanvasEnabled,
+  canvasReady,
+  setCanvasReady,
+
+  rowActions,
+  toggleFavorite,
+  deleteTrack,
+  addToQueue,
+  playNext,
+  clearQueue,
+  splitArtists,
+  selectedSongIds,
+  toggleSelectSong,
+  toggleSelectAllSongs,
+  deleteSelectedSongs,
+
+  createPlaylist,
+  renamePlaylist,
+  deletePlaylistById,
+  addTrackToPlaylist,
+
+  openImport,
+  importFiles,
+  autoImport,
+  rescanLibrary,
+  clearLibrary,
+  fileInput,
+  folderInput,
+  fontInput,
+
+  fontId,
+  setFontId,
+  fontOptions,
+  fontBusy,
+  importFont,
+  deleteFont,
+
+  paletteOpen,
+  setPaletteOpen,
+  paletteQuery,
+  setPaletteQuery,
+  allSearchResults,
+  musicResults,
+  musicSearching,
+  albumSearchResults,
+  artistSearchResults,
+  playlistSearchResults,
+
+  importMenu,
+  setImportMenu,
+  modal,
+  setModal,
+  modalValue,
+  setModalValue,
+  contextTrack,
+  setContextTrack,
+
+  expanded,
+  closing,
+  openExpanded,
+  closeExpanded,
+  toast,
+  notify,
+
+  fetchArtistPhoto,
+};
+return (
+  <>
+    <audio
+      ref={audio}
+      preload="none"
+      onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
+      onPlay={() => setIsPlaying(true)}
+      onPlaying={() => setIsPlaying(true)}
+      onPause={() => setIsPlaying(false)}
+      onDurationChange={() => {
+        const value = audio.current?.duration ?? 0;
+        if (Number.isFinite(value) && value > 0) setDuration(value);
+      }}
+      onLoadedMetadata={() => {
+        const value = audio.current?.duration ?? 0;
+        setDuration(value);
+        if (activeId && Number.isFinite(value) && value > 0) {
+          setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
+          const loadedTrack = tracks.find(item => item.id === activeId);
+          if (loadedTrack) void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
+        }
+      }}
+      onEnded={() => {
+        if (prefs.repeat === 'one' && audio.current) {
+          audio.current.currentTime = 0;
+          void audio.current.play();
+        } else {
+          playRelative(1);
+        }
+      }}
+    />
+
+    {design === 'paper'
+      ? <Suspense fallback={null}><PaperGlassApp core={core} /></Suspense>
+      : renderDeepGlass()}
+  </>
+);
 }
 
 function EmptyLibrary({ label, onImport }: { label: string; onImport: () => void }) {
