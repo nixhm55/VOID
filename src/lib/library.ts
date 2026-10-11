@@ -13,6 +13,9 @@ export type Track = {
   artwork?: Blob;
   lyrics?: string;
   lastPlayedAt?: number;
+  audioUrl?: string;
+  downloadUrl?: string;
+  src?: string;
 };
 
 export type Playlist = {

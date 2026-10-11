@@ -183,7 +183,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   position: relative; isolation: isolate; width: 100%; height: 100dvh; min-height: 0; overflow: hidden;
-  transition: grid-template-columns .32s var(--ease);
+  transition: grid-template-columns .4s var(--ease-out-soft);
   background: hsl(var(--background)); color: hsl(var(--foreground));
   --h1: 24; --h2: 38; --h3: 12; --s: 96%;
   --amb-1: hsl(var(--h1) var(--s) var(--amb-L) / var(--amb-A1));
@@ -337,9 +337,10 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .page-title { font-size: 36px; letter-spacing: -.03em; font-weight: 600; margin: 6px 0 0; line-height: 1.1; text-wrap: balance; }
 .page-subtitle { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 8px 0 0; line-height: 1.5; }
 .welcome { padding: 14px 0 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
-.welcome .page-title { font-size: 52px; letter-spacing: -.035em; line-height: 1.04; margin: 0; }
-.greeting-title { animation: greeting-enter .28s var(--ease) both; }
-@keyframes greeting-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.welcome .page-title { font-size: 48px; letter-spacing: -.035em; line-height: 1.12; margin: 0; overflow: visible; padding-bottom: 2px; }
+.welcome .page-title { transform: translateX(-3px); }
+.greeting-title { animation: greeting-enter .5s var(--ease-out-soft) both; }
+@keyframes greeting-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .welcome-copy { color: hsl(var(--muted-foreground)); font-size: 14px; margin: 14px 0 0; }
 .welcome-meta { color: hsl(var(--muted-foreground)); font-size: 12px; margin: 4px 0 0; opacity: .8; }
 
@@ -450,7 +451,8 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .mood-copy h2 { margin: 8px 0 22px; font-size: 30px; font-weight: 600; letter-spacing: -.03em; line-height: 1.12; text-wrap: balance; }
 
 .jump-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }
-.jump-tile { display: block; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; color: inherit; }
+.jump-grid > * { min-width: 0; width: 100%; }
+.jump-tile { display: block; min-width: 0; width: 100%; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; color: inherit; }
 .jump-tile .cover-large { transition: transform .26s var(--ease); }
 .jump-tile:hover .cover-large, .cover-card:hover .cover-large { transform: scale(1.025); }
 .jump-title { display: block; margin-top: 12px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -470,9 +472,11 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .table-wrap {
   overflow-x: auto; padding: 6px 10px 8px; border: 1px solid var(--glass-border); border-radius: var(--r-lg);
   background: var(--panel-bg); box-shadow: inset 0 1px 0 var(--glass-edge);
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
+  flex: 0 0 100%; align-self: stretch;
   scrollbar-width: thin; scrollbar-color: hsl(var(--foreground) / .18) transparent;
 }
-.track-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.track-table { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .track-table th { font-size: 11px; color: hsl(var(--muted-foreground)); font-weight: 500; letter-spacing: .02em; text-align: left; padding: 12px 12px 8px; white-space: nowrap; }
 .track-table td { padding: 6px 12px; color: hsl(var(--muted-foreground)); vertical-align: middle; height: 62px; transition: background-color .16s var(--ease); font-variant-numeric: tabular-nums; }
 .track-table td:first-child { border-radius: var(--r-md) 0 0 var(--r-md); }
@@ -480,6 +484,28 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .track-table tbody tr:hover td { background: var(--hover); }
 .track-table tr.current td { background: var(--active); color: hsl(var(--foreground)); }
 .track-main { display: flex; align-items: center; gap: 14px; min-width: 190px; color: hsl(var(--foreground)); }
+/* Shared selection motion: keep a real zero-width gutter mounted so every list animates identically. */
+.table-wrap,
+.table-wrap:has(.track-table) {
+  transform: none;
+  transition: background-color .16s var(--ease), border-color .16s var(--ease), box-shadow .16s var(--ease);
+}
+.track-table { box-sizing: border-box; table-layout: fixed; width: 100%; }
+/* Lock the glass/table geometry: selection must animate inside each row, never resize the panel. */
+.table-wrap:has(.track-table) { contain: layout; }
+.track-table tbody tr > td:first-child { width: 54%; }
+.track-table tbody tr > td:nth-child(2) { width: 28%; }
+.track-table tbody tr > td:nth-child(3) { width: 10%; }
+.track-table tbody tr > td:last-child { width: 8%; }
+.track-table tbody tr > td:first-child > div { min-width: 0; width: 100%; box-sizing: border-box; }
+.track-table tbody tr > td:first-child > div > .track-main { flex: 1 1 auto; min-width: 0; max-width: 100%; transition: transform .34s var(--ease-out-soft); }
+.track-table tbody tr.selection-mode > td:first-child > div > .track-main { transform: translateX(0); }
+.track-table tbody tr > td:first-child > div > .track-selection-gutter { width: 0; flex: 0 0 0; }
+.track-table tbody tr.selection-mode > td:first-child > div > .track-selection-gutter { width: 32px; flex: 0 0 32px; }
+.track-table tbody tr > td:first-child > div > .track-selection-gutter { display: flex; align-items: center; justify-content: flex-start; flex-shrink: 0; }
+.track-table tbody tr > td:first-child > div > .track-selection-gutter button { min-width: 20px; min-height: 28px; align-items: center; justify-content: center; }
+.track-table tbody tr.selection-mode > td:first-child > div > .track-selection-gutter { flex-basis: 32px; }
+.track-table tbody tr > td:first-child > div > .track-selection-gutter { transition: width .34s var(--ease-out-soft), flex-basis .34s var(--ease-out-soft), opacity .24s var(--ease-out-soft); }
 .track-title { display: block; font-size: 13px; font-weight: 600; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: hsl(var(--foreground)); }
 .track-sub { display: block; font-size: 12px; font-weight: 400; color: hsl(var(--muted-foreground)); margin-top: 3px; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; opacity: .55; transition: opacity .16s var(--ease); }
@@ -527,7 +553,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .art-fallback svg { position: relative; z-index: 1; color: hsl(0 0% 100% / .72); }
 
 .cover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 32px 24px; margin-top: 30px; }
-.cover-card { text-align: left; border: 0; background: transparent; padding: 0; cursor: pointer; min-width: 0; color: inherit; }
+.cover-grid > * { min-width: 0; width: 100%; }
+.cover-card { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 0; cursor: pointer; min-width: 0; color: inherit; }
 .cover-card .cover-large { transition: transform .26s var(--ease); }
 .cover-card:hover .cover-large { transform: scale(1.025); }
 .cover-card-title { margin-top: 12px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
@@ -538,26 +565,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .detail-hero p { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 0; }
 
 
-/* ───────────────────────── Home: luxury center fade ───────────────────────── */
-.home-content {
-  animation: home-center-fade 1.15s cubic-bezier(.16, 1, .3, 1) both;
-  transform-origin: center center;
-  will-change: opacity, filter, transform;
-}
-
-@keyframes home-center-fade {
-  from {
-    opacity: 0;
-    filter: blur(6px);
-    transform: scale(.998);
-  }
-
-  to {
-    opacity: 1;
-    filter: blur(0);
-    transform: scale(1);
-  }
-}
+/* Home: the content column enters with the same page-in as every other route
+   (.dg-page), so page entrances stay consistent; the greeting, hero and mood then
+   follow through the single reveal system below. */
+.home-content { animation: dg-page-in .75s var(--ease-out-soft) both; }
 
 /* ───────────────────────── Settings ───────────────────────── */
 .settings-section { max-width: 720px; margin-top: 34px; }
@@ -673,7 +684,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .dark :is(.player-controls, .np-controls) .play-button:hover { background: hsl(0 0% 100% / .24); }
 :is(.player-controls, .np-controls) .play-button svg { width: 17px; height: 17px; fill: currentColor; }
 :is(.player-controls, .np-controls) .play-button .void-glyph { width: 28px; height: 28px; }
-.void-glyph .g-ring { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 53.83 9; opacity: .6; }
+.void-glyph .g-ring { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-dasharray: 53.83 9; opacity: .6; animation: dg-ring-draw .9s var(--ease-out-soft) .4s both; }
+/* One-shot: the notched ring around the play glyph draws itself when it appears
+   (app start / expanded player), then settles. 1 61.83 → 53.83 9 keeps the 62.83 period. */
+@keyframes dg-ring-draw { from { stroke-dasharray: 1 61.83; } to { stroke-dasharray: 53.83 9; } }
 .void-glyph .g-play { fill: currentColor; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
 .void-glyph .g-pause { fill: currentColor; stroke: none; }
 .void-glyph .g-play, .void-glyph .g-pause { transform-box: fill-box; transform-origin: center; transition: opacity .2s var(--ease), transform .26s var(--ease); }
@@ -734,14 +748,17 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .vol[data-open] .vol-button { color: hsl(var(--foreground)); }
 
 /* ───────────────────────── Overlays ───────────────────────── */
-.modal-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--scrim); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 20px; animation: fade-in .18s ease both; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; background: var(--scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); display: grid; place-items: center; padding: 20px; animation: fade-in .3s ease both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
-@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes dg-sheet-in {
+  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(.97); filter: blur(5px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
 .modal, .palette, .import-menu {
   border: 1px solid var(--glass-border); border-radius: var(--r-xl); background: var(--glass-bg-strong);
   box-shadow: inset 0 1px 0 var(--glass-edge), 0 30px 80px hsl(0 0% 0% / .45);
-  -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); animation: pop-in .22s var(--ease) both;
+  -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6); animation: dg-sheet-in .42s var(--ease-out-soft) both;
 }
 .modal { width: min(460px, 100%); max-height: min(82dvh, 720px); overflow: auto; padding: 28px; }
 .modal h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; margin: 0 0 6px; }
@@ -756,11 +773,33 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .palette-results { max-height: 340px; overflow: auto; padding: 8px 0 2px; }
 .palette-result {
   display: flex; width: 100%; align-items: center; gap: 12px; border: 0; border-radius: var(--r-md); padding: 10px 12px; margin-top: 1px;
-  background: transparent; text-align: left; font-size: 13px; cursor: pointer; color: hsl(var(--foreground)); transition: background-color .14s var(--ease);
+  background: transparent; text-align: left; font-size: 13px; cursor: pointer; color: hsl(var(--foreground)); transition: background-color .18s var(--ease), transform .3s var(--ease-out-soft);
 }
 .palette-result:hover { background: var(--hover); }
+.palette-result:active { transform: scale(.98); }
 .palette-result > svg { flex: none; color: hsl(var(--muted-foreground)); }
 .palette-result .cover-mini { width: 38px; height: 38px; }
+
+/* Search-result downloads: restrained liquid-glass control, hover-revealed on pointer devices and
+   always available on touch devices where hover does not exist. */
+.search-music-result { cursor: pointer; }
+.search-result-actions { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+.search-source-label { margin-left: 0; min-width: 30px; text-align: right; }
+.download-icon-button {
+  display: inline-grid; place-items: center; width: 20px; height: 22px; flex: none; padding: 0;
+  border: 0; border-radius: 0; color: hsl(var(--foreground) / .78);
+  background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  opacity: 0; transform: translateY(2px); pointer-events: none;
+  transition: opacity .18s ease, transform .22s cubic-bezier(.2,.8,.2,1), color .18s ease;
+}
+.search-music-result:hover .download-icon-button, .search-music-result:focus-within .download-icon-button { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.download-icon-button:hover:not(:disabled) { color: hsl(var(--foreground)); transform: translateY(-1px); }
+.download-icon-button:active:not(:disabled) { transform: scale(.94); }
+.download-icon-button:disabled { opacity: .72; cursor: progress; }
+.download-icon-button.is-downloading svg { animation: void-download-pulse .85s ease-in-out infinite alternate; }
+@keyframes void-download-pulse { from { opacity: .55; transform: translateY(-1px); } to { opacity: 1; transform: translateY(1px); } }
+@media (hover: none), (pointer: coarse) { .download-icon-button { opacity: 1; transform: none; pointer-events: auto; } }
+
 
 /* Add music menu */
 .import-menu { width: min(392px, 100%); padding: 8px; }
@@ -769,9 +808,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .import-head p { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: hsl(var(--muted-foreground)); }
 .import-option {
   display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 14px; border: 0; border-radius: var(--r-lg);
-  background: transparent; text-align: left; color: inherit; cursor: pointer; transition: background-color .15s var(--ease);
+  background: transparent; text-align: left; color: inherit; cursor: pointer; transition: background-color .18s var(--ease), border-color .18s var(--ease), transform .3s var(--ease-out-soft);
 }
 .import-option:hover { background: var(--hover); }
+.import-option:active { transform: scale(.98); }
 .import-icon {
   flex: none; display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--glass-border); border-radius: var(--r-md);
   background: var(--control); box-shadow: inset 0 1px 0 var(--glass-edge); color: hsl(var(--foreground));
@@ -785,7 +825,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .toast-stack { position: fixed; right: 28px; bottom: calc(var(--float) + var(--player-h) + 14px); z-index: 80; display: grid; gap: 8px; }
 .toast-item {
   max-width: 340px; padding: 12px 16px; border: 1px solid var(--glass-border); border-radius: var(--r-md); background: var(--glass-bg-strong); color: hsl(var(--foreground)); font-size: 12.5px;
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 14px 36px hsl(0 0% 0% / .35); -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5); animation: pop-in .22s var(--ease) both;
+  box-shadow: inset 0 1px 0 var(--glass-edge), 0 14px 36px hsl(0 0% 0% / .35); -webkit-backdrop-filter: blur(20px) saturate(1.5); backdrop-filter: blur(20px) saturate(1.5); animation: dg-sheet-in .38s var(--ease-out-soft) both;
 }
 
 /* ───────────────────────── Now playing (floating glass layer) ─────────────────────────
@@ -796,10 +836,23 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .np-layer { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 28px; }
 .np-scrim {
   position: absolute; inset: 0; background: var(--np-scrim);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); animation: fade-in .28s ease both;
+  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); animation: fade-in .32s ease both;
 }
-.np-layer[data-closing] .np-scrim { animation: fade-out .26s ease both; }
-.np-panel { position: relative; z-index: 1; width: min(1120px, 100%); height: min(700px, 100%); display: flex; flex-direction: column; --np-art: min(380px, 44dvh); }
+.np-layer[data-closing] .np-scrim { animation: fade-out .28s ease both; }
+.np-panel {
+  position: relative; z-index: 1; width: min(1120px, 100%); height: min(700px, 100%);
+  display: flex; flex-direction: column; --np-art: min(380px, 44dvh);
+  animation: dg-np-panel-in .62s var(--ease-out-soft) both;
+}
+.np-layer[data-closing] .np-panel { animation: dg-np-panel-out .3s var(--ease) both; }
+@keyframes dg-np-panel-in {
+  from { opacity: 0; transform: translate3d(0, 32px, 0) scale(.965); filter: blur(8px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@keyframes dg-np-panel-out {
+  to { opacity: 0; transform: translate3d(0, 20px, 0) scale(.98); }
+}
+
 .np-glass {
   position: absolute; inset: 0; border: 1px solid var(--glass-border); border-radius: 34px; pointer-events: none;
   background:
@@ -808,13 +861,13 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     var(--np-glass);
   box-shadow: inset 0 1px 0 var(--glass-edge), 0 40px 90px hsl(0 0% 0% / .42);
   -webkit-backdrop-filter: blur(36px) saturate(1.5); backdrop-filter: blur(36px) saturate(1.5);
-  animation: np-glass-in .34s var(--ease) both;
 }
-.np-layer[data-closing] .np-glass { animation: fade-out .26s ease both; }
-@keyframes np-glass-in { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
-.np-fade { animation: np-in .34s .06s var(--ease) both; }
-.np-layer[data-closing] .np-fade { animation: fade-out .18s ease both; }
-@keyframes np-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.np-fade { animation: dg-np-content .65s .08s var(--ease-out-soft) both; }
+.np-layer[data-closing] .np-fade { animation: fade-out .2s ease both; }
+@keyframes dg-np-content {
+  from { opacity: 0; transform: translate3d(0, 12px, 0); }
+  to { opacity: 1; transform: none; }
+}
 
 .np-top { position: relative; z-index: 2; height: 72px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 24px; }
 .np-top .brand { padding: 0; cursor: default; gap: 10px; }
@@ -1390,29 +1443,120 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
    ════════════════════════════════════════════════════════════════════ */
 
 /* ───────────────────────── Motion primitives ─────────────────────────
-   Adapted from the Paper Glass motion system: one long soft ease, a short rise per
-   screen and per block, staggered with --dg-i. Transform/opacity only, so nothing
-   here can trigger layout work while it runs. */
-.dg-page { animation: dg-page-in .62s var(--ease-out-soft) both; }
+   One motion system. The page sheet enters per screen (.dg-page); the greeting has
+   its own soft beat; every other entrance — hero copy, library cards, song rows,
+   sections — travels through the IntersectionObserver reveal below, staggered on the
+   shared --dg-i unit. Transform/opacity only, so nothing here can trigger layout
+   work while it runs. */
+.dg-page { animation: dg-page-in .75s var(--ease-out-soft) both; }
 @keyframes dg-page-in {
-  from { opacity: 0; transform: translate3d(0, 10px, 0); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translate3d(0, 10px, 0); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: none; }
 }
 
-.dg-rise { animation: dg-rise .7s var(--ease-out-soft) both; animation-delay: calc(var(--dg-i, 0) * 60ms); }
-@keyframes dg-rise {
-  from { opacity: 0; transform: translate3d(0, 14px, 0); }
-  to { opacity: 1; transform: none; }
+/* ───────────────────────── Deep Glass Reveal System ─────────────────────────
+   Single-pass IntersectionObserver reveals. Elements enter smoothly, settle with
+   the signature ease-out-soft curve, and release will-change on completion. */
+[data-dg-r] {
+  min-width: 0;
+  width: 100%;
+  opacity: 0;
+  will-change: transform, opacity;
+  transition: opacity .85s var(--ease-out-soft), transform 1.05s var(--ease-out-soft), filter .85s var(--ease-out-soft);
+  transition-delay: calc(var(--dg-i, 0) * 44ms);
+}
+[data-dg-r='left'] { transform: translate3d(-36px, 0, 0); filter: blur(4px); }
+[data-dg-r='right'] { transform: translate3d(48px, 6px, 0) scale(.98); filter: blur(5px); }
+[data-dg-r='up'] { transform: translate3d(0, 24px, 0); filter: blur(4px); }
+[data-dg-r='depth'] { transform: translate3d(0, 26px, 0) scale(.95); filter: blur(5px); transform-origin: 50% 100%; }
+/* Song rows: a gentle slide, no blur and no layer hint — there can be hundreds of them.
+   Rows keep the original 32 ms stagger step (the driver caps --dg-i at 8 rungs). */
+[data-dg-r='row'] {
+  transform: translate3d(-14px, 0, 0);
+  will-change: auto;
+  transition-duration: .5s, .65s;
+  transition-delay: calc(var(--dg-i, 0) * 32ms);
+}
+/* Grid cards settle with the page beat: the full-depth drift is shortened so a card
+   grid finishes just as its page entrance does, and long cover walls don't drift in
+   unison after the stagger cap. */
+.library-grid [data-dg-r='depth'], .cover-grid [data-dg-r='depth'] {
+  transition-duration: .6s, .7s;
 }
 
-/* Rows of the song table are table-row boxes, so their entrance stays opacity-only. */
-.dg-row { animation: dg-row-in .5s var(--ease-out-soft) both; animation-delay: calc(var(--dg-i, 0) * 28ms); }
-@keyframes dg-row-in { from { opacity: 0; } to { opacity: 1; } }
+/* Reveals that live in a flex row keep their natural width (the welcome button). */
+.welcome [data-dg-r] { width: auto; }
+[data-dg-r][data-in] { opacity: 1; transform: none; filter: none; }
+[data-dg-r][data-done] { will-change: auto; transition-delay: 0s; }
+
+/* ── Card, tile & button tactile interactions (Deep Glass preservation) ── */
+.jump-tile .cover-large, .cover-card .cover-large {
+  transition: transform .55s var(--ease-out-soft), box-shadow .55s var(--ease-out-soft);
+}
+.jump-tile:hover .cover-large, .cover-card:hover .cover-large {
+  transform: translate3d(0, -4px, 0) scale(1.02);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / .12), 0 16px 36px hsl(0 0% 0% / .35);
+}
+.jump-tile:active .cover-large, .cover-card:active .cover-large {
+  transform: translate3d(0, -1px, 0) scale(.985);
+}
+
+.player-track .cover-mini {
+  transition: transform .45s var(--ease-out-soft);
+}
+.player-track:hover .cover-mini {
+  transform: scale(1.045);
+}
+.player-track:active .cover-mini {
+  transform: scale(.98);
+}
+
+:is(.player-controls, .np-controls) .play-button {
+  transition: transform .35s var(--ease-out-soft), background-color .2s var(--ease), box-shadow .35s var(--ease-out-soft);
+}
+:is(.player-controls, .np-controls) .play-button:hover {
+  transform: scale(1.055);
+}
+:is(.player-controls, .np-controls) .play-button:active {
+  transform: scale(.93);
+}
+
+:is(.player-controls, .np-controls) .icon-button {
+  transition: transform .3s var(--ease-out-soft), background-color .15s var(--ease), color .15s var(--ease);
+}
+:is(.player-controls, .np-controls) .icon-button:hover {
+  transform: scale(1.06);
+}
+:is(.player-controls, .np-controls) .icon-button:active {
+  transform: scale(.92);
+}
+
+.nav-item {
+  transition: background-color .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), transform .35s var(--ease-out-soft);
+}
+.nav-item:active {
+  transform: scale(.975);
+}
+
+.button {
+  transition: background-color .18s var(--ease), border-color .18s var(--ease), transform .3s var(--ease-out-soft), opacity .18s var(--ease), box-shadow .3s var(--ease);
+}
+.button:active {
+  transform: scale(.97);
+}
+
+.icon-button {
+  transition: background-color .18s var(--ease), color .18s var(--ease), transform .3s var(--ease-out-soft);
+}
+.icon-button:active {
+  transform: scale(.92);
+}
 
 /* ── Home hero: follows the scroll depth of the main column (--dg-sy from App.tsx). ── */
 .home-content .welcome {
-  transform: translate3d(0, calc(var(--dg-sy, 0) * -.06px), 0);
-  opacity: max(.35, calc(1 - var(--dg-sy, 0) / 900));
+  transform: translate3d(0, calc(var(--dg-sy, 0) * -.08px), 0);
+  opacity: max(0, calc(1 - var(--dg-sy, 0) / 600));
+  will-change: transform, opacity;
 }
 
 /* ── Liquid-glass type for the mood line ("Golden hour, low glare") ──
@@ -1482,9 +1626,6 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 /* ── Expanded player surface: one coherent rounded panel inside the visible viewport. ── */
 .np-layer { height: 100dvh; }
 
-@keyframes dg-np-in { from { opacity: 0; transform: translate3d(0, 18px, 0) scale(.99); } to { opacity: 1; transform: none; } }
-@keyframes dg-np-out { to { opacity: 0; transform: translate3d(0, 12px, 0) scale(.995); } }
-
 /* ───────────────────────── Phones: the mobile bar ───────────────────────── */
 @media (max-width: 768px) {
   .mobile-bottom-nav {
@@ -1530,6 +1671,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     font-size: clamp(26px, 8.2vw, 32px); font-weight: 540; letter-spacing: -.022em; line-height: 1.13;
     overflow-wrap: anywhere;
   }
+  .welcome .page-title { transform: none; }
   .welcome-copy { margin-top: 10px; font-size: 13px; }
 
   /* Mood card: a more prominent record, quieter copy. */
@@ -1562,8 +1704,9 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   /* `min-height: 0` matters: as a grid item the panel defaults to min-height:auto, which would
      let a tall content (synced lyrics) push the sheet past the viewport on short phones. */
   .np-panel { height: 100%; max-height: 100%; min-height: 0; border-radius: 26px; --np-art: min(290px, 74vw, 42dvh); }
-  .np-glass { animation: dg-np-in .42s var(--ease-out-soft) both; }
-  .np-layer[data-closing] .np-glass { animation: dg-np-out .26s var(--ease) both; }
+  /* The panel already carries the entrance animation, and the glass sheet rides
+     inside it — it must not run a second translate of its own (it used to stack
+     a panel + glass + content move on phones). */
   .np-body {
     align-content: safe center; align-items: center; justify-items: center;
     row-gap: 22px; padding: 0 20px 68px;
@@ -1602,9 +1745,14 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 /* Accessibility: the entrance and playback animations are decorative, so they stop. */
 @media (prefers-reduced-motion: reduce) {
   .dg-page, .dg-rise, .dg-row, .track-table tr.current td:first-child::before,
-  .np-glass, .np-layer[data-closing] .np-glass {
+  .np-glass, .np-layer[data-closing] .np-glass,
+  .np-panel, .np-layer[data-closing] .np-panel,
+  .modal, .palette, .import-menu, .toast-item, [data-dg-r] {
     animation: none !important;
-    transform: none;
+    transform: none !important;
+    filter: none !important;
+    transition: none !important;
+    opacity: 1 !important;
   }
   .track-table tr.current td:first-child::before { transform: translateY(-50%); }
   .home-content .welcome { transform: none; opacity: 1; }

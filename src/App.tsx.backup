@@ -852,10 +852,12 @@ function App() {
   };
 
   const toggleSelectAllSongs = (items: Track[]) => {
-    if (selectedSongIds.length === items.length) {
-      setSelectedSongIds([]);
+    const itemIds = items.map(t => t.id);
+    const allSelected = itemIds.every(id => selectedSongIds.includes(id));
+    if (allSelected) {
+      setSelectedSongIds(prev => prev.filter(id => !itemIds.includes(id)));
     } else {
-      setSelectedSongIds(items.map(t => t.id));
+      setSelectedSongIds(prev => [...new Set([...prev, ...itemIds])]);
     }
   };
 
@@ -864,7 +866,14 @@ function App() {
     if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
     try {
       for (const id of selectedSongIds) await removeTrack(id);
-      setTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
+      setTracks(items => {
+        const updated = items.filter(item => !selectedSongIds.includes(item.id));
+        try {
+          const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+        return updated;
+      });
       setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
       setSelectedSongIds([]);
       notify('Selected songs removed.');
@@ -1536,7 +1545,14 @@ function App() {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
     try {
       await removeTrack(track.id);
-      setTracks(items => items.filter(item => item.id !== track.id));
+      setTracks(items => {
+        const updated = items.filter(item => item.id !== track.id);
+        try {
+          const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+        return updated;
+      });
       setQueue(items => items.filter(id => id !== track.id));
       const changedPlaylists = playlists.filter(playlist => playlist.trackIds.includes(track.id)).map(playlist => ({ ...playlist, trackIds: playlist.trackIds.filter(id => id !== track.id) }));
       await Promise.all(changedPlaylists.map(savePlaylist));
@@ -2021,16 +2037,18 @@ function App() {
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
             {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
-            {page === 'songs' && (
+            {['songs', 'playlists', 'favorites', 'queue'].includes(page) && (
               <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="crumb">Audio files imported into VOID</span>
+                <span className="crumb">
+                  {page === 'songs' ? 'Audio files imported into VOID' : page === 'playlists' ? `Playlist: ${detail?.name ?? ''}` : page === 'favorites' ? 'Your favorite songs' : 'Current playback queue'}
+                </span>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   {selectedSongIds.length > 0 && (
                     <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
                       <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
                     </button>
                   )}
-                  <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>
+                  {page === 'songs' && <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>}
                 </div>
               </div>
             )}
@@ -2407,7 +2425,21 @@ function App() {
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
        {modal === 'add-to-playlist' ? <>
         <p>Choose where “{contextTrack?.title}” belongs.</p>
-        {playlists.length ? playlists.map(playlist => <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}><ListMusic size={15} />{playlist.name}<span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span></button>) : <p>Create a playlist first, then add songs from their menus.</p>}
+        {playlists.length > 0 ? (
+          playlists.map(playlist => (
+            <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}>
+              <ListMusic size={15} />{playlist.name}
+              <span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span>
+            </button>
+          ))
+        ) : (
+          <div style={{ padding: '12px 0' }}>
+            <p style={{ margin: '0 0 12px' }}>No playlists found.</p>
+            <button className="button primary" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-from-modal">
+              <Plus size={14} /> Create new playlist
+            </button>
+          </div>
+        )}
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-add-playlist">Close</button></div>
        </> : modal === 'properties' && contextTrack ? <>
          <p>File information stored with your local library.</p>

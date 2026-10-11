@@ -2,7 +2,7 @@ import { searchMusic, fetchArtist } from './api/musicApi';
 import { searchYouTube } from "./api/youtubeApi";
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
-  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, FileAudio, FolderOpen, Heart, Home,
+  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
   Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
@@ -12,9 +12,10 @@ import {
   removePlaylist, removeTrack, resolveAudioMimeType, savePlaylist, savePreferences, saveTrack, trackFromFile,
 } from '@/lib/library';
 import { type DesignId, type VoidCore, readDesign, writeDesign } from './core/voidCore';
+import { DgReveal } from './motion';
 const PaperGlassApp = lazy(() => import('./paper/PaperGlassApp'));
 
-type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings';
+type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'downloads' | 'settings';
 const defaults: Preferences = { theme: 'system', autoplay: false, volume: 0.72, muted: false, shuffle: false, repeat: 'off' };
 const greetings = [
   'Still awake?',
@@ -40,6 +41,7 @@ const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 
   { id: 'playlists', label: 'Playlists', icon: ListMusic, group: 'collection', compact: true },
   { id: 'favorites', label: 'Favorites', icon: Heart, group: 'collection', compact: true },
   { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection', compact: false },
+  { id: 'downloads', label: 'Downloads', icon: Download, group: 'collection', compact: true },
 ];
 // Mobile bottom bar: five primary destinations. Library is the one hub for the collection views
 // (albums, artists, playlists, recently played, queue) that stay individually routable.
@@ -678,21 +680,48 @@ type RowActions = {
 };
 
 const SelectionEmblem = ({ selected }: { selected: boolean }) => (
-  <div style={{
-    width: 18, height: 18, borderRadius: '50%',
-    border: selected ? 'none' : '1.5px solid hsl(var(--muted-foreground) / 0.4)',
-    background: selected ? 'hsl(142 71% 45%)' : 'transparent',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: '#fff', transition: 'all 0.2s ease', flexShrink: 0
-  }}>
-    {selected && <Check size={12} strokeWidth={3} />}
-  </div>
+  <span
+    aria-hidden="true"
+    data-selection-emblem="true"
+    data-selected={selected ? 'true' : 'false'}
+    style={{
+      boxSizing: 'border-box',
+      width: 18,
+      height: 18,
+      minWidth: 18,
+      minHeight: 18,
+      borderRadius: '50%',
+      border: selected ? '1px solid #22c55e' : '1.5px solid hsl(var(--muted-foreground) / 0.4)',
+      backgroundColor: selected ? '#22c55e' : 'transparent',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flex: '0 0 18px',
+      overflow: 'visible',
+      transition: 'border-color 0.2s ease, background-color 0.2s ease',
+      pointerEvents: 'none',
+    }}
+  >
+    {selected && (
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        focusable="false"
+        style={{ display: 'block', width: 12, height: 12, minWidth: 12, minHeight: 12, opacity: 1, visibility: 'visible', overflow: 'visible' }}
+      >
+        <path d="M2.2 6.2 4.8 8.5 9.8 3.5" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )}
+  </span>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean;
 }) {
-  const isSelectionMode = selectedIds.length > 0;
+  const isSelectionSupported = ['songs', 'playlists', 'favorites', 'artists', 'recent', 'queue', 'downloads'].includes(page);
+  const isSelectionMode = selectionMode;
   return <div className="table-wrap">
     <table className="track-table">
       <thead>
@@ -701,15 +730,15 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
           <th>Album</th>
           <th>Time</th>
           <th aria-label="Actions">
-            {page === 'songs' && toggleSelectAll && (
+            {isSelectionSupported && toggleSelectAll && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', paddingRight: 8 }}>
                 <button
                   style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
                   onClick={toggleSelectAll}
-                  aria-label="Select all"
-                  title="Select All"
+                  aria-label={selectionMode ? 'Exit selection mode' : 'Show selection options'}
+                  title={selectionMode ? 'Exit selection mode' : 'Selection options'}
                 >
-                  <SelectionEmblem selected={!!isAllSelected} />
+                  <SelectionEmblem selected={!!selectionMode || !!isAllSelected} />
                 </button>
               </div>
             )}
@@ -725,27 +754,31 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
         // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
         const playRowTrack = () => actions.play(track, items.map(item => item.id));
         return (
-          <tr
+          <DgReveal
+            as="tr"
+            dir="row"
+            index={index}
             key={track.id}
-            className={`dg-row${current ? ' current' : ''}`}
-            style={{ '--dg-i': Math.min(index, 8) } as CSSProperties}
+            className={`dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}`}
             aria-current={current ? 'true' : undefined}
             data-testid={`row-track-${track.id}`}
           >
             <td onClick={playRowTrack}>
               <div style={{ display: 'flex', alignItems: 'center' }}>
-                {page === 'songs' && toggleSelect && (
-                  <div style={{
+                {isSelectionSupported && toggleSelect && (
+                  <div className="track-selection-gutter" style={{
                     width: isSelectionMode ? 32 : 0,
                     opacity: isSelectionMode ? 1 : 0,
                     overflow: 'hidden',
-                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    flexShrink: 0
+                    pointerEvents: isSelectionMode ? 'auto' : 'none',
+                    transition: 'width .34s var(--ease-out-soft), opacity .24s var(--ease-out-soft)',
+                    flex: `0 0 ${isSelectionMode ? 32 : 0}px`
                   }}>
                     <button
-                      style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
-                      onClick={event => { event.stopPropagation(); toggleSelect(track.id); }}
+                      style={{ background: 'transparent', border: 0, padding: 0, cursor: isSelectionMode ? 'pointer' : 'default', display: 'flex' }}
+                      onClick={event => { event.stopPropagation(); if (isSelectionMode) toggleSelect(track.id); }}
                       aria-label={`Select ${track.title}`}
+                      tabIndex={isSelectionMode ? 0 : -1}
                     >
                       <SelectionEmblem selected={isSelected} />
                     </button>
@@ -753,10 +786,10 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                 )}
                 <div className="track-main">
                   {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
-                  <Cover track={track} />
-                  <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer' }}
+                  <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} /></div>
+                  <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}
                    aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
-                    <span><span className="track-title">{track.title}</span><span className="track-sub">{track.artist}</span></span>
+                    <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}><span className="track-title" title={track.title}>{track.title}</span><span className="track-sub" title={track.artist}>{track.artist}</span></span>
                   </button>
                   {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
                 </div>
@@ -769,7 +802,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
               <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
               <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
             </div></td>
-          </tr>
+          </DgReveal>
         );
       })}</tbody>
     </table>
@@ -844,9 +877,35 @@ function loadYouTubeIframeApi(): Promise<any> {
   return ytApiPromise;
 }
 
+type VoidDownloadRecord = { id: string; title: string; artist: string; album: string; image?: string; coverBlob?: Blob; duration?: number; mimeType: string; blob: Blob; downloadedAt: number };
+const VOID_DOWNLOAD_DB = 'void-offline-downloads';
+function openVoidDownloadDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('Offline storage is unavailable in this browser.')); return; }
+    const request = indexedDB.open(VOID_DOWNLOAD_DB, 1);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('tracks')) request.result.createObjectStore('tracks', { keyPath: 'id' }); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open offline storage.'));
+  });
+}
+async function putVoidDownload(record: VoidDownloadRecord): Promise<void> {
+  const db = await openVoidDownloadDb();
+  try { await new Promise<void>((resolve, reject) => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').put(record); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error || new Error('Could not save download.')); tx.onabort = () => reject(tx.error || new Error('Download save was cancelled.')); }); } finally { db.close(); }
+}
+async function getVoidDownloads(): Promise<VoidDownloadRecord[]> {
+  const db = await openVoidDownloadDb();
+  try { return await new Promise<VoidDownloadRecord[]>((resolve, reject) => { const request = db.transaction('tracks', 'readonly').objectStore('tracks').getAll(); request.onsuccess = () => resolve(request.result as VoidDownloadRecord[]); request.onerror = () => reject(request.error || new Error('Could not read downloads.')); }); } finally { db.close(); }
+}
+async function removeVoidDownload(id: string): Promise<void> {
+  const db = await openVoidDownloadDb();
+  try { await new Promise<void>((resolve, reject) => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').delete(id); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error || new Error('Could not remove download.')); }); } finally { db.close(); }
+}
+
 function App() {
   const [location, setLocation] = useLocation();
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [downloadedTracks, setDownloadedTracks] = useState<any[]>([]);
+  const [downloadingIds, setDownloadingIds] = useState<string[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [prefs, setPrefs] = useState<Preferences>(() => {
     try {
@@ -869,6 +928,7 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [streamingTrack, setStreamingTrack] = useState<any>(null);
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [canvasEnabled, setCanvasEnabled] = useState(true);
 
   const [design, setDesign] = useState<DesignId>(readDesign);
@@ -883,24 +943,44 @@ useEffect(() => {
   };
 
   const toggleSelectAllSongs = (items: Track[]) => {
-    if (selectedSongIds.length === items.length) {
-      setSelectedSongIds([]);
-    } else {
-      setSelectedSongIds(items.map(t => t.id));
-    }
+    const itemIds = items.map(track => track.id);
+    const allSelected = itemIds.length > 0 && itemIds.every(id => selectedSongIds.includes(id));
+    setSelectedSongIds(previous => allSelected
+      ? previous.filter(id => !itemIds.includes(id))
+      : [...new Set([...previous, ...itemIds])]);
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode(previous => {
+      if (previous) setSelectedSongIds([]);
+      return !previous;
+    });
   };
 
   const deleteSelectedSongs = async () => {
     if (!selectedSongIds.length) return;
     if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
     try {
-      for (const id of selectedSongIds) await removeTrack(id);
-      setTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
-      setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
+      if (page === 'downloads') {
+        const downloadIds = selectedSongIds.map(id => id.startsWith('download:') ? id.slice('download:'.length) : id);
+        for (const id of downloadIds) await removeVoidDownload(id);
+        setDownloadedTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
+      } else {
+        for (const id of selectedSongIds) await removeTrack(id);
+        setTracks(items => {
+          const updated = items.filter(item => !selectedSongIds.includes(item.id));
+          try {
+            const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+            localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+          } catch {}
+          return updated;
+        });
+        setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
+      }
       setSelectedSongIds([]);
-      notify('Selected songs removed.');
+      notify(page === 'downloads' ? 'Selected downloads removed.' : 'Selected songs removed.');
     } catch {
-      notify('Could not remove selected songs.');
+      notify(page === 'downloads' ? 'Could not remove selected downloads.' : 'Could not remove selected songs.');
     }
   };
   const [queue, setQueue] = useState<string[]>(() => {
@@ -908,7 +988,7 @@ useEffect(() => {
   });
   const [page, setPage] = useState<Page>(() => {
     const initialPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
-    return ['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'settings'].includes(initialPath) ? initialPath : 'home';
+    return ['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(initialPath) ? initialPath : 'home';
   });
   const [greetingHour, setGreetingHour] = useState(() => new Date().getHours());
   const [query, setQuery] = useState('');
@@ -1172,6 +1252,45 @@ useEffect(() => {
     toastTimer.current = window.setTimeout(() => setToast(''), 3400);
   }, []);
 
+  const downloadSearchTrack = async (track: any) => {
+    const id = String(track.id);
+    if (downloadingIds.includes(id)) return;
+    if (/^[\w-]{11}$/.test(id)) { notify('This provider does not offer direct offline downloads for this result.'); return; }
+    const url = track.downloadUrl || track.audioUrl || track.src;
+    if (!url) { notify('This result does not provide a downloadable audio file.'); return; }
+    setDownloadingIds(previous => [...previous, id]);
+    try {
+      const response = await fetch(url, { mode: 'cors' });
+      if (!response.ok) throw new Error('The audio provider did not allow this download.');
+      const blob = await response.blob();
+      if (!blob.size || (!blob.type.startsWith('audio/') && !blob.type.includes('octet-stream') && !blob.type.includes('video/'))) {
+        throw new Error('The provider did not return an audio file.');
+      }
+      let coverBlob: Blob | undefined;
+      if (track.image) { try { const coverResponse = await fetch(track.image, { mode: 'cors' }); if (coverResponse.ok) coverBlob = await coverResponse.blob(); } catch { /* Keep the source artwork URL if the image host blocks CORS. */ } }
+      const record: VoidDownloadRecord = {
+        id, title: String(track.name || track.title || 'Untitled'), artist: String(track.artist || 'Unknown artist'),
+        album: String(track.album || 'Unknown album'), image: track.image, coverBlob, duration: Number(track.duration) || 0,
+        mimeType: blob.type || 'audio/mpeg', blob, downloadedAt: Date.now(),
+      };
+      await putVoidDownload(record);
+      const blobUrl = URL.createObjectURL(blob);
+      const coverUrl = coverBlob ? URL.createObjectURL(coverBlob) : record.image;
+      setDownloadedTracks(previous => {
+        const old = previous.find(item => item.id === `download:${id}`);
+        if (old?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(old.audioUrl);
+        return [{ ...record, image: coverUrl, id: `download:${id}`, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: blob.size, importedAt: record.downloadedAt }, ...previous.filter(item => item.id !== `download:${id}`)];
+      });
+      notify('Saved for offline listening on this device.');
+    } catch (error) {
+      notify(error instanceof Error && /Failed to fetch|NetworkError|CORS/i.test(error.message)
+        ? 'This provider blocks browser downloads for this result.'
+        : error instanceof Error ? error.message : 'Could not save this track offline.');
+    } finally {
+      setDownloadingIds(previous => previous.filter(item => item !== id));
+    }
+  };
+
   const reload = useCallback(async () => {
     try {
       const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
@@ -1194,8 +1313,17 @@ useEffect(() => {
   useEffect(() => { void reload(); }, [reload]);
 
   useEffect(() => {
+    let cancelled = false;
+    void getVoidDownloads().then(records => {
+      if (cancelled) return;
+      setDownloadedTracks(records.sort((a, b) => b.downloadedAt - a.downloadedAt).map(record => { const blobUrl = URL.createObjectURL(record.blob); const coverUrl = record.coverBlob ? URL.createObjectURL(record.coverBlob) : record.image; return { ...record, image: coverUrl, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: record.blob.size, importedAt: record.downloadedAt, id: `download:${record.id}` }; }));
+    }).catch(() => { /* Downloads remain optional when browser storage is unavailable. */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     const pageFromPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
-    if (['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
+    if (['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
   }, [location]);
 
   useLayoutEffect(() => {
@@ -1431,9 +1559,31 @@ useEffect(() => {
     // By calling play() immediately on a silent/empty state, we unlock the audio context.
     el.play().catch(() => {});
 
-    const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+    // Prefer the persisted offline copy whenever this song has been downloaded. Match by stable
+    // provider ID first, then normalized title + artist so a library entry can reuse a search download.
+    const normalizeSongPart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+    const trackId = String(track.id ?? '');
+    const downloadedMatch = downloadedTracks.find((item: any) => {
+      const downloadId = String(item.id ?? '').replace(/^download:/, '');
+      if (downloadId && (downloadId === trackId || trackId === `download:${downloadId}`)) return true;
+      return normalizeSongPart(item.title || item.name) === normalizeSongPart(track.title)
+        && normalizeSongPart(item.artist) === normalizeSongPart(track.artist)
+        && !!item.audioUrl;
+    });
+    const sourceTrack = downloadedMatch ? {
+      ...track,
+      title: downloadedMatch.title || track.title,
+      artist: downloadedMatch.artist || track.artist,
+      album: downloadedMatch.album || track.album,
+      image: downloadedMatch.image || track.image,
+      duration: downloadedMatch.duration || track.duration,
+      audioUrl: downloadedMatch.audioUrl,
+      src: downloadedMatch.audioUrl,
+      offlineDownloadId: String(downloadedMatch.id ?? '').replace(/^download:/, ''),
+    } : track;
+    const remoteUrl = sourceTrack.audioUrl || sourceTrack.downloadUrl || sourceTrack.src;
     const isRemote = !!remoteUrl;
-    let playableTrack = { ...track, audioUrl: remoteUrl };
+    let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl };
 
     if (isRemote) {
       setStreamingTrack(playableTrack);
@@ -1476,7 +1626,13 @@ useEffect(() => {
 
       const actualDuration = el.duration;
       const persistedTrack = {
-        ...playableTrack,
+        // Blob URLs are session-specific. Keep the library record's original source URL and use
+        // the offline blob only for this playback session; the download itself remains in IndexedDB.
+        ...((downloadedMatch && track) ? track : playableTrack),
+        title: downloadedMatch?.title || playableTrack.title,
+        artist: downloadedMatch?.artist || playableTrack.artist,
+        album: downloadedMatch?.album || playableTrack.album,
+        image: downloadedMatch ? track.image : playableTrack.image,
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
         lastPlayedAt: Date.now(),
       };
@@ -1499,7 +1655,7 @@ useEffect(() => {
       setIsPlaying(false);
       notify(`Unable to play track.`);
     }
-  }, [notify, prefs.muted, prefs.volume]);
+  }, [downloadedTracks, notify, prefs.muted, prefs.volume]);
 
 
   const togglePlay = useCallback(async () => {
@@ -1628,7 +1784,14 @@ useEffect(() => {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
     try {
       await removeTrack(track.id);
-      setTracks(items => items.filter(item => item.id !== track.id));
+      setTracks(items => {
+        const updated = items.filter(item => item.id !== track.id);
+        try {
+          const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+        return updated;
+      });
       setQueue(items => items.filter(id => id !== track.id));
       const changedPlaylists = playlists.filter(playlist => playlist.trackIds.includes(track.id)).map(playlist => ({ ...playlist, trackIds: playlist.trackIds.filter(id => id !== track.id) }));
       await Promise.all(changedPlaylists.map(savePlaylist));
@@ -1661,8 +1824,8 @@ useEffect(() => {
   const createPlaylist = async () => {
     const name = modalValue.trim();
     if (!name) return;
-    const playlist: Playlist = { id: crypto.randomUUID(), name, description: '', createdAt: Date.now(), trackIds: [] };
-    try { await savePlaylist(playlist); await reload(); setModal(null); setModalValue(''); notify('Playlist created.'); }
+    const playlist: Playlist = { id: crypto.randomUUID(), name, description: '', createdAt: Date.now(), trackIds: contextTrack ? [contextTrack.id] : [] };
+    try { await savePlaylist(playlist); await reload(); setModal(null); setModalValue(''); if (contextTrack) setContextTrack(null); notify(contextTrack ? 'Playlist created and song added.' : 'Playlist created.'); }
     catch { notify('Could not save this playlist.'); }
   };
 
@@ -1740,9 +1903,9 @@ useEffect(() => {
     const compact = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${13 / scale}px` };
     const full = { transform: 'translate(0px, 0px) scale(1)', borderRadius: '24px' };
     if (direction === 'open') {
-      art.animate([compact, full], { duration: 540, easing: 'cubic-bezier(.22,.8,.24,1)', fill: 'backwards' });
+      art.animate([compact, full], { duration: 560, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
     } else {
-      const anim = art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' });
+      const anim = art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
       anim.onfinish = () => { art.style.opacity = '0'; };
     }
   }, []);
@@ -1837,8 +2000,31 @@ useEffect(() => {
     return raw.split(/(?:,\s*|;\s*|\s+\/\s+|\s+&\s+|\s+feat\.?\s+|\s+ft\.?\s+)/i).map(a => a.trim()).filter(Boolean);
   }, []);
 
+  // A downloaded copy is the canonical version of that song throughout the UI.
+  // Keep the original library record/ID for favorites and playlists, but hide duplicate
+  // same-title/same-artist records when an offline copy exists and reuse its artwork.
+  const canonicalTracks = useMemo(() => {
+    const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+    const downloadedKeys = new Set(downloadedTracks.map((item: any) => `${normalize(item.title || item.name)}|${normalize(item.artist)}`));
+    const seenDownloadedSongs = new Set<string>();
+    return tracks.filter(track => {
+      const key = `${normalize(track.title)}|${normalize(track.artist)}`;
+      if (!downloadedKeys.has(key)) return true;
+      if (seenDownloadedSongs.has(key)) return false;
+      seenDownloadedSongs.add(key);
+      return true;
+    }).map(track => {
+      const normalizePart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+      const offline = downloadedTracks.find((item: any) =>
+        String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+        (normalizePart(item.title || item.name) === normalizePart(track.title) && normalizePart(item.artist) === normalizePart(track.artist))
+      );
+      return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+    });
+  }, [downloadedTracks, tracks]);
+
   const filteredTracks = useMemo(() => {
-    let list = tracks;
+    let list = canonicalTracks;
     if (page === 'favorites') list = list.filter(track => track.favorite);
     if (page === 'recent') list = list.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
     if (detail?.kind === 'album') list = list.filter(track => track.album === detail.name);
@@ -1854,25 +2040,32 @@ useEffect(() => {
     }
     const q = query.trim().toLowerCase();
     if (q) list = list.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
-    return list;
-  }, [detail, page, playlists, query, tracks, splitArtists]);
+    return list.map(track => {
+      const offline = downloadedTracks.find((item: any) =>
+        String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+        (String(item.title ?? '').trim().toLowerCase() === String(track.title ?? '').trim().toLowerCase() &&
+         String(item.artist ?? '').trim().toLowerCase() === String(track.artist ?? '').trim().toLowerCase())
+      );
+      return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+    });
+  }, [canonicalTracks, detail, downloadedTracks, page, playlists, query, splitArtists]);
 
   const queueTracks = useMemo(() => queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track), [queue, tracks]);
-  const albumNames = useMemo(() => [...new Set(tracks.map(track => track.album))], [tracks]);
+  const albumNames = useMemo(() => [...new Set(canonicalTracks.map(track => track.album))], [canonicalTracks]);
   const artistNames = useMemo(() => {
     const set = new Set<string>();
-    tracks.forEach(track => {
+    canonicalTracks.forEach(track => {
       const names = splitArtists(track.artist || '');
       names.forEach(n => set.add(n));
     });
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [tracks, splitArtists]);
-  const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', settings: 'Settings' } as Record<Page, string>)[page];
+  }, [canonicalTracks, splitArtists]);
+  const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', downloads: 'Downloads', settings: 'Settings' } as Record<Page, string>)[page];
   const allSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
     if (!q) return [];
-    return tracks.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q)).slice(0, 7);
-  }, [paletteQuery, tracks]);
+    return canonicalTracks.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q)).slice(0, 7);
+  }, [canonicalTracks, paletteQuery]);
   const albumSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
     return q ? albumNames.filter(name => name.toLowerCase().includes(q)).slice(0, 3) : [];
@@ -1888,11 +2081,19 @@ useEffect(() => {
 
   const playList = (list: Track[]) => { if (list.length) void playTrack(list[0], list.map(track => track.id)); };
   const hasPlayed = useMemo(() => tracks.some(track => track.lastPlayedAt), [tracks]);
+  const applyOfflineArtwork = useCallback((track: any) => {
+    const offline = downloadedTracks.find((item: any) =>
+      String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+      (String(item.title ?? '').trim().toLowerCase() === String(track.title ?? '').trim().toLowerCase() &&
+       String(item.artist ?? '').trim().toLowerCase() === String(track.artist ?? '').trim().toLowerCase())
+    );
+    return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+  }, [downloadedTracks]);
   const jumpBack = useMemo(() => {
-    const played = tracks.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0)).slice(0, 4);
-    return [...played, ...tracks.filter(track => !played.includes(track))].slice(0, 4);
-  }, [tracks]);
-  const recentlyAdded = useMemo(() => tracks.slice(0, 4), [tracks]);
+    const played = canonicalTracks.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0)).slice(0, 4);
+    return [...played, ...canonicalTracks.filter(track => !played.includes(track))].slice(0, 4).map(applyOfflineArtwork);
+  }, [applyOfflineArtwork, canonicalTracks]);
+  const recentlyAdded = useMemo(() => canonicalTracks.slice(0, 4).map(applyOfflineArtwork), [applyOfflineArtwork, canonicalTracks]);
 
   const playSomething = () => {
     if (!tracks.length) { notify('Import audio files to begin your library.'); return; }
@@ -1973,7 +2174,7 @@ useEffect(() => {
     home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
     albums: `${albumNames.length} ${albumNames.length === 1 ? 'album' : 'albums'} found in your files`,
     artists: `${artistNames.length} ${artistNames.length === 1 ? 'artist' : 'artists'} found in your files`,
-    playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, settings: 'A few quiet preferences.',
+    playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, downloads: `${downloadedTracks.length} saved for offline listening on this device.`, settings: 'A few quiet preferences.',
   };
 
   const renderDeepGlass = () => <div className="void-app" data-ambient={libraryOpen && !detail ? 'library' : page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'} data-playing={isPlaying ? '' : undefined} data-library={libraryOpen && !detail ? '' : undefined}
@@ -2057,10 +2258,12 @@ useEffect(() => {
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
           {isReady && page === 'home' && !detail && !libraryOpen && <>
             <div className="welcome">
-              <div className="dg-rise" style={{ '--dg-i': 0 } as CSSProperties}><h1 className="page-title greeting-title" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><p className="welcome-copy">A quiet place for the music already yours.</p>{tracks.length ? <p className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}</div>
-              <button className="button add-music dg-rise" style={{ '--dg-i': 1 } as CSSProperties} onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
+              <div><h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><DgReveal as="p" dir="up" index={1} className="welcome-copy">A quiet place for the music already yours.</DgReveal>{tracks.length ? <DgReveal as="p" dir="up" index={2} className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</DgReveal> : null}</div>
+              <DgReveal dir="up" index={3}>
+                <button className="button add-music" onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
+              </DgReveal>
             </div>
-            <section className="mood dg-rise" aria-label={moodLabelFor(greetingHour)} style={{ '--dg-i': 1 } as CSSProperties}>
+            <DgReveal as="section" dir="depth" index={4} className="mood" aria-label={moodLabelFor(greetingHour)}>
   <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
     <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
       <div className="vinyl-disc">
@@ -2078,35 +2281,38 @@ useEffect(() => {
       <Play />Play something for me
     </button>
   </div>
-</section>
+</DgReveal>
 
 {tracks.length ? <>
-  <div className="home-section dg-rise" style={{ '--dg-i': 2 } as CSSProperties}>
-    <div className="section-heading">
+  <div className="home-section">
+    <DgReveal dir="left" className="section-heading">
       <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
-    </div>
+    </DgReveal>
     <div className="jump-grid">
-      {jumpBack.map(track => <button
-        className="jump-tile"
-        key={track.id}
-        onClick={() => void playTrack(track)}
-        aria-label={`Play ${track.title}`}
-        data-testid={`tile-jump-${track.id}`}
-      >
-        <Cover track={track} large />
-        <span className="jump-title">{track.title}</span>
-        <span className="jump-sub">{track.artist}</span>
-      </button>)}
+      {jumpBack.map((track, i) => (
+        <DgReveal key={track.id} dir="left" index={i}>
+          <button
+            className="jump-tile"
+            onClick={() => void playTrack(track)}
+            aria-label={`Play ${track.title}`}
+            data-testid={`tile-jump-${track.id}`}
+          >
+            <Cover track={track} large />
+            <span className="jump-title">{track.title}</span>
+            <span className="jump-sub">{track.artist}</span>
+          </button>
+        </DgReveal>
+      ))}
     </div>
   </div>
 
-  <div className="home-section dg-rise" style={{ '--dg-i': 3 } as CSSProperties}>
-    <div className="section-heading">
+  <div className="home-section">
+    <DgReveal dir="left" className="section-heading">
       <h2>Recently added</h2>
       <button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">
         View library
       </button>
-    </div>
+    </DgReveal>
     <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} />
   </div>
 </> : isReady && !storageError ? <div className="empty-state">
@@ -2134,17 +2340,17 @@ useEffect(() => {
                 { id: 'songs' as Page, label: 'All songs', icon: Music2, count: countLabel(tracks.length, 'song') },
               ]).map((entry, index) => {
                 const Icon = entry.icon;
-                return <button
-                  className="library-card dg-rise"
-                  key={entry.id}
-                  style={{ '--dg-i': Math.min(index, 6) } as CSSProperties}
-                  onClick={() => setPageAndRoute(entry.id)}
-                  data-testid={`library-${entry.id}`}
-                >
-                  <span className="library-card-icon"><Icon /></span>
-                  <span className="library-card-copy"><strong>{entry.label}</strong><small>{entry.count}</small></span>
-                  <ChevronDown className="library-card-chevron" aria-hidden="true" />
-                </button>;
+                return <DgReveal key={entry.id} dir="depth" index={index}>
+                  <button
+                    className="library-card"
+                    onClick={() => setPageAndRoute(entry.id)}
+                    data-testid={`library-${entry.id}`}
+                  >
+                    <span className="library-card-icon"><Icon /></span>
+                    <span className="library-card-copy"><strong>{entry.label}</strong><small>{entry.count}</small></span>
+                    <ChevronDown className="library-card-chevron" aria-hidden="true" />
+                  </button>
+                </DgReveal>;
               })}
             </div>
           </div>}
@@ -2159,65 +2365,74 @@ useEffect(() => {
               </div>
             </div>
             {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
-            {detail?.kind === 'album' || detail?.kind === 'artist' ? <div className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></div> : null}
-            {page === 'songs' && (
+            {detail?.kind === 'album' || detail?.kind === 'artist' ? <DgReveal as="div" dir="depth" className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></DgReveal> : null}
+            {['songs', 'playlists', 'favorites', 'queue', 'downloads'].includes(page) && (
               <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="crumb">Audio files imported into VOID</span>
+                <span className="crumb">
+                  {page === 'songs' ? 'Audio files imported into VOID' : page === 'playlists' ? `Playlist: ${detail?.name ?? ''}` : page === 'favorites' ? 'Your favorite songs' : page === 'downloads' ? 'Saved for offline listening' : 'Current playback queue'}
+                </span>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {selectedSongIds.length > 0 && (
+                  {selectionMode && selectedSongIds.length > 0 && (
                     <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
                       <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
                     </button>
                   )}
-                  <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>
+                  {selectionMode && (
+                    <button className="button" onClick={() => toggleSelectAllSongs(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks)} data-testid="button-select-all">
+                      {(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)) ? 'Deselect All' : 'Select All'}
+                    </button>
+                  )}
+                  {page === 'songs' && <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>}
                 </div>
               </div>
             )}
             {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
-            {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
-              const representative = tracks.find(track => track.album === name);
-              return <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large identity={`album:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(tracks.filter(track => track.album === name).length, 'song')}</div></button>;
+            {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map((name, i) => {
+              const representative = canonicalTracks.find(track => track.album === name);
+              return <DgReveal key={name} dir="depth" index={i}><button className="cover-card" onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large identity={`album:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(canonicalTracks.filter(track => track.album === name).length, 'song')}</div></button></DgReveal>;
             })}</div> : <EmptyLibrary label="No albums yet" onImport={openImport} /> : null}
             {page === 'artists' && !detail ? artistNames.length ? (
               <>
                 <style>{`
                   .cover-card:hover .artist-badge { opacity: 0; visibility: hidden; }
-                  .artist-badge { transition: all 0.2s ease-in-out; }
+                  .artist-badge { transition: opacity .2s ease-in-out, visibility .2s ease-in-out; }
                 `}</style>
                 <div className="cover-grid">
-                  {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map(name => {
-                    const representative = tracks.find(track => {
+                  {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map((name, i) => {
+                    const representative = canonicalTracks.find(track => {
                       const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
                       return artists.includes(name.toLowerCase());
                     });
-                    const songCount = tracks.filter(track => {
+                    const songCount = canonicalTracks.filter(track => {
                       const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
                       return artists.includes(name.toLowerCase());
                     }).length;
                     return (
-                      <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`} style={{ alignItems: 'center', textAlign: 'center' }}>
-                        <div style={{ position: 'relative', width: '130px', height: '130px', margin: '0 auto 12px' }}>
-                          <div style={{ width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden' }}>
-                            <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                      <DgReveal key={name} dir="depth" index={i}>
+                        <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`} style={{ alignItems: 'center', textAlign: 'center' }}>
+                          <div style={{ position: 'relative', width: '130px', height: '130px', margin: '0 auto 12px' }}>
+                            <div style={{ width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden' }}>
+                              <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                            </div>
+                            <div className="artist-badge" style={{ position: 'absolute', top: '2px', right: '4px', transform: 'translate(50%, -50%)', color: 'hsl(142, 71%, 45%)', fontSize: '16px', fontWeight: '900', textShadow: '0px 2px 4px rgba(0,0,0,0.7)', zIndex: 2 }}>
+                              {songCount}
+                            </div>
                           </div>
-                          <div className="artist-badge" style={{ position: 'absolute', top: '2px', right: '4px', transform: 'translate(50%, -50%)', color: 'hsl(142, 71%, 45%)', fontSize: '16px', fontWeight: '900', textShadow: '0px 2px 4px rgba(0,0,0,0.7)', zIndex: 2 }}>
-                            {songCount}
-                          </div>
-                        </div>
-                        <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
-                      </button>
+                          <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                        </button>
+                      </DgReveal>
                     );
                   })}
                 </div>
               </>
             ) : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
             {page === 'playlists' && !detail && <div className="cover-grid">
-              {playlists.map(playlist => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button>; })}
+              {playlists.map((playlist, i) => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <DgReveal key={playlist.id} dir="depth" index={i}><button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button></DgReveal>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (filteredTracks.length ? (
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || page === 'downloads' || detail) && ((page === 'downloads' ? downloadedTracks : filteredTracks).length ? (
               <TrackRows 
-                items={page === 'queue' ? queueTracks : filteredTracks} 
+                items={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks : filteredTracks) as Track[]} 
                 showIndex={page === 'queue'} 
                 reorder={page === 'queue' || detail?.kind === 'playlist'} 
                 activeId={activeId} 
@@ -2226,10 +2441,11 @@ useEffect(() => {
                 actions={rowActions} 
                 selectedIds={selectedSongIds}
                 toggleSelect={toggleSelectSong}
-                toggleSelectAll={() => toggleSelectAllSongs(filteredTracks)}
-                isAllSelected={filteredTracks.length > 0 && selectedSongIds.length === filteredTracks.length}
+                toggleSelectAll={toggleSelectionMode}
+                isAllSelected={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id))}
+                selectionMode={selectionMode}
               />
-            ) : <EmptyLibrary label={page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
+            ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
           {!libraryOpen && page === 'settings' && <div className="dg-page" key="settings"><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
@@ -2460,9 +2676,12 @@ useEffect(() => {
             const sourceLabel = isYouTube ? 'void' : 'VOID';
 
             return (
-              <button
+              <div
                 key={`api-${track.id}`}
-                className="palette-result"
+                className="palette-result search-music-result"
+                role="button"
+                tabIndex={0}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPaletteOpen(false); void playTrack({ id: `api-${track.id}`, title: track.name, artist: track.artist, album: track.album, fileName: `${track.name}.audio`, audioUrl: track.downloadUrl, src: track.downloadUrl, image: track.image, duration: track.duration } as any); } }}
                 onClick={() => {
                   const apiTrack = {
                     id: `api-${track.id}`,
@@ -2486,10 +2705,15 @@ useEffect(() => {
                   <span className="track-title">{track.name}</span>
                   <span className="track-sub">{track.artist}</span>
                 </span>
-                <span className="crumb" style={{ marginLeft: 'auto' }}>
-                  {sourceLabel}
+                <span className="search-result-actions">
+                  <button className={`download-icon-button${downloadingIds.includes(String(track.id)) ? ' is-downloading' : ''}`} aria-label={`Download ${track.name}`} title={/^[\w-]{11}$/.test(String(track.id)) ? 'Direct downloads are not available for this provider' : downloadingIds.includes(String(track.id)) ? 'Saving offline…' : `Save ${track.name} for offline listening`} disabled={downloadingIds.includes(String(track.id)) || /^[\w-]{11}$/.test(String(track.id))} onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}>
+                    <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                      <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <span className="crumb search-source-label">{sourceLabel}</span>
                 </span>
-              </button>
+              </div>
             );
           })}
 
@@ -2585,7 +2809,21 @@ useEffect(() => {
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
        {modal === 'add-to-playlist' ? <>
         <p>Choose where “{contextTrack?.title}” belongs.</p>
-        {playlists.length ? playlists.map(playlist => <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}><ListMusic size={15} />{playlist.name}<span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span></button>) : <p>Create a playlist first, then add songs from their menus.</p>}
+        {playlists.length > 0 ? (
+          playlists.map(playlist => (
+            <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}>
+              <ListMusic size={15} />{playlist.name}
+              <span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span>
+            </button>
+          ))
+        ) : (
+          <div style={{ padding: '12px 0' }}>
+            <p style={{ margin: '0 0 12px' }}>No playlists found.</p>
+            <button className="button primary" onClick={() => { setModal(null); window.setTimeout(() => { setModalValue(''); setModal('playlist'); }, 0); }} data-testid="button-create-from-modal">
+              <Plus size={14} /> Create a playlist
+            </button>
+          </div>
+        )}
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-add-playlist">Close</button></div>
        </> : modal === 'properties' && contextTrack ? <>
          <p>File information stored with your local library.</p>
@@ -2606,7 +2844,7 @@ useEffect(() => {
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-playlist">Cancel</button><button className="button primary" disabled={!modalValue.trim()} onClick={() => modal === 'playlist' ? void createPlaylist() : void renamePlaylist()} data-testid="button-save-playlist">{modal === 'playlist' ? 'Create playlist' : 'Save name'}</button></div>
       </>}
     </div></div>}
-    {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
+    {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && modal !== 'playlist' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
       <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {contextTrack.fileName}</p>
       <button className="palette-result" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
       <button className="palette-result" onClick={() => { addToQueue(contextTrack); setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
@@ -2704,7 +2942,7 @@ const core: VoidCore = {
   toggleMute,
   cycleRepeat,
 
-  page,
+  page: page as VoidCore['page'],
   detail,
   setDetail,
   query,
