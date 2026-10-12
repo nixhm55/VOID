@@ -483,7 +483,7 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .track-table td:last-child { border-radius: 0 var(--r-md) var(--r-md) 0; }
 .track-table tbody tr:hover td { background: var(--hover); }
 .track-table tr.current td { background: var(--active); color: hsl(var(--foreground)); }
-.track-main { display: flex; align-items: center; gap: 14px; min-width: 190px; color: hsl(var(--foreground)); }
+.track-main { display: flex; align-items: center; gap: 14px; min-width: 0; color: hsl(var(--foreground)); }
 /* Shared selection motion: keep a real zero-width gutter mounted so every list animates identically. */
 .table-wrap,
 .table-wrap:has(.track-table) {
@@ -493,12 +493,17 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .track-table { box-sizing: border-box; table-layout: fixed; width: 100%; }
 /* Lock the glass/table geometry: selection must animate inside each row, never resize the panel. */
 .table-wrap:has(.track-table) { contain: layout; }
-.track-table tbody tr > td:first-child { width: 54%; }
-.track-table tbody tr > td:nth-child(2) { width: 28%; }
+.track-table tbody tr > td:first-child { width: 54%; min-width: 0; overflow: hidden; }
+.track-table tbody tr > td:nth-child(2) { width: 28%; min-width: 0; overflow: hidden; }
+.track-table tbody tr > td:nth-child(2) .crumb { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .track-table tbody tr > td:nth-child(3) { width: 10%; }
 .track-table tbody tr > td:last-child { width: 8%; }
 .track-table tbody tr > td:first-child > div { min-width: 0; width: 100%; box-sizing: border-box; }
 .track-table tbody tr > td:first-child > div > .track-main { flex: 1 1 auto; min-width: 0; max-width: 100%; transition: transform .34s var(--ease-out-soft); }
+.track-table .track-main > div:has(> .cover-mini) { flex: 0 0 44px; width: 44px; height: 44px; overflow: hidden; }
+.track-table .track-main > button.track-main { flex: 1 1 0%; min-width: 0; width: 0; overflow: hidden; }
+.track-table .track-main > button.track-main > span { display: block; min-width: 0; width: 100%; overflow: hidden; }
+.track-table .track-main .track-title, .track-table .track-main .track-sub { width: 100%; max-width: 100%; box-sizing: border-box; }
 .track-table tbody tr.selection-mode > td:first-child > div > .track-main { transform: translateX(0); }
 .track-table tbody tr > td:first-child > div > .track-selection-gutter { width: 0; flex: 0 0 0; }
 .track-table tbody tr.selection-mode > td:first-child > div > .track-selection-gutter { width: 32px; flex: 0 0 32px; }
@@ -564,11 +569,6 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .detail-hero h1 { font-size: 44px; letter-spacing: -.035em; font-weight: 600; margin: 8px 0; line-height: 1.06; overflow-wrap: anywhere; text-wrap: balance; }
 .detail-hero p { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 0; }
 
-
-/* Home: the content column enters with the same page-in as every other route
-   (.dg-page), so page entrances stay consistent; the greeting, hero and mood then
-   follow through the single reveal system below. */
-.home-content { animation: dg-page-in .75s var(--ease-out-soft) both; }
 
 /* ───────────────────────── Settings ───────────────────────── */
 .settings-section { max-width: 720px; margin-top: 34px; }
@@ -797,6 +797,11 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .download-icon-button:active:not(:disabled) { transform: scale(.94); }
 .download-icon-button:disabled { opacity: .72; cursor: progress; }
 .download-icon-button.is-downloading svg { animation: void-download-pulse .85s ease-in-out infinite alternate; }
+.download-icon-button.is-download-success { color: #35c96b; opacity: 1; transform: none; pointer-events: none; }
+.download-icon-button.is-download-success svg { animation: download-check-arrive .22s ease-out both; }
+.download-icon-button .download-success-check { stroke-dasharray: 18; stroke-dashoffset: 18; animation: download-check-draw .28s cubic-bezier(.2,.75,.25,1) .04s forwards; }
+@keyframes download-check-arrive { from { transform: scale(.82) rotate(-8deg); opacity: .35; } to { transform: scale(1) rotate(0); opacity: 1; } }
+@keyframes download-check-draw { to { stroke-dashoffset: 0; } }
 @keyframes void-download-pulse { from { opacity: .55; transform: translateY(-1px); } to { opacity: 1; transform: translateY(1px); } }
 @media (hover: none), (pointer: coarse) { .download-icon-button { opacity: 1; transform: none; pointer-events: auto; } }
 
@@ -1025,10 +1030,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .track-table td { padding: 6px 8px; height: 58px; }
   .track-table td:last-child { width: 1%; }
   .table-wrap { padding: 4px 6px 6px; }
-  .track-main { min-width: 150px; gap: 10px; }
-  .cover-mini { width: 38px; height: 38px; }
-  .track-title { max-width: calc(100vw - 230px); }
-  .track-sub { max-width: calc(100vw - 230px); }
+  .track-main { min-width: 0; gap: 10px; }
+  .track-table .track-main > div:has(> .cover-mini) { flex: 0 0 38px; width: 38px; height: 38px; }
+  .cover-mini { flex-shrink: 0; }
+  .track-title, .track-sub { max-width: 100%; }
   .row-actions { opacity: .85; }
   .row-actions .icon-button { width: 30px; height: 30px; }
   .filter-input { width: 150px; max-width: 43vw; }
@@ -1059,14 +1064,14 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .np-side { display: flex; width: 100%; padding: 0; }
   .np-lyrics { flex: none; min-height: 120px; font-size: 18px; overflow: visible; -webkit-mask-image: none; mask-image: none; }
   .np-dock { right: 16px; bottom: 16px; }
-  .toast-stack { left: 12px; right: 12px; bottom: calc(var(--player-h) + var(--float) + 78px); }
+  .toast-stack { left: 12px; right: 12px; bottom: calc(var(--player-h) + var(--float) + 78px); z-index: 120; }
   .toast-item { max-width: none; }
   .modal { padding: 22px; }
 }
 @media (max-width: 380px) {
   .content { padding-left: 14px; padding-right: 14px; }
   .welcome .page-title { font-size: 33px; }
-  .track-main { min-width: 128px; }
+  .track-main { min-width: 0; }
   .row-actions .icon-button { width: 27px; }
   .player-controls { gap: 2px; }
 }
@@ -1449,6 +1454,9 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
    shared --dg-i unit. Transform/opacity only, so nothing here can trigger layout
    work while it runs. */
 .dg-page { animation: dg-page-in .75s var(--ease-out-soft) both; }
+/* Home and every routed main page share the same soft blur + fade entrance. */
+.home-content { animation: dg-page-in .75s var(--ease-out-soft) both; }
+.content:not(.home-content) > .dg-page { animation: dg-page-in .75s var(--ease-out-soft) both; }
 @keyframes dg-page-in {
   from { opacity: 0; transform: translate3d(0, 10px, 0); filter: blur(6px); }
   to { opacity: 1; transform: none; filter: none; }
@@ -1472,11 +1480,18 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 /* Song rows: a gentle slide, no blur and no layer hint — there can be hundreds of them.
    Rows keep the original 32 ms stagger step (the driver caps --dg-i at 8 rungs). */
 [data-dg-r='row'] {
-  transform: translate3d(-14px, 0, 0);
+  /* Track rows reveal from the left as they enter the scroll viewport. */
+  transform: translate3d(-28px, 0, 0);
+  filter: blur(2px);
   will-change: auto;
-  transition-duration: .5s, .65s;
+  transition-duration: .62s, .78s, .62s;
   transition-delay: calc(var(--dg-i, 0) * 32ms);
 }
+.home-content .track-table tbody [data-dg-r='row'] {
+  transform: translate3d(-34px, 0, 0);
+  transition-duration: .7s, .88s, .7s;
+}
+
 /* Grid cards settle with the page beat: the full-depth drift is shortened so a card
    grid finishes just as its page entrance does, and long cover walls don't drift in
    unison after the stagger cap. */
@@ -1757,4 +1772,150 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .track-table tr.current td:first-child::before { transform: translateY(-50%); }
   .home-content .welcome { transform: none; opacity: 1; }
   .mobile-nav-item.active svg { transform: none; }
+}
+
+/* Mobile search palette: size to the phone viewport rather than the desktop dialog. */
+@media (max-width: 600px) {
+  .modal-backdrop {
+    box-sizing: border-box;
+    padding: 12px;
+    place-items: start center;
+    overflow: hidden;
+  }
+  .modal-backdrop > .palette {
+    box-sizing: border-box;
+    width: calc(100vw - 24px);
+    max-width: 580px;
+    min-width: 0;
+    max-height: calc(100dvh - 24px);
+    margin: 8vh 0 0;
+    padding: 8px;
+    overflow: hidden;
+  }
+  .palette-input {
+    box-sizing: border-box;
+    height: 44px;
+    padding: 0 10px;
+    font-size: 14px;
+  }
+  .palette-results {
+    box-sizing: border-box;
+    max-height: calc(100dvh - 190px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .palette-result {
+    box-sizing: border-box;
+    min-width: 0;
+    gap: 9px;
+    padding: 8px;
+    font-size: 12px;
+  }
+  .palette-result > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+  /* Keep search-result actions pinned to the right regardless of title length. */
+  .search-music-result > span:not(.search-result-actions) {
+    flex: 1 1 0%;
+    min-width: 0;
+  }
+  .search-music-result > .search-result-actions {
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
+    overflow: visible;
+  }
+  .palette-result .track-title,
+  .palette-result .track-sub {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .palette-result .cover-mini {
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* Mobile: only show the mini-player after a track has been loaded. */
+@media (max-width: 760px) {
+  .player-bar[data-idle] {
+    display: none !important;
+  }
+}
+
+
+/* Align Recently Added row content with the other track lists without moving its headings.
+   The Home reveal selector is more specific than the shared [data-in] reset, so settled rows
+   were retaining a leftward transform. Keep the reveal subtle, then clear it when settled. */
+.home-content .recently-added-track-wrap .track-table tbody tr > td:first-child > div {
+  padding-left: 0;
+  box-sizing: border-box;
+}
+.home-content .recently-added-track-wrap .track-table tbody [data-dg-r='row'][data-in] {
+  transform: none;
+  filter: none;
+}
+
+/* Keep Home's Recently added list aligned with the Songs list on narrow screens.
+   The row reveal should not push the artwork outside the clipped table viewport. */
+@media (max-width: 600px) {
+  .recently-added-track-wrap {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin-left: 0;
+    padding-left: 0;
+    padding-right: 0;
+    overflow-x: clip;
+    box-sizing: border-box;
+  }
+  .recently-added-track-wrap .track-table {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    table-layout: fixed;
+  }
+  .recently-added-track-wrap .track-table tbody tr > td:first-child {
+    padding-left: 10px;
+  }
+  /* Preserve the reveal fade, but prevent the initial left offset from clipping covers. */
+  .home-content .recently-added-track-wrap .track-table tbody tr[data-dg-r='row']:not([data-in]) {
+    transform: translate3d(-8px, 0, 0);
+  }
+}
+
+/* Notification placement: keep every toast just above the mobile bottom navigation. */
+@media (max-width: 768px) {
+  .toast-stack {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: calc(64px + env(safe-area-inset-bottom) + 8px) !important;
+    z-index: 200 !important;
+    display: flex !important;
+    justify-content: center !important;
+    pointer-events: none;
+  }
+  .toast-item {
+    width: max-content;
+    max-width: min(100%, 360px) !important;
+    pointer-events: auto;
+  }
+}
+
+/* Desktop toast remains at the lower edge instead of floating near the player. */
+@media (min-width: 769px) {
+  .toast-stack {
+    right: 24px;
+    bottom: calc(var(--float) + 18px);
+    z-index: 200;
+  }
 }

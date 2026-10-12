@@ -1,7 +1,7 @@
 import './paperGlass.css';
-import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  AudioLines, ChevronUp, Clock3, Disc3, Heart, Home, ListMusic, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus,
+  AudioLines, BookOpen, ChevronUp, Clock3, Disc3, Heart, Home, ListMusic, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus,
   Repeat, Repeat1, Search, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Check,
 } from 'lucide-react';
 import { DESIGN_OPTIONS, type DesignId, type Page, type VoidCore } from '../core/voidCore';
@@ -26,7 +26,7 @@ const MOBILE_NAV: { id: Page; icon: typeof Home; label: string }[] = [
   { id: 'home', icon: Home, label: 'Home' },
   { id: 'songs', icon: Music2, label: 'Songs' },
   { id: 'favorites', icon: Heart, label: 'Favorites' },
-  { id: 'playlists', icon: ListMusic, label: 'Playlists' },
+  { id: 'songs', icon: BookOpen, label: 'Library' },
   { id: 'settings', icon: Settings, label: 'Settings' },
 ];
 const FONT_PREVIEW = 'A quiet place for your music';
@@ -37,6 +37,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const homeRef = useRef<HTMLDivElement>(null);
   const discRef = useRef<HTMLDivElement>(null);
   const discFrame = useRef(0);
+  const [fontPanelOpen, setFontPanelOpen] = useState(false);
   const isHome = page === 'home' && !detail;
 
   useScrollVar(mainRef, homeRef, [isHome, c.isReady]);
@@ -284,14 +285,14 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
             {DESIGN_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
           </select></div>
 
-        <div className="pg-group-head"><h2>Font</h2><span>Applies across VOID</span></div>
-        <div className="pg-fonts" role="radiogroup" aria-label="Font" data-testid="font-panel">
+        <button className="pg-group-head pg-group-toggle" type="button" aria-expanded={fontPanelOpen} aria-controls="pg-font-panel" onClick={() => setFontPanelOpen(open => !open)} data-testid="toggle-font-panel"><span><h2>Font</h2><small>Applies across VOID</small></span><ChevronUp className={fontPanelOpen ? 'pg-font-chevron is-open' : 'pg-font-chevron'} /></button>
+        {fontPanelOpen && <div id="pg-font-panel" className="pg-fonts" role="radiogroup" aria-label="Font" data-testid="font-panel">
           {c.fontOptions.map(option => {
             const disabled = !!option.note;
             const selected = c.fontId === option.id && !disabled;
             return (
               <div className={`pg-font${selected ? ' is-selected' : ''}`} key={option.id}>
-                <button className="pg-font-pick" role="radio" aria-checked={selected} disabled={disabled} onClick={() => c.setFontId(option.id)} data-testid={`font-option-${option.id}`}>
+                <button className="pg-font-pick" role="radio" aria-checked={selected} disabled={disabled} onClick={() => { c.setFontId(option.id); setFontPanelOpen(false); }} data-testid={`font-option-${option.id}`}>
                   <span className="pg-font-check" aria-hidden="true">{selected ? <Check /> : null}</span>
                   <span className="pg-font-copy">
                     <span className="pg-font-name">{option.name}<em>{option.tag}</em></span>
@@ -305,7 +306,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
           <button className="pg-font-import" onClick={() => c.fontInput.current?.click()} disabled={c.fontBusy} data-testid="button-import-font">
             <span className="pg-font-check" aria-hidden="true"><Plus /></span>{c.fontBusy ? 'Adding font…' : 'Import Font'}<small>.ttf · .otf · .woff · .woff2</small>
           </button>
-        </div>
+        </div>}
 
         <div className="pg-group-head"><h2>Playback</h2></div>
         <div className="pg-setting"><div><strong>Autoplay</strong><p>Continue through the queue when a song ends.</p></div>

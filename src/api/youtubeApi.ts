@@ -1,5 +1,5 @@
-const BACKEND_URL = 'https://void-backend-n0jb.onrender.com';
-
+export const SEARCH_BACKEND_URL = 'https://void-backend-beta.vercel.app';
+export const STREAM_BACKEND_URL = 'https://void-backend-n0jb.onrender.com';
 
 export interface YouTubeSearchResult {
   id: string;
@@ -15,20 +15,20 @@ export async function searchYouTube(query: string): Promise<YouTubeSearchResult[
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
 
-  // A Vite-hosted frontend cannot reach the developer's localhost backend after deployment.
-  // Configure VITE_YOUTUBE_API_URL to the publicly deployed backend URL in Vercel.
-  if (!BACKEND_URL) {
-    console.error('YouTube video search is not configured. Set VITE_YOUTUBE_API_URL to your deployed YouTube backend URL.');
+  if (!SEARCH_BACKEND_URL) {
+    console.error('YouTube video search is not configured. Set SEARCH_BACKEND_URL to your deployed YouTube backend URL.');
     return [];
   }
 
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 12000);
+  const timeout = window.setTimeout(() => controller.abort(), 25000);
+  
   try {
     const response = await fetch(
-      `${BACKEND_URL}/search?q=${encodeURIComponent(cleanQuery)}`,
+      `${SEARCH_BACKEND_URL}/search?q=${encodeURIComponent(cleanQuery)}`,
       { signal: controller.signal }
     );
+    
     if (!response.ok) throw new Error(`YouTube backend returned HTTP ${response.status}`);
 
     const payload: unknown = await response.json();
@@ -41,18 +41,34 @@ export async function searchYouTube(query: string): Promise<YouTubeSearchResult[
     return rows
       .map((row: any) => {
         const id = String(row?.id || row?.videoId || row?.video_id || '');
+        let rawDownloadUrl = String(row?.downloadUrl || '');
+        
+        if (rawDownloadUrl) {
+          try {
+            const urlObj = new URL(rawDownloadUrl);
+            rawDownloadUrl = `${STREAM_BACKEND_URL}${urlObj.pathname}${urlObj.search}`;
+          } catch (e) {
+            // Fallback if parsing fails
+          }
+        }
+
         return {
           id,
           name: String(row?.name || row?.title || cleanQuery),
           album: String(row?.album || ''),
           artist: String(row?.artist || ''),
           image: String(row?.image || row?.thumbnail || ''),
-          downloadUrl: String(row?.downloadUrl || ''),
+          downloadUrl: rawDownloadUrl,
           duration: Number(row?.duration) || 0,
         } satisfies YouTubeSearchResult;
       })
       .filter((row: YouTubeSearchResult) => /^[\w-]{11}$/.test(row.id));
+      
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.log('YouTube search request was cancelled or timed out.');
+      return [];
+    }
     console.error('YouTube backend search error:', error);
     return [];
   } finally {

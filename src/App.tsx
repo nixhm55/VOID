@@ -717,12 +717,12 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </span>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "" }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string;
 }) {
   const isSelectionSupported = ['songs', 'playlists', 'favorites', 'artists', 'recent', 'queue', 'downloads'].includes(page);
   const isSelectionMode = selectionMode;
-  return <div className="table-wrap">
+  return <div className={`table-wrap${className ? ` ${className}` : ""}`}>
     <table className="track-table">
       <thead>
         <tr>
@@ -890,7 +890,25 @@ function openVoidDownloadDb(): Promise<IDBDatabase> {
 }
 async function putVoidDownload(record: VoidDownloadRecord): Promise<void> {
   const db = await openVoidDownloadDb();
-  try { await new Promise<void>((resolve, reject) => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').put(record); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error || new Error('Could not save download.')); tx.onabort = () => reject(tx.error || new Error('Download save was cancelled.')); }); } finally { db.close(); }
+  const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('tracks', 'readwrite');
+      const store = tx.objectStore('tracks');
+      // Track IDs are the storage identity. Never remove a different download just
+      // because its title/artist text matches; providers can return distinct tracks
+      // with identical metadata.
+const request = store.put(record);
+request.onerror = () => {
+  try {
+    tx.abort();
+  } catch {}
+};
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Could not save download.'));
+      tx.onabort = () => reject(tx.error || new Error('Download save was cancelled.'));
+    });
+  } finally { db.close(); }
 }
 async function getVoidDownloads(): Promise<VoidDownloadRecord[]> {
   const db = await openVoidDownloadDb();
@@ -906,6 +924,7 @@ function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [downloadedTracks, setDownloadedTracks] = useState<any[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<string[]>([]);
+  const [recentlyDownloadedIds, setRecentlyDownloadedIds] = useState<string[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [prefs, setPrefs] = useState<Preferences>(() => {
     try {
@@ -1277,11 +1296,16 @@ useEffect(() => {
       const blobUrl = URL.createObjectURL(blob);
       const coverUrl = coverBlob ? URL.createObjectURL(coverBlob) : record.image;
       setDownloadedTracks(previous => {
-        const old = previous.find(item => item.id === `download:${id}`);
-        if (old?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(old.audioUrl);
-        return [{ ...record, image: coverUrl, id: `download:${id}`, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: blob.size, importedAt: record.downloadedAt }, ...previous.filter(item => item.id !== `download:${id}`)];
+        const existing = previous.find(item => String(item.id).replace(/^download:/, '') === id);
+        if (existing?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(existing.audioUrl);
+        if (existing?.image?.startsWith('blob:')) URL.revokeObjectURL(existing.image);
+        const next = { ...record, image: coverUrl, id: `download:${id}`, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: blob.size, importedAt: record.downloadedAt };
+        return [next, ...previous.filter(item => String(item.id).replace(/^download:/, '') !== id)];
       });
-      notify('Saved for offline listening on this device.');
+      setRecentlyDownloadedIds(previous => [...previous.filter(item => item !== id), id]);
+      window.setTimeout(() => {
+        setRecentlyDownloadedIds(previous => previous.filter(item => item !== id));
+      }, 1100);
     } catch (error) {
       notify(error instanceof Error && /Failed to fetch|NetworkError|CORS/i.test(error.message)
         ? 'This provider blocks browser downloads for this result.'
@@ -1316,7 +1340,10 @@ useEffect(() => {
     let cancelled = false;
     void getVoidDownloads().then(records => {
       if (cancelled) return;
-      setDownloadedTracks(records.sort((a, b) => b.downloadedAt - a.downloadedAt).map(record => { const blobUrl = URL.createObjectURL(record.blob); const coverUrl = record.coverBlob ? URL.createObjectURL(record.coverBlob) : record.image; return { ...record, image: coverUrl, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: record.blob.size, importedAt: record.downloadedAt, id: `download:${record.id}` }; }));
+      const uniqueRecords = records
+        .sort((a, b) => b.downloadedAt - a.downloadedAt)
+        .filter((record, index, all) => all.findIndex(candidate => candidate.id === record.id) === index);
+      setDownloadedTracks(uniqueRecords.map(record => { const blobUrl = URL.createObjectURL(record.blob); const coverUrl = record.coverBlob ? URL.createObjectURL(record.coverBlob) : record.image; return { ...record, image: coverUrl, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: record.blob.size, importedAt: record.downloadedAt, id: `download:${record.id}` }; }));
     }).catch(() => { /* Downloads remain optional when browser storage is unavailable. */ });
     return () => { cancelled = true; };
   }, []);
@@ -2050,7 +2077,23 @@ useEffect(() => {
     });
   }, [canonicalTracks, detail, downloadedTracks, page, playlists, query, splitArtists]);
 
-  const queueTracks = useMemo(() => queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track), [queue, tracks]);
+  const queueTracks = useMemo(() => {
+    const canonicalById = new Map(canonicalTracks.map(track => [track.id, track]));
+    const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+    const seen = new Set<string>();
+    return queue.map(id => {
+      const original = tracks.find(track => track.id === id);
+      if (!original) return undefined;
+      const canonical = canonicalById.get(id) || canonicalTracks.find(track => normalize(track.title) === normalize(original.title) && normalize(track.artist) === normalize(original.artist));
+      return canonical;
+    }).filter((track): track is Track => {
+      if (!track) return false;
+      const key = `${normalize(track.title)}|${normalize(track.artist)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [canonicalTracks, queue, tracks]);
   const albumNames = useMemo(() => [...new Set(canonicalTracks.map(track => track.album))], [canonicalTracks]);
   const artistNames = useMemo(() => {
     const set = new Set<string>();
@@ -2313,7 +2356,7 @@ useEffect(() => {
         View library
       </button>
     </DgReveal>
-    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} />
+    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} className="recently-added-track-wrap" />
   </div>
 </> : isReady && !storageError ? <div className="empty-state">
   <strong>Your library is waiting.</strong>
@@ -2332,12 +2375,12 @@ useEffect(() => {
             </div>
             <div className="library-grid">
               {([
+                { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: countLabel(downloadedTracks.length, 'download') },
                 { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(albumNames.length, 'album') },
                 { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(artistNames.length, 'artist') },
                 { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
                 { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(track => track.lastPlayedAt).length} played` },
                 { id: 'queue' as Page, label: 'Queue', icon: AudioLines, count: countLabel(queueTracks.length, 'song') },
-                { id: 'songs' as Page, label: 'All songs', icon: Music2, count: countLabel(tracks.length, 'song') },
               ]).map((entry, index) => {
                 const Icon = entry.icon;
                 return <DgReveal key={entry.id} dir="depth" index={index}>
@@ -2570,15 +2613,14 @@ useEffect(() => {
         })}
       </nav>
     
-    <div 
+    {activeTrack && <div 
       className="player-bar" 
       data-testid="player-bar" 
-      data-idle={activeTrack ? undefined : ''} 
       data-np={expanded ? '' : undefined}
     >
       <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
-        <span><span className="track-title">{activeTrack?.title ?? 'Nothing playing'}</span><span className="track-sub">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
+        <span><span className="track-title">{activeTrack?.title ?? ''}</span><span className="track-sub">{activeTrack?.artist ?? ''}</span></span>
       </div>
       
       <button className="icon-button mobile-mini-play" onClick={(e) => { e.stopPropagation(); void togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}>
@@ -2605,7 +2647,7 @@ useEffect(() => {
         <button className="icon-button extra-fade" aria-label="Expand now playing" title="Now playing" onClick={openExpanded} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
         <VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="button-mute" inputTestId="input-volume" />
       </div>
-    </div>
+    </div>}
     <input ref={fileInput} type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.alac" multiple hidden onChange={event => { if (event.target.files) void importFiles(event.target.files); event.target.value = ''; }} data-testid="input-import-files" />
     <input ref={element => { folderInput.current = element; element?.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden onChange={event => { if (event.target.files) void autoImport(event.target.files); event.target.value = ''; }} data-testid="input-import-folder" />
     <input ref={fontInput} type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFont(file); }} data-testid="input-import-font" />
@@ -2706,11 +2748,17 @@ useEffect(() => {
                   <span className="track-sub">{track.artist}</span>
                 </span>
                 <span className="search-result-actions">
-                  <button className={`download-icon-button${downloadingIds.includes(String(track.id)) ? ' is-downloading' : ''}`} aria-label={`Download ${track.name}`} title={/^[\w-]{11}$/.test(String(track.id)) ? 'Direct downloads are not available for this provider' : downloadingIds.includes(String(track.id)) ? 'Saving offline…' : `Save ${track.name} for offline listening`} disabled={downloadingIds.includes(String(track.id)) || /^[\w-]{11}$/.test(String(track.id))} onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}>
-                    <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
-                      <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
+                  {(!downloadedTracks.some((item: any) => String(item.id ?? '').replace(/^download:/, '') === String(track.id)) || recentlyDownloadedIds.includes(String(track.id))) && (
+                    <button className={`download-icon-button${downloadingIds.includes(String(track.id)) ? ' is-downloading' : ''}${recentlyDownloadedIds.includes(String(track.id)) ? ' is-download-success' : ''}`} aria-label={recentlyDownloadedIds.includes(String(track.id)) ? `Downloaded ${track.name}` : `Download ${track.name}`} title={recentlyDownloadedIds.includes(String(track.id)) ? 'Downloaded' : downloadingIds.includes(String(track.id)) ? 'Saving offline…' : `Save ${track.name} for offline listening`} disabled={downloadingIds.includes(String(track.id)) || recentlyDownloadedIds.includes(String(track.id)) || /^[\w-]{11}$/.test(String(track.id))} onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}>
+                      <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                        {recentlyDownloadedIds.includes(String(track.id)) ? (
+                          <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                        ) : (
+                          <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                        )}
+                      </svg>
+                    </button>
+                  )}
                   <span className="crumb search-source-label">{sourceLabel}</span>
                 </span>
               </div>
@@ -2801,6 +2849,7 @@ useEffect(() => {
               Search your local songs and Jamendo.
             </div>
           )}
+
 
         </div>
       </div>
