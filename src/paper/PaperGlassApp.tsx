@@ -1,16 +1,17 @@
 import './paperGlass.css';
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  AudioLines, BookOpen, ChevronUp, Clock3, Disc3, Heart, Home, ListMusic, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus,
-  Repeat, Repeat1, Search, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Check,
+  AudioLines, BookOpen, ChevronUp, Clock3, Disc3, Download, Heart, Home, ListMusic, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus,
+  Repeat, Repeat1, Search, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Check, X,
 } from 'lucide-react';
+
 import { DESIGN_OPTIONS, type DesignId, type Page, type VoidCore } from '../core/voidCore';
 import { Reveal, useScrollVar } from './motion';
 import {
   HandCircle, PgArtistPhoto, PgCover, PgEmpty, PgPlayIcon, PgTrackList, PgVolume,
   countLabel, fmt, fmtElapsed, formatBytes, rangeStyle,
 } from './parts';
-import { PgNowPlaying, PgOverlays } from './Overlays';
+import { PgOverlays, PgNowPlaying } from './Overlays';
 
 const NAV: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'library'; compact: boolean }[] = [
   { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
@@ -22,11 +23,11 @@ const NAV: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'libr
   { id: 'favorites', label: 'Favorites', icon: Heart, group: 'library', compact: true },
   { id: 'queue', label: 'Queue', icon: AudioLines, group: 'library', compact: false },
 ];
-const MOBILE_NAV: { id: Page; icon: typeof Home; label: string }[] = [
+const MOBILE_NAV: { id: Page | 'library'; icon: typeof Home; label: string }[] = [
   { id: 'home', icon: Home, label: 'Home' },
   { id: 'songs', icon: Music2, label: 'Songs' },
   { id: 'favorites', icon: Heart, label: 'Favorites' },
-  { id: 'songs', icon: BookOpen, label: 'Library' },
+  { id: 'library', icon: BookOpen, label: 'Library' },
   { id: 'settings', icon: Settings, label: 'Settings' },
 ];
 const FONT_PREVIEW = 'A quiet place for your music';
@@ -34,6 +35,7 @@ const FONT_PREVIEW = 'A quiet place for your music';
 export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const { tracks, playlists, page, detail, prefs, activeTrack, isPlaying } = c;
   const mainRef = useRef<HTMLDivElement>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const homeRef = useRef<HTMLDivElement>(null);
   const discRef = useRef<HTMLDivElement>(null);
   const discFrame = useRef(0);
@@ -69,10 +71,13 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const filterMatch = (name: string) => !c.query || name.toLowerCase().includes(c.query.toLowerCase());
   const artistTracks = (name: string) => tracks.filter(t => c.splitArtists(t.artist || '').map(x => x.toLowerCase()).includes(name.toLowerCase()));
   const openPlaylist = (name: string) => { c.setDetail({ kind: 'playlist', name }); c.setQuery(''); };
+  
+  const listItems = page === 'queue' ? c.queueTracks : ((page as string) === 'downloads' && (c as any).downloadedTracks ? (c as any).downloadedTracks : c.filteredTracks);
+  
   const listProps = {
     activeId: c.activeId, isPlaying, page, actions: c.rowActions,
-    selectedIds: c.selectedSongIds, toggleSelect: c.toggleSelectSong, toggleSelectAll: () => c.toggleSelectAllSongs(c.filteredTracks),
-    isAllSelected: c.filteredTracks.length > 0 && c.selectedSongIds.length === c.filteredTracks.length,
+    selectedIds: c.selectedSongIds, toggleSelect: c.toggleSelectSong, toggleSelectAll: () => c.toggleSelectAllSongs(listItems),
+    isAllSelected: listItems.length > 0 && c.selectedSongIds.length === listItems.length,
   };
 
   const navButton = (item: (typeof NAV)[number]) => {
@@ -98,7 +103,6 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
             <p className="pg-lede">A quiet place for the music already yours.</p>
             {tracks.length ? <p className="pg-meta">{countLabel(c.albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</p> : null}
           </div>
-          <button className="pg-btn pg-btn--ink" onClick={c.openImport} disabled={c.importing} data-testid="button-import-home"><Plus />{c.importing ? 'Adding files…' : 'Add music'}</button>
         </div>
       </section>
 
@@ -153,9 +157,8 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
     </div>
   );
 
-  const listItems = page === 'queue' ? c.queueTracks : c.filteredTracks;
   const emptyLabel = page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here'
-    : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet';
+    : page === 'queue' ? 'Your queue is clear' : (page as string) === 'downloads' ? 'No downloaded songs yet' : detail ? 'No songs in this collection' : 'No songs in your library yet';
 
   const library = (
     <div className="pg-page" key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`}>
@@ -195,12 +198,49 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         </Reveal>
       )}
 
-      {page === 'songs' && (
+      {(page === 'songs' || (page as string) === 'downloads') && (
         <div className="pg-toolbar">
-          <span className="pg-sub">Audio files imported into VOID</span>
+          <span className="pg-sub">{(page as string) === 'downloads' ? 'Saved for offline listening' : 'Audio files imported into VOID'}</span>
           <div className="pg-toolbar-end">
-            {c.selectedSongIds.length > 0 && <button className="pg-btn pg-btn--danger" onClick={() => void c.deleteSelectedSongs()} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>}
-            <button className="pg-btn" onClick={c.openImport} data-testid="button-add-songs"><Plus />Add music</button>
+            {c.selectedSongIds.length > 0 && <button className="pg-btn pg-btn--danger" onClick={() => {
+              const originalConfirm = window.confirm;
+              let confirmed = false;
+              window.confirm = (msg) => {
+                confirmed = originalConfirm(msg);
+                return confirmed;
+              };
+              
+              const finishDeletion = () => {
+                window.confirm = originalConfirm;
+                if (confirmed) {
+                  if (window.indexedDB) {
+                    const req = window.indexedDB.open('void-offline-downloads', 1);
+                    req.onsuccess = () => {
+                      const db = req.result;
+                      if (db.objectStoreNames.contains('tracks')) {
+                        const tx = db.transaction('tracks', 'readwrite');
+                        const store = tx.objectStore('tracks');
+                        c.selectedSongIds.forEach(id => {
+                          const realId = String(id).replace(/^download:/, '').replace(/^api-/, '');
+                          store.delete(realId);
+                        });
+                        tx.oncomplete = () => {
+                          db.close();
+                          setTimeout(() => window.location.reload(), 100);
+                        };
+                      } else {
+                        db.close();
+                      }
+                    };
+                  }
+                }
+              };
+              
+              const res = c.deleteSelectedSongs();
+              if (res instanceof Promise) res.finally(finishDeletion);
+              else finishDeletion();
+            }} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>}
+            {page === 'songs' && <button className="pg-btn" onClick={c.openImport} data-testid="button-add-songs"><Plus />Add music</button>}
           </div>
         </div>
       )}
@@ -265,7 +305,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         </div>
       )}
 
-      {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || detail) && (listItems.length
+      {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || (page as string) === 'downloads' || detail) && (listItems.length
         ? <PgTrackList items={listItems} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} {...listProps} />
         : <PgEmpty label={emptyLabel} onImport={c.openImport} />)}
     </div>
@@ -323,7 +363,46 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         <p className="pg-note">VOID does not upload your audio. Browser storage can be limited, and playback depends on which codecs this browser supports. Imported files are copied into local browser storage so they can be available after refresh.</p>
         <div className="pg-setting"><div><strong>Import music</strong><p>Add more audio from your Mac.</p></div><button className="pg-btn" onClick={c.openImport} data-testid="button-settings-import">Add music</button></div>
         <div className="pg-setting"><div><strong>Rescan library</strong><p>Read available file tags and artwork again from stored audio.</p></div><button className="pg-btn" onClick={() => void c.rescanLibrary()} disabled={!tracks.length} data-testid="button-rescan-library">Rescan</button></div>
-        <div className="pg-setting"><div><strong>Clear library</strong><p>Remove VOID’s local copies and playlists. Original Mac files are untouched.</p></div><button className="pg-btn pg-btn--danger" onClick={() => void c.clearLibrary()} disabled={!tracks.length && !playlists.length} data-testid="button-clear-library">Clear library</button></div>
+        
+        <div className="pg-setting"><div><strong>Clear library</strong><p>Remove VOID’s local copies and playlists. Original Mac files are untouched.</p></div>
+          <button className="pg-btn pg-btn--danger" onClick={() => {
+            const originalConfirm = window.confirm;
+            let confirmed = false;
+            window.confirm = (msg) => {
+              confirmed = originalConfirm(msg);
+              return confirmed;
+            };
+            
+            const finishClear = () => {
+              window.confirm = originalConfirm;
+              if (confirmed) {
+                if (window.indexedDB) {
+                  const req = window.indexedDB.open('void-offline-downloads', 1);
+                  req.onsuccess = () => {
+                    const db = req.result;
+                    if (db.objectStoreNames.contains('tracks')) {
+                      const tx = db.transaction('tracks', 'readwrite');
+                      tx.objectStore('tracks').clear();
+                      tx.oncomplete = () => {
+                        db.close();
+                        window.location.reload();
+                      };
+                    } else {
+                      db.close();
+                      window.location.reload();
+                    }
+                  };
+                } else {
+                  window.location.reload();
+                }
+              }
+            };
+            
+            const res = c.clearLibrary();
+            if (res instanceof Promise) res.finally(finishClear);
+            else finishClear();
+          }} disabled={!tracks.length && !playlists.length && !(c as any).downloadedTracks?.length} data-testid="button-clear-library">Clear library</button>
+        </div>
 
         <div className="pg-group-head"><h2>Keyboard shortcuts</h2></div>
         {[['Space', 'Play or pause'], ['← / →', 'Seek 5 seconds'], ['↑ / ↓', 'Adjust volume'], ['M', 'Mute or unmute'], ['⌘ K', 'Search library'], ['Esc', 'Close the current panel']].map(([key, label]) => (
@@ -365,10 +444,11 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
       </aside>
 
       <div className="pg-main" ref={mainRef}>
-        <header className="pg-top">
+        <header className={`pg-top ${c.page !== 'home' ? 'is-scrolled' : ''}`}>
           <div className="pg-top-left"><span className="pg-eclipse pg-eclipse--mobile" /><span className="pg-brand-word pg-brand-word--mobile">VOID</span><span className="pg-crumb">{detail ? c.title : page === 'home' ? 'A quiet place for your music' : 'Your library'}</span></div>
           <div className="pg-top-actions">
             <button className="pg-search" onClick={() => { c.setPaletteOpen(true); c.setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
+            <button className="pg-icon-btn" onClick={c.openImport} disabled={c.importing} aria-label="Add music" title="Add music" data-testid="button-add-music-compact"><Plus /></button>
             <button className="pg-icon-btn" onClick={() => c.setCanvasEnabled(v => !v)} aria-label={c.canvasEnabled ? 'Stop background video' : 'Play background video'}
               title={c.canvasEnabled ? 'Stop background video' : 'Play background video'} data-testid="button-toggle-canvas">
               <svg width="18" height="13" viewBox="0 0 18 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="1" width="16" height="10" rx="2" /><path d="M5 12h8" /></svg>
@@ -385,15 +465,77 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
               <button className="pg-btn" onClick={() => { c.setStorageError(''); void c.reload(); }} data-testid="button-retry-storage">Try again</button></div>
           ) : null}
           {!c.isReady && <div className="pg-empty" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
-          {c.isReady && (page === 'home' && !detail ? home : page === 'settings' ? settings : library)}
+          
+          {c.isReady && libraryOpen && !detail && (
+            <div className="pg-page" key="library-hub">
+              <header className="pg-head">
+                <div>
+                  <div className="pg-eyebrow">Your collection</div>
+                  <h1 className="pg-title">Library</h1>
+                  <p className="pg-sub">{countLabel(c.albumNames.length, 'album')} · {countLabel(c.artistNames.length, 'artist')} · {countLabel(playlists.length, 'playlist')}</p>
+                </div>
+              </header>
+              <div className="pg-library-grid">
+                {([
+                  { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: 'Saved for offline' },
+                  { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(c.albumNames.length, 'album') },
+                  { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(c.artistNames.length, 'artist') },
+                  { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
+                  { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(t => t.lastPlayedAt).length} played` },
+                  { id: 'queue' as Page, label: 'Queue', icon: AudioLines, count: countLabel(c.queueTracks.length, 'song') },
+                ]).map((entry, index) => {
+                  const Icon = entry.icon;
+                  return (
+                    <Reveal key={entry.id} dir="depth" index={index}>
+                      <button
+                        className="pg-library-card"
+                        onClick={() => { setLibraryOpen(false); c.setPageAndRoute(entry.id); }}
+                        data-testid={`library-${entry.id}`}
+                      >
+                        <span className="pg-library-card-icon"><Icon /></span>
+                        <span className="pg-library-card-copy">
+                          <strong>{entry.label}</strong>
+                          <small>{entry.count}</small>
+                        </span>
+                      </button>
+                    </Reveal>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {c.isReady && !libraryOpen && (page === 'home' && !detail ? home : page === 'settings' ? settings : library)}
         </main>
       </div>
 
       <nav className="pg-mobile-nav" aria-label="Mobile navigation" data-hidden={c.expanded ? '' : undefined}>
         {MOBILE_NAV.map(item => {
           const Icon = item.icon;
-          const active = page === item.id && !detail;
-          return <button key={item.id} className={active ? 'is-active' : ''} onClick={() => c.setPageAndRoute(item.id)} aria-label={item.label} aria-current={active ? 'page' : undefined}><Icon /></button>;
+          const LIBRARY_PAGES: Page[] = ['albums', 'artists', 'playlists', 'recent', 'queue'];
+          const active = item.id === 'library'
+            ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
+            : page === item.id && !detail && !libraryOpen;
+          
+          return (
+            <button 
+              key={item.id} 
+              className={active ? 'is-active' : ''} 
+              onClick={() => { 
+                if (item.id === 'library') { 
+                  c.setDetail(null); 
+                  setLibraryOpen(true); 
+                } else { 
+                  setLibraryOpen(false); 
+                  c.setPageAndRoute(item.id as Page); 
+                } 
+              }} 
+              aria-label={item.label} 
+              aria-current={active ? 'page' : undefined}
+            >
+              <Icon />
+            </button>
+          );
         })}
       </nav>
 
@@ -440,8 +582,6 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void c.importFont(file); }} data-testid="input-import-font" />
 
       <PgOverlays core={c} />
-      <PgNowPlaying core={c} />
-      {c.toast && <div className="pg-toasts" aria-live="polite"><div className="pg-toast" data-testid="status-toast">{c.toast}</div></div>}
     </div>
   );
 }

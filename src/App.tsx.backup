@@ -894,6 +894,28 @@ function App() {
   const [paletteQuery, setPaletteQuery] = useState('');
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
+
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
+  });
+
+  const handleSaveHistory = (term: string) => {
+    if (!term.trim()) return;
+    setSearchHistory(prev => {
+      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())].slice(0, 10);
+      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleRemoveHistory = (term: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSearchHistory(prev => {
+      const updated = prev.filter(t => t !== term);
+      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      return updated;
+    });
+  };
   useEffect(() => {
     const q = paletteQuery.trim();
     if (!q) { setMusicResults([]); return; }
@@ -1009,9 +1031,11 @@ function App() {
   const handleLyricsScroll = () => { if (!lyricsManualScroll) setLyricsManualScroll(true); };
   const restoreSync = () => { setLyricsManualScroll(false); };
 
-  // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
+import { searchMu  // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
   const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
   const [canvasReady, setCanvasReady] = useState(false);
+  const isEnding = duration > 10 && (duration - position) <= 9;
+sic, fetchArtist } from './api/musicApi';
 
   // Persistent player: the iframe is created once per mount and then reused for every track.
   const [canvasBootId, setCanvasBootId] = useState<string | null>(null); // video id baked into the iframe src (never changes while mounted)
@@ -1172,7 +1196,7 @@ function App() {
       return;
     }
     let alive = true;
-    const defaultAmbient: Hue4 = [24, 38, 12, 96];
+    const defaultAmbient: Hue4 = [348, 356, 335, 88]; // Deep Burgundy
 
     if (activeTrack.image) {
       sampleImageUrlAmbient(activeTrack.image).then(found => {
@@ -2256,6 +2280,7 @@ function App() {
           onChange={event => setPaletteQuery(event.target.value)}
           onKeyDown={event => {
             if (event.key !== 'Enter') return;
+            handleSaveHistory(paletteQuery);
 
             if (allSearchResults[0]) {
               void playTrack(allSearchResults[0]);
@@ -2286,6 +2311,7 @@ function App() {
               key={track.id}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 void playTrack(track);
                 setPaletteOpen(false);
               }}
@@ -2338,6 +2364,7 @@ function App() {
               key={`album-${name}`}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 openCollection('album', name);
               }}
@@ -2354,6 +2381,7 @@ function App() {
               key={`artist-${name}`}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 openCollection('artist', name);
               }}
@@ -2370,6 +2398,7 @@ function App() {
               key={playlist.id}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 setPage('playlists');
                 setLocation('/playlists');
@@ -2409,12 +2438,37 @@ function App() {
               </div>
             )}
 
-          {!paletteQuery && (
+          {!paletteQuery && searchHistory.length > 0 && (
+            <div className="search-history-list">
+              <div className="crumb" style={{ padding: '14px 12px 4px' }}>Recent Searches</div>
+              {searchHistory.map((term, i) => (
+                <button
+                  key={`history-${i}`}
+                  className="palette-result"
+                  onClick={() => setPaletteQuery(term)}
+                >
+                  <Clock3 size={16} />
+                  <span>{term}</span>
+                  <div style={{ marginLeft: 'auto', display: 'flex' }}>
+                    <button 
+                      className="icon-button" 
+                      style={{ width: 28, height: 28, pointerEvents: 'auto' }} 
+                      onClick={(e) => handleRemoveHistory(term, e)}
+                      aria-label="Remove from history"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {!paletteQuery && searchHistory.length === 0 && (
             <div
               className="crumb"
               style={{ padding: '14px 12px' }}
             >
-              Search your local songs and Jamendo.
+              Search your local songs and VOID.
             </div>
           )}
 

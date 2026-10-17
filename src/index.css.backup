@@ -134,7 +134,8 @@
   --np-scrim: hsl(0 0% 0% / .40);
   --np-glass: hsl(0 0% 6% / .58);
 
-  --amb-L: 52%; --amb-A1: .34; --amb-A2: .22; --amb-A3: .16;
+  /* ബാക്ക്ഗ്രൗണ്ട് നല്ല ഡാർക്ക് ആകാനും എന്നാൽ റെഡ് ഗ്ലോ നിലനിർത്താനും */
+  --amb-L: 24%; --amb-A1: .55; --amb-A2: .40; --amb-A3: .30;
   color-scheme: dark;
 }
 @theme inline {
@@ -193,10 +194,10 @@ button:disabled { cursor: not-allowed; opacity: .42; }
     background-color 0.45s ease, color 0.45s ease;
 }
 .void-app[data-track-ambient] { --amb-dur: 2s; --amb-ease: cubic-bezier(.4, 0, .2, 1); }
-.void-app[data-ambient='home'], .void-app[data-ambient='recent'] { --h1: 24; --h2: 40; --h3: 10; }
+.void-app[data-ambient='home'], .void-app[data-ambient='recent'] { --h1: 348; --h2: 356; --h3: 335; }
 .void-app[data-ambient='songs'] { --h1: 268; --h2: 288; --h3: 250; --s: 88%; }
 .void-app[data-ambient='albums'] { --h1: 350; --h2: 336; --h3: 8; --s: 90%; }
-.void-app[data-ambient='artists'] { --h1: 174; --h2: 190; --h3: 160; --s: 86%; }
+.void-app[data-ambient='artists'] { --h1: 352; --h2: 345; --h3: 358; --s: 92%; }
 .void-app[data-ambient='playlists'] { --h1: 222; --h2: 244; --h3: 204; --s: 90%; }
 .void-app[data-ambient='favorites'] { --h1: 336; --h2: 348; --h3: 318; --s: 90%; }
 .void-app[data-ambient='queue'] { --h1: 0; --h2: 0; --h3: 0; --s: 0%; --amb-L: 38%; }

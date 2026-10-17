@@ -238,3 +238,21 @@ export async function fetchArtist(
     return null;
   }
 }
+
+// പുതിയ ഫീച്ചർ: മൂഡ് അനുസരിച്ച് സജഷൻ കൊണ്ടുവരാൻ
+export async function fetchRecommendationsByMood(mood: string): Promise<SearchResult[]> {
+  const queries = {
+    romance: ["romantic songs", "love songs malayalam", "ar rahman romantic", "love hits hindi"],
+    peace: ["peaceful instrumental", "lofi chill", "calm acoustic", "meditation music relaxing"],
+    energy: ["workout hits", "high energy dance", "gym motivation songs", "party anthems"],
+    focus: ["lofi hip hop study", "deep focus ambient", "instrumental study", "coding music"]
+  };
+  
+  const moodKey = mood.toLowerCase() as keyof typeof queries;
+  const moodQueries = queries[moodKey] || queries.peace;
+  const randomQuery = moodQueries[Math.floor(Math.random() * moodQueries.length)];
+  
+  const results = await searchMusic(randomQuery);
+  // കുറച്ച് റാണ്ടം ആക്കാൻ ഷഫിൾ ചെയ്യുന്നു
+  return results.sort(() => 0.5 - Math.random()).slice(0, 10);
+}

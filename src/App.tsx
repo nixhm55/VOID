@@ -717,8 +717,8 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </span>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "" }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string;
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [] }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[];
 }) {
   const isSelectionSupported = ['songs', 'playlists', 'favorites', 'artists', 'recent', 'queue', 'downloads'].includes(page);
   const isSelectionMode = selectionMode;
@@ -759,11 +759,13 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
             dir="row"
             index={index}
             key={track.id}
-            className={`dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}`}
+            className={`dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}${deletingIds.includes(track.id) ? ' download-removing' : ''}`}
             aria-current={current ? 'true' : undefined}
             data-testid={`row-track-${track.id}`}
+            onClick={playRowTrack}
+            style={{ cursor: 'pointer' }}
           >
-            <td onClick={playRowTrack}>
+            <td>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 {isSelectionSupported && toggleSelect && (
                   <div className="track-selection-gutter" style={{
@@ -787,20 +789,19 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                 <div className="track-main">
                   {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
                   <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} /></div>
-                  <button className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', cursor: 'pointer', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}
-                   aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}>
+                  <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
                     <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}><span className="track-title" title={track.title}>{track.title}</span><span className="track-sub" title={track.artist}>{track.artist}</span></span>
-                  </button>
+                  </div>
                   {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
                 </div>
               </div>
             </td>
-            <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={() => actions.openAlbum(track.album)} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
+            <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={event => { event.stopPropagation(); actions.openAlbum(track.album); }} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
             <td>{formatTime(track.duration)}</td>
             <td><div className="row-actions">
-              {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={() => actions.move(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={() => actions.move(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => actions.removeFromList(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
-              <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
-              <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
+              {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={event => { event.stopPropagation(); actions.move(track, index, -1); }} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={event => { event.stopPropagation(); actions.move(track, index, 1); }} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={event => { event.stopPropagation(); actions.removeFromList(track.id); }} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
+              <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={event => { event.stopPropagation(); actions.favorite(track); }} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
+              <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={event => { event.stopPropagation(); actions.menu(track); }} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
             </div></td>
           </DgReveal>
         );
@@ -898,7 +899,7 @@ async function putVoidDownload(record: VoidDownloadRecord): Promise<void> {
       // Track IDs are the storage identity. Never remove a different download just
       // because its title/artist text matches; providers can return distinct tracks
       // with identical metadata.
-const request = store.put(record);
+     const request = store.put(record);
 request.onerror = () => {
   try {
     tx.abort();
@@ -923,6 +924,9 @@ function App() {
   const [location, setLocation] = useLocation();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [downloadedTracks, setDownloadedTracks] = useState<any[]>([]);
+  // IMPORTANT / PROTECTED: Download removal must update both IndexedDB and React state.
+  // Do not replace this flow with removeTrack(); offline downloads live in their own database.
+  const [deletingDownloadIds, setDeletingDownloadIds] = useState<string[]>([]);
   const [downloadingIds, setDownloadingIds] = useState<string[]>([]);
   const [recentlyDownloadedIds, setRecentlyDownloadedIds] = useState<string[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -982,8 +986,10 @@ useEffect(() => {
     try {
       if (page === 'downloads') {
         const downloadIds = selectedSongIds.map(id => id.startsWith('download:') ? id.slice('download:'.length) : id);
+        // IMPORTANT / PROTECTED: selected download IDs are UI-prefixed but IndexedDB keys are not.
         for (const id of downloadIds) await removeVoidDownload(id);
         setDownloadedTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
+        setDeletingDownloadIds(ids => ids.filter(id => !selectedSongIds.includes(id)));
       } else {
         for (const id of selectedSongIds) await removeTrack(id);
         setTracks(items => {
@@ -1015,6 +1021,28 @@ useEffect(() => {
   const [paletteQuery, setPaletteQuery] = useState('');
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
+
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
+  });
+
+  const handleSaveHistory = (term: string) => {
+    if (!term.trim()) return;
+    setSearchHistory(prev => {
+      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())].slice(0, 10);
+      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleRemoveHistory = (term: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSearchHistory(prev => {
+      const updated = prev.filter(t => t !== term);
+      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      return updated;
+    });
+  };
   
   useEffect(() => {
     const q = paletteQuery.trim();
@@ -1171,6 +1199,7 @@ useEffect(() => {
   // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
   const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
   const [canvasReady, setCanvasReady] = useState(false);
+  const isEnding = duration > 10 && (duration - position) <= 9;
 
   // Persistent player: the iframe is created once per mount and then reused for every track.
   const [canvasBootId, setCanvasBootId] = useState<string | null>(null); // video id baked into the iframe src (never changes while mounted)
@@ -1404,7 +1433,7 @@ useEffect(() => {
       return;
     }
     let alive = true;
-    const defaultAmbient: Hue4 = [24, 38, 12, 96];
+    const defaultAmbient: Hue4 = [348, 356, 335, 88]; // Deep Burgundy
 
     if (activeTrack.image) {
       sampleImageUrlAmbient(activeTrack.image).then(found => {
@@ -1581,22 +1610,61 @@ useEffect(() => {
 
     if (list) setQueue(list);
 
-    // CRITICAL FIX FOR SAFARI: Capture the user's click intent immediately.
-    // Safari will block playback if we wait for `materializeAudioFile` to finish.
-    // By calling play() immediately on a silent/empty state, we unlock the audio context.
-    el.play().catch(() => {});
+    // Do not call play() against the previous/empty source: that can reject and leave
+    // the media element in a stale state after a page reload. For downloaded rows, read
+    // the durable IndexedDB record on every click and use that exact Blob for playback.
 
     // Prefer the persisted offline copy whenever this song has been downloaded. Match by stable
     // provider ID first, then normalized title + artist so a library entry can reuse a search download.
     const normalizeSongPart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
     const trackId = String(track.id ?? '');
-    const downloadedMatch = downloadedTracks.find((item: any) => {
+    let downloadedMatch = downloadedTracks.find((item: any) => {
       const downloadId = String(item.id ?? '').replace(/^download:/, '');
       if (downloadId && (downloadId === trackId || trackId === `download:${downloadId}`)) return true;
       return normalizeSongPart(item.title || item.name) === normalizeSongPart(track.title)
         && normalizeSongPart(item.artist) === normalizeSongPart(track.artist)
         && !!item.audioUrl;
     });
+
+    // A direct reload can render the Downloads route before the asynchronous IndexedDB
+    // hydration has completed. If the click arrives during that window, re-read the
+    // durable record here instead of silently treating the row as a normal remote track.
+    if (trackId.startsWith('download:')) {
+      const downloadId = trackId.slice('download:'.length);
+      try {
+        // IndexedDB is the source of truth. Always re-read it for a Downloads-row click
+        // so playback never depends on a stale Blob URL created before/after reload.
+        const storedRecords = await getVoidDownloads();
+        const storedRecord = storedRecords.find(record => String(record.id) === downloadId);
+        if (storedRecord?.blob && storedRecord.blob.size > 0) {
+          const previousMatch = downloadedMatch;
+          const audioUrl = URL.createObjectURL(storedRecord.blob);
+          const imageUrl = storedRecord.coverBlob ? URL.createObjectURL(storedRecord.coverBlob) : storedRecord.image;
+          downloadedMatch = {
+            ...storedRecord,
+            id: `download:${storedRecord.id}`,
+            image: imageUrl,
+            audioUrl,
+            src: audioUrl,
+            fileName: `${storedRecord.title}.audio`,
+            fileSize: storedRecord.blob.size,
+            importedAt: storedRecord.downloadedAt,
+          };
+          // Keep the fresh URL in state for the current row, but do not revoke it here:
+          // the audio element may be using the previous URL while a track is changing.
+          setDownloadedTracks(previous => [downloadedMatch!, ...previous.filter(item => String(item.id) !== `download:${storedRecord.id}`)]);
+          if (previousMatch?.audioUrl?.startsWith('blob:') && previousMatch.audioUrl !== audioUrl && audio.current?.src !== previousMatch.audioUrl) {
+            URL.revokeObjectURL(previousMatch.audioUrl);
+          }
+        } else {
+          downloadedMatch = undefined;
+        }
+      } catch {
+        // The validation below reports the missing/invalid offline file to the user.
+        downloadedMatch = undefined;
+      }
+    }
+    const isOfflineDownload = !!downloadedMatch;
     const sourceTrack = downloadedMatch ? {
       ...track,
       title: downloadedMatch.title || track.title,
@@ -1604,15 +1672,27 @@ useEffect(() => {
       album: downloadedMatch.album || track.album,
       image: downloadedMatch.image || track.image,
       duration: downloadedMatch.duration || track.duration,
+      // Use the object URL created from the persisted IndexedDB Blob when the
+      // Downloads list loads. It is already a valid browser audio source and is
+      // owned by downloadedTracks, so playback must not create/revoke another URL.
       audioUrl: downloadedMatch.audioUrl,
       src: downloadedMatch.audioUrl,
+      mimeType: downloadedMatch.mimeType || downloadedMatch.blob?.type || 'audio/mpeg',
       offlineDownloadId: String(downloadedMatch.id ?? '').replace(/^download:/, ''),
     } : track;
-    const remoteUrl = sourceTrack.audioUrl || sourceTrack.downloadUrl || sourceTrack.src;
-    const isRemote = !!remoteUrl;
+    const remoteUrl = isOfflineDownload
+      ? downloadedMatch.audioUrl
+      : (sourceTrack.audioUrl || sourceTrack.downloadUrl || sourceTrack.src);
+    const isRemote = !isOfflineDownload && !!remoteUrl;
     let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl };
 
-    if (isRemote) {
+    if (isOfflineDownload) {
+      if (!downloadedMatch.blob || downloadedMatch.blob.size === 0 || !remoteUrl) {
+        setIsPlaying(false);
+        notify(`The saved audio for “${playableTrack.title || 'this song'}” is missing or empty. Download it again.`);
+        return;
+      }
+    } else if (isRemote) {
       setStreamingTrack(playableTrack);
     } else {
       try {
@@ -1632,7 +1712,7 @@ useEffect(() => {
     el.pause();
     
     let url = playableTrack.audioUrl;
-    if (!isRemote) {
+    if (!isRemote && !isOfflineDownload) {
       url = URL.createObjectURL(playableTrack.file);
     }
 
@@ -1649,7 +1729,9 @@ useEffect(() => {
       if (objectUrl.current && objectUrl.current !== url) { 
         URL.revokeObjectURL(objectUrl.current); 
       }
-      objectUrl.current = isRemote ? null : url;
+      // Download-list URLs belong to downloadedTracks and stay alive until the
+      // list is refreshed/unmounted; only revoke URLs created for imported files.
+      objectUrl.current = (isRemote || isOfflineDownload) ? null : url;
 
       const actualDuration = el.duration;
       const persistedTrack = {
@@ -1680,7 +1762,15 @@ useEffect(() => {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       setIsPlaying(false);
-      notify(`Unable to play track.`);
+      const mediaError = audio.current?.error;
+      const detail = mediaError?.code === 4
+        ? 'The saved file format is not supported or the download is not valid audio.'
+        : mediaError?.code === 2
+          ? 'The audio file could not be read. Try downloading it again.'
+          : error instanceof Error && error.message
+            ? error.message
+            : 'Check the audio file and try again.';
+      notify(`Unable to play “${playableTrack.title || 'track'}”. ${detail}`);
     }
   }, [downloadedTracks, notify, prefs.muted, prefs.volume]);
 
@@ -1809,6 +1899,41 @@ useEffect(() => {
 
   const deleteTrack = async (track: Track) => {
     if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
+
+    // IMPORTANT / PROTECTED DOWNLOAD DELETION FLOW:
+    // Download rows use UI IDs like "download:<database-id>" and are stored in IndexedDB,
+    // not in the regular track library. Keep the persisted record and UI row in sync.
+    // Do not replace this branch with removeTrack(), which does not delete offline blobs.
+    if (String(track.id).startsWith('download:')) {
+      const downloadId = String(track.id).slice('download:'.length);
+      setDeletingDownloadIds(ids => ids.includes(track.id) ? ids : [...ids, track.id]);
+      window.setTimeout(async () => {
+        try {
+          await removeVoidDownload(downloadId);
+          setDownloadedTracks(items => {
+            const removed = items.filter(item => item.id === track.id);
+            removed.forEach(item => {
+              if (item.audioUrl && String(item.audioUrl).startsWith('blob:')) URL.revokeObjectURL(item.audioUrl);
+              if (item.image && String(item.image).startsWith('blob:')) URL.revokeObjectURL(item.image);
+            });
+            return items.filter(item => item.id !== track.id);
+          });
+          setSelectedSongIds(ids => ids.filter(id => id !== track.id));
+          if (String(activeId) === String(track.id)) {
+            audio.current?.pause();
+            setActiveId(null);
+            setIsPlaying(false);
+          }
+        } catch {
+          notify('Could not remove this download. Please try again.');
+        } finally {
+          setDeletingDownloadIds(ids => ids.filter(id => id !== track.id));
+        }
+      // Keep this delay matched to the 1-second CSS fade-out on the download row.
+      }, 1000);
+      return;
+    }
+
     try {
       await removeTrack(track.id);
       setTracks(items => {
@@ -2227,7 +2352,7 @@ useEffect(() => {
 
     {/* --- GLOBAL SPOTIFY CANVAS BACKGROUND VIDEO --- */}
     {canvasVideoId && canvasEnabled && canvasBootId && (
-      <div className="canvas-container" data-ready={canvasReady}>
+      <div className="canvas-container" data-ready={canvasReady && !isEnding} data-ending={isEnding ? 'true' : undefined}>
         <iframe
           ref={canvasFrame}
           className="canvas-iframe"
@@ -2487,6 +2612,7 @@ useEffect(() => {
                 toggleSelectAll={toggleSelectionMode}
                 isAllSelected={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id))}
                 selectionMode={selectionMode}
+                deletingIds={deletingDownloadIds}
               />
             ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
@@ -2667,6 +2793,7 @@ useEffect(() => {
           onChange={event => setPaletteQuery(event.target.value)}
           onKeyDown={event => {
             if (event.key !== 'Enter') return;
+            handleSaveHistory(paletteQuery);
 
             if (allSearchResults[0]) {
               void playTrack(allSearchResults[0]);
@@ -2697,6 +2824,7 @@ useEffect(() => {
               key={track.id}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 void playTrack(track);
                 setPaletteOpen(false);
               }}
@@ -2723,8 +2851,9 @@ useEffect(() => {
                 className="palette-result search-music-result"
                 role="button"
                 tabIndex={0}
-                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPaletteOpen(false); void playTrack({ id: `api-${track.id}`, title: track.name, artist: track.artist, album: track.album, fileName: `${track.name}.audio`, audioUrl: track.downloadUrl, src: track.downloadUrl, image: track.image, duration: track.duration } as any); } }}
+                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPaletteOpen(false); handleSaveHistory(paletteQuery); void playTrack({ id: `api-${track.id}`, title: track.name, artist: track.artist, album: track.album, fileName: `${track.name}.audio`, audioUrl: track.downloadUrl, src: track.downloadUrl, image: track.image, duration: track.duration } as any); } }}
                 onClick={() => {
+                  handleSaveHistory(paletteQuery);
                   const apiTrack = {
                     id: `api-${track.id}`,
                     title: track.name,
@@ -2770,6 +2899,7 @@ useEffect(() => {
               key={`album-${name}`}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 openCollection('album', name);
               }}
@@ -2786,6 +2916,7 @@ useEffect(() => {
               key={`artist-${name}`}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 openCollection('artist', name);
               }}
@@ -2802,6 +2933,7 @@ useEffect(() => {
               key={playlist.id}
               className="palette-result"
               onClick={() => {
+                handleSaveHistory(paletteQuery);
                 setPaletteOpen(false);
                 setPage('playlists');
                 setLocation('/playlists');
@@ -2841,12 +2973,37 @@ useEffect(() => {
               </div>
             )}
 
-          {!paletteQuery && (
+          {!paletteQuery && searchHistory.length > 0 && (
+            <div className="search-history-list">
+              <div className="crumb" style={{ padding: '14px 12px 4px' }}>Recent Searches</div>
+              {searchHistory.map((term, i) => (
+                <button
+                  key={`history-${i}`}
+                  className="palette-result"
+                  onClick={() => setPaletteQuery(term)}
+                >
+                  <Clock3 size={16} />
+                  <span>{term}</span>
+                  <div style={{ marginLeft: 'auto', display: 'flex' }}>
+                    <button 
+                      className="icon-button" 
+                      style={{ width: 28, height: 28, pointerEvents: 'auto' }} 
+                      onClick={(e) => handleRemoveHistory(term, e)}
+                      aria-label="Remove from history"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {!paletteQuery && searchHistory.length === 0 && (
             <div
               className="crumb"
               style={{ padding: '14px 12px' }}
             >
-              Search your local songs and Jamendo.
+              Search your local songs and VOID.
             </div>
           )}
 
@@ -3011,7 +3168,7 @@ const core: VoidCore = {
   canvasVideoId,
   canvasEnabled,
   setCanvasEnabled,
-  canvasReady,
+  canvasReady: canvasReady && !isEnding,
   setCanvasReady,
 
   rowActions,

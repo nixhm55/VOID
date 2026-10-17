@@ -1,10 +1,5 @@
 /**
  * VOID shared core contract.
- *
- * All music state, playback and library logic keeps living in the original App.tsx (untouched).
- * App.tsx hands one `VoidCore` object to whichever visual shell is selected.
- * Deep Glass renders its own JSX as before; Paper Glass receives this object as a prop.
- * Neither design owns any data, so switching designs can never reset anything.
  */
 import type { Dispatch, SetStateAction } from 'react';
 import type { Playlist, Preferences, Track } from '@/lib/library';
@@ -23,7 +18,7 @@ export const writeDesign = (design: DesignId) => {
   try { localStorage.setItem(DESIGN_STORAGE_KEY, design); } catch { /* storage unavailable */ }
 };
 
-export type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings';
+export type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings' | 'downloads';
 export type Detail = { kind: 'album' | 'artist' | 'playlist'; name: string } | null;
 export type Hue4 = readonly [number, number, number, number];
 export type Setter<T> = Dispatch<SetStateAction<T>>;
@@ -41,11 +36,9 @@ export type RowActions = {
 export type FontChoice = { id: string; name: string; tag: string; family: string; note: string; font: any };
 
 export interface VoidCore {
-  /* design */
   design: DesignId;
   setDesign: (design: DesignId) => void;
 
-  /* library */
   tracks: Track[];
   playlists: Playlist[];
   queue: string[];
@@ -62,7 +55,6 @@ export interface VoidCore {
   reload: () => Promise<void>;
   importing: boolean;
 
-  /* playback */
   activeId: string | null;
   activeTrack: any;
   isPlaying: boolean;
@@ -80,7 +72,6 @@ export interface VoidCore {
   toggleMute: () => void;
   cycleRepeat: () => void;
 
-  /* navigation */
   page: Page;
   detail: Detail;
   setDetail: Setter<Detail>;
@@ -93,12 +84,10 @@ export interface VoidCore {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: Setter<boolean>;
 
-  /* copy that depends on the time of day */
   greeting: string;
   moodLabel: string;
   moodLine: string;
 
-  /* ambient light + background video */
   atmos: Hue4 | null;
   canvasVideoId: string | null;
   canvasEnabled: boolean;
@@ -106,7 +95,6 @@ export interface VoidCore {
   canvasReady: boolean;
   setCanvasReady: Setter<boolean>;
 
-  /* track actions */
   rowActions: RowActions;
   toggleFavorite: (track: any) => Promise<void> | void;
   deleteTrack: (track: Track) => Promise<void> | void;
@@ -119,13 +107,11 @@ export interface VoidCore {
   toggleSelectAllSongs: (items: Track[]) => void;
   deleteSelectedSongs: () => Promise<void> | void;
 
-  /* playlists */
   createPlaylist: () => Promise<void> | void;
   renamePlaylist: () => Promise<void> | void;
   deletePlaylistById: (playlist: Playlist) => Promise<void> | void;
   addTrackToPlaylist: (playlist: Playlist, track: Track) => Promise<void> | void;
 
-  /* library maintenance + import */
   openImport: () => void;
   importFiles: (files: FileList | File[], note?: string) => Promise<void>;
   autoImport: (files: FileList) => Promise<void>;
@@ -135,7 +121,6 @@ export interface VoidCore {
   folderInput: InputRef;
   fontInput: InputRef;
 
-  /* fonts */
   fontId: string;
   setFontId: Setter<string>;
   fontOptions: FontChoice[];
@@ -143,7 +128,6 @@ export interface VoidCore {
   importFont: (file: File) => Promise<void>;
   deleteFont: (font: any) => Promise<void>;
 
-  /* overlays */
   paletteOpen: boolean;
   setPaletteOpen: Setter<boolean>;
   paletteQuery: string;
@@ -169,6 +153,8 @@ export interface VoidCore {
   toast: string;
   notify: (message: string) => void;
 
-  /* helper that lives with the original app (artist photo cache) */
   fetchArtistPhoto: (artistName: string) => Promise<string | null>;
+  downloadedTracks?: any[];
+  downloadSearchTrack?: (track: any) => Promise<void>;
+  downloadTrack?: (track: any) => Promise<void>;
 }
