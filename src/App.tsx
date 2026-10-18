@@ -6,7 +6,7 @@ import { QualityBadge } from './components/QualityBadge';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
-  Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus, Search,
+  Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -803,7 +803,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
                     <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}>
                       <span className="track-title" title={track.title}>{track.title}</span>
-                      <span className="track-sub" title={track.artist}>{track.artist}{providerLabel ? ` · ${providerLabel}` : ''}</span>
+                      <span className="track-sub" title={track.artist}>{track.artist}</span>
                     </span>
                   </div>
                   {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
@@ -2632,6 +2632,85 @@ useEffect(() => {
     return () => window.removeEventListener('keydown', onKeys);
   }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
 
+  const backLayerActive = Boolean(
+    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || libraryOpen || page !== 'home'
+  );
+  const backStateRef = useRef({
+    modal,
+    contextTrack,
+    importMenu,
+    paletteOpen,
+    expanded,
+    mobileFontOpen,
+    detail,
+    libraryOpen,
+    page,
+  });
+  backStateRef.current = {
+    modal,
+    contextTrack,
+    importMenu,
+    paletteOpen,
+    expanded,
+    mobileFontOpen,
+    detail,
+    libraryOpen,
+    page,
+  };
+
+  useEffect(() => {
+    if (!backLayerActive) return;
+    const currentPath = window.location.pathname + window.location.search;
+    if (!window.history.state?.voidBackGuard) {
+      window.history.pushState({ ...(window.history.state || {}), voidBackGuard: true }, '', currentPath);
+    }
+  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, libraryOpen, page]);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const st = backStateRef.current;
+      const hasActiveLayer = Boolean(
+        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.libraryOpen || st.page !== 'home'
+      );
+      if (!hasActiveLayer) return;
+
+      event.stopImmediatePropagation();
+
+      if (st.modal) {
+        setModal(null);
+      } else if (st.contextTrack) {
+        setContextTrack(null);
+      } else if (st.importMenu) {
+        setImportMenu(false);
+      } else if (st.paletteOpen) {
+        setPaletteOpen(false);
+      } else if (st.expanded) {
+        closeExpanded();
+      } else if (st.mobileFontOpen) {
+        setMobileFontOpen(false);
+      } else if (st.detail) {
+        setDetail(null);
+      } else if (st.libraryOpen) {
+        setLibraryOpen(false);
+      } else if (st.page !== 'home') {
+        setLibraryOpen(false);
+        setDetail(null);
+        setPage('home');
+        setLocation('/');
+        return;
+      }
+
+      const targetPath = pathFor(st.page);
+      if (window.location.pathname !== targetPath) {
+        window.history.replaceState({ voidBackGuard: true }, '', targetPath);
+      } else {
+        window.history.pushState({ voidBackGuard: true }, '', targetPath);
+      }
+    };
+    window.addEventListener('popstate', onPopState, true);
+    return () => window.removeEventListener('popstate', onPopState, true);
+  }, [closeExpanded, setLocation]);
+
   // Home hero follows the scroll depth of the main column (same idea as the Paper Glass scroll
   // variable): one rAF write per frame, one custom property, no layout reads.
   useEffect(() => {
@@ -3284,7 +3363,7 @@ useEffect(() => {
                   const disabled = !!option.note;
                   const selected = fontId === option.id && !disabled;
                   return <div className={`font-option ${selected ? 'selected' : ''}`} key={option.id}>
-                    <button className="font-select" role="radio" aria-checked={selected} disabled={disabled} onClick={() => setFontId(option.id)} data-testid={`font-option-${option.id}`}>
+                    <button className="font-select" role="radio" aria-checked={selected} disabled={disabled} onClick={() => { setFontId(option.id); setMobileFontOpen(false); }} data-testid={`font-option-${option.id}`}>
                       <span className="font-check" aria-hidden="true">{selected ? <Check /> : null}</span>
                       <span className="font-copy">
                         <span className="font-name">{option.name}<em>{option.tag}</em></span>
@@ -3350,15 +3429,17 @@ useEffect(() => {
       <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
         <span>
-          <span className="track-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeTrack?.title ?? ''}</span>
-            {activeTrack && getTrackQualityBadge(activeTrack) && (
-              <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
-            )}
+          <span className="track-title mini-player-title-row">
+            {activeTrack?.title ?? ''}
           </span>
-          <span className="track-sub">
-            {activeTrack?.artist ?? ''}
-            {activeTrack && formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}
+          <span className="track-sub mini-player-sub-row">
+            <span className="mini-player-artist-name">{activeTrack?.artist ?? ''}</span>
+            {activeTrack && getTrackQualityBadge(activeTrack) && (
+              <>
+                <span className="mini-player-dot" aria-hidden="true">·</span>
+                <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
+              </>
+            )}
           </span>
         </span>
       </div>
@@ -3741,12 +3822,14 @@ useEffect(() => {
       </>}
     </div></div>}
     {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && modal !== 'playlist' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
-      <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {formatProviderLabel(contextTrack.source, contextTrack) || contextTrack.fileName}</p>
-      <button className="palette-result" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
+      <h2>{contextTrack.title}</h2><p>{contextTrack.artist}</p>
+      <button className="palette-result desktop-context-only" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
+      <button className="palette-result mobile-context-only" onClick={() => { if (activeId === contextTrack.id) { void togglePlay(); } else { void playTrack(contextTrack); } setContextTrack(null); }} data-testid="context-play-mobile">{activeId === contextTrack.id && isPlaying ? <><Pause size={15} />Pause</> : <><Play size={15} />Play</>}</button>
+      <button className="palette-result mobile-context-only context-fav-btn" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite-mobile"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
       <button className="palette-result" onClick={() => { addToQueue(contextTrack); setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
        <button className="palette-result" onClick={() => { playNext(contextTrack); setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
       <button className="palette-result" onClick={() => { setModal('add-to-playlist'); }} data-testid="context-add-playlist"><ListMusic size={15} />Add to playlist</button>
-      <button className="palette-result" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite"><Heart size={15} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
+      <button className="palette-result desktop-context-only" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
        <button className="palette-result" onClick={() => openCollection('artist', contextTrack.artist)} data-testid="context-go-artist"><Mic2 size={15} />Go to artist</button>
        <button className="palette-result" onClick={() => openCollection('album', contextTrack.album)} data-testid="context-go-album"><Disc3 size={15} />Go to album</button>
        <button className="palette-result" onClick={() => setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
@@ -3770,8 +3853,7 @@ useEffect(() => {
                 <div className="np-titles">
                   <h1>{activeTrack.title}</h1>
                   <p>
-                    {activeTrack.artist} · {activeTrack.album}
-                    {formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}
+                    {activeTrack.artist}{activeTrack.album ? ` · ${activeTrack.album}` : ''}
                   </p>
                   {getTrackQualityBadge(activeTrack) && (
                     <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>

@@ -1,5 +1,5 @@
 import { useState, useEffect, type CSSProperties } from 'react';
-import { ChevronDown, Disc3, FileAudio, FolderOpen, Heart, ListMusic, ListPlus, Mic2, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, X, Download, Check, Clock3 } from 'lucide-react';
+import { ChevronDown, Disc3, FileAudio, FolderOpen, Heart, ListMusic, ListPlus, Mic2, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, X, Download, Check, Clock3 } from 'lucide-react';
 import type { VoidCore } from '../core/voidCore';
 import { PgCover, PgPlayIcon, PgVolume, countLabel, fmt, fmtElapsed, formatBytes, rangeStyle } from './parts';
 import { QualityBadge } from '../components/QualityBadge';
@@ -439,12 +439,14 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
     {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && (
       <div className="pg-backdrop" onMouseDown={onBackdrop(() => c.setContextTrack(null))}>
         <div className="pg-sheet pg-modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
-          <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {formatProviderLabel(contextTrack.source, contextTrack) || contextTrack.fileName}</p>
-          <button className="pg-result" onClick={() => { void c.playTrack(contextTrack); c.setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
+          <h2>{contextTrack.title}</h2><p>{contextTrack.artist}</p>
+          <button className="pg-result desktop-context-only" onClick={() => { void c.playTrack(contextTrack); c.setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
+          <button className="pg-result mobile-context-only" onClick={() => { if (c.activeId === contextTrack.id) { void c.togglePlay(); } else { void c.playTrack(contextTrack); } c.setContextTrack(null); }} data-testid="context-play-mobile">{c.activeId === contextTrack.id && c.isPlaying ? <><Pause size={15} />Pause</> : <><Play size={15} />Play</>}</button>
+          <button className="pg-result mobile-context-only context-fav-btn" onClick={() => { void c.toggleFavorite(contextTrack); c.setContextTrack(null); }} data-testid="context-favorite-mobile"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
           <button className="pg-result" onClick={() => { c.addToQueue(contextTrack); c.setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
           <button className="pg-result" onClick={() => { c.playNext(contextTrack); c.setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
           <button className="pg-result" onClick={() => c.setModal('add-to-playlist')} data-testid="context-add-playlist"><ListMusic size={15} />Add to playlist</button>
-          <button className="pg-result" onClick={() => { void c.toggleFavorite(contextTrack); c.setContextTrack(null); }} data-testid="context-favorite"><Heart size={15} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
+          <button className="pg-result desktop-context-only" onClick={() => { void c.toggleFavorite(contextTrack); c.setContextTrack(null); }} data-testid="context-favorite"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
           <button className="pg-result" onClick={() => c.openCollection('artist', contextTrack.artist)} data-testid="context-go-artist"><Mic2 size={15} />Go to artist</button>
           <button className="pg-result" onClick={() => c.openCollection('album', contextTrack.album)} data-testid="context-go-album"><Disc3 size={15} />Go to album</button>
           <button className="pg-result" onClick={() => c.setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
@@ -518,7 +520,7 @@ export function PgNowPlaying({ core: c }: { core: VoidCore }) {
                 <div className="pg-np-info">
                   <div className="pg-np-titles">
                     <h1>{t.title}</h1>
-                    <p>{t.artist} · {t.album}{npProvider ? ` · ${npProvider}` : ''}</p>
+                    <p>{t.artist}{t.album ? ` · ${t.album}` : ''}</p>
                     {npQuality && (
                       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                         <QualityBadge tier={npQuality} track={t} />

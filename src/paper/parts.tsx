@@ -155,7 +155,6 @@ export const PgTrackList = memo(function PgTrackList({
                   <span className="pg-row-name">{track.title}</span>
                   <span className="pg-row-artist">
                     {track.artist}
-                    {providerLabel ? ` · ${providerLabel}` : ''}
                   </span>
                 </span>
               </button>

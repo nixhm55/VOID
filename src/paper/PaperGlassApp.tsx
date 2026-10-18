@@ -48,6 +48,30 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   useEffect(() => { mainRef.current?.scrollTo({ top: 0 }); }, [page, detail?.kind, detail?.name]);
   useEffect(() => () => window.cancelAnimationFrame(discFrame.current), []);
 
+  const pgBackRef = useRef({ libraryOpen, fontPanelOpen });
+  pgBackRef.current = { libraryOpen, fontPanelOpen };
+  useEffect(() => {
+    if (!libraryOpen && !fontPanelOpen) return;
+    const currentPath = window.location.pathname + window.location.search;
+    window.history.pushState({ ...(window.history.state || {}), voidBackGuard: true }, '', currentPath);
+  }, [libraryOpen, fontPanelOpen]);
+  useEffect(() => {
+    const onPgPop = (event: PopStateEvent) => {
+      if (c.modal || c.contextTrack || c.importMenu || c.paletteOpen || c.expanded) return;
+      if (pgBackRef.current.fontPanelOpen) {
+        event.stopImmediatePropagation();
+        setFontPanelOpen(false);
+        return;
+      }
+      if (pgBackRef.current.libraryOpen && !c.detail) {
+        event.stopImmediatePropagation();
+        setLibraryOpen(false);
+      }
+    };
+    window.addEventListener('popstate', onPgPop, true);
+    return () => window.removeEventListener('popstate', onPgPop, true);
+  }, [c.contextTrack, c.detail, c.expanded, c.importMenu, c.modal, c.paletteOpen]);
+
   const moveDisc = (event: ReactPointerEvent<HTMLDivElement>) => {
     const el = discRef.current;
     if (!el || event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -547,16 +571,19 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
           onClick={() => activeTrack && c.openExpanded()} onKeyDown={e => { if (activeTrack && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); c.openExpanded(); } }}>
           <PgCover track={activeTrack ?? undefined} />
           <span className="pg-row-text">
-            <span className="pg-row-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span>{activeTrack?.title ?? 'Nothing playing'}</span>
-              {activeTrack && getTrackQualityBadge(activeTrack) && (
-                <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
-              )}
+            <span className="pg-row-name mini-player-title-row">
+              {activeTrack?.title ?? 'Nothing playing'}
             </span>
-            <span className="pg-row-artist">
-              {activeTrack
-                ? `${activeTrack.artist || ''}${formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}`
-                : 'Your music will be here'}
+            <span className="pg-row-artist mini-player-sub-row">
+              <span className="mini-player-artist-name">
+                {activeTrack ? (activeTrack.artist || '') : 'Your music will be here'}
+              </span>
+              {activeTrack && getTrackQualityBadge(activeTrack) && (
+                <>
+                  <span className="mini-player-dot" aria-hidden="true">·</span>
+                  <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
+                </>
+              )}
             </span>
           </span>
         </div>
