@@ -5,8 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>VOID Music Player</title>
+    <script>
+      // Prevent non-Error / AbortError / cross-origin null script events from triggering
+      // the Replit/Vite "(unknown runtime error)" modal overlay.
+      (function () {
+        window.addEventListener(
+          'error',
+          function (evt) {
+            if (!evt.error || !(evt.error instanceof Error) || evt.error.name === 'AbortError') {
+              evt.stopImmediatePropagation();
+              evt.preventDefault();
+            }
+          },
+          true
+        );
+        window.addEventListener(
+          'unhandledrejection',
+          function (evt) {
+            var reason = evt.reason;
+            if (
+              !reason ||
+              !(reason instanceof Error) ||
+              reason.name === 'AbortError' ||
+              reason.name === 'NotAllowedError'
+            ) {
+              evt.stopImmediatePropagation();
+              evt.preventDefault();
+            }
+          },
+          true
+        );
+      })();
+    </script>
     <style>
       html, body { background: #000 !important; margin: 0; }
+      vite-error-overlay { display: none !important; pointer-events: none !important; visibility: hidden !important; }
     </style>
 
     <meta name="description" content="VOID is a quiet, local-first music player for the music you already own." />
@@ -30,9 +63,9 @@
         document.documentElement.style.backgroundColor = dark ? '#000' : '#f6f4ef';
       } catch {}
     </script>
-    <body bgcolor="#000" style="background: #000 !important; margin: 0;">
+  </head>
+  <body bgcolor="#000" style="background: #000 !important; margin: 0;">
     <div id="root" style="background: #000 !important; width: 100vw; height: 100dvh;"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
-
 </html>

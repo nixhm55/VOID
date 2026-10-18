@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Disc3, FileAudio, FolderOpen, Heart, ListMusic, ListPlus, Mic2, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, X, Download, Check, Clock3 } from 'lucide-react';
+import { useState, useEffect, type CSSProperties } from 'react';
+import { ChevronDown, Disc3, FileAudio, FolderOpen, Heart, ListMusic, ListPlus, Mic2, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, X, Download, Check, Clock3 } from 'lucide-react';
 import type { VoidCore } from '../core/voidCore';
 import { PgCover, PgPlayIcon, PgVolume, countLabel, fmt, fmtElapsed, formatBytes, rangeStyle } from './parts';
+import { QualityBadge } from '../components/QualityBadge';
+import { detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from '../api/quality';
 
 const onBackdrop = (close: () => void) => (event: { target: unknown; currentTarget: unknown }) => {
   if (event.target === event.currentTarget) close();
@@ -9,24 +11,35 @@ const onBackdrop = (close: () => void) => (event: { target: unknown; currentTarg
 
 function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
   const [status, setStatus] = useState<'idle' | 'downloading' | 'success' | 'hidden'>('idle');
+  const isNonDownloadableStream =
+    Boolean(track?.isLive) ||
+    track?.qualityBadge === 'Live Radio' ||
+    track?.qualityBadge === 'FLAC Live';
 
   useEffect(() => {
+    if (isNonDownloadableStream) {
+      setStatus('hidden');
+      return;
+    }
     let isMounted = true;
     
     const checkIsDownloaded = async () => {
       const downloadedTracks = (core as any).downloadedTracks || [];
       const trkId = String(track.id).replace(/^api-/, '').replace(/^download:/, '');
+      const norm = (v: unknown) => String(v ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
+      const trkTitle = norm(track.name || track.title);
+      const trkArtist = norm(track.artist);
       
       const isAlreadyDownloaded = downloadedTracks.some((t: any) => {
         const dlId = String(t.id).replace(/^download:/, '').replace(/^api-/, '');
-        return dlId === trkId;
-      }) || (core.tracks && core.tracks.some(t => {
-        const tId = String(t.id).replace(/^download:/, '').replace(/^api-/, '');
-        return tId === trkId;
-      }));
+        if (dlId === trkId) return true;
+        const dlTitle = norm(t.title || t.name);
+        const dlArtist = norm(t.artist);
+        return Boolean(trkTitle && dlTitle && trkTitle === dlTitle && (!trkArtist || !dlArtist || trkArtist === dlArtist));
+      });
 
       if (isAlreadyDownloaded) {
-        if (isMounted) setStatus('hidden');
+        if (isMounted) setStatus('success');
         return;
       }
 
@@ -48,7 +61,7 @@ function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
                 });
 
                 if (isMounted) {
-                  setStatus(inDownloads ? 'hidden' : 'idle');
+                  setStatus(inDownloads ? 'success' : 'idle');
                 }
                 db.close();
               };
@@ -70,7 +83,7 @@ function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [core.tracks, (core as any).downloadedTracks, track.id]);
+  }, [core.tracks, (core as any).downloadedTracks, isNonDownloadableStream, track.id]);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -99,6 +112,12 @@ function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
           } catch (e) {}
         }
         
+        const resolvedMime = blob.type || track.mimeType || 'audio/mpeg';
+        const verifiedQuality = detectTrackQuality(url, track.format || resolvedMime, track.bitrate, {
+          codecHint: track.codec,
+          mimeTypeHint: resolvedMime,
+        });
+
         const record = {
           id: trkId,
           title: String(track.name || track.title || 'Untitled'),
@@ -107,7 +126,13 @@ function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
           image: track.image,
           coverBlob,
           duration: Number(track.duration) || 0,
-          mimeType: blob.type || 'audio/mpeg',
+          mimeType: resolvedMime,
+          source: formatProviderLabel(track.source, track),
+          qualityBadge: verifiedQuality !== 'Unknown' ? verifiedQuality : track.qualityBadge,
+          bitrate: track.bitrate,
+          codec: track.codec,
+          format: track.format,
+          qualityVerified: track.qualityVerified,
           blob,
           downloadedAt: Date.now()
         };
@@ -141,9 +166,6 @@ function PgDownloadBtn({ track, core }: { track: any; core: VoidCore }) {
       }
       
       setStatus('success');
-      setTimeout(() => {
-        setStatus('hidden');
-      }, 1000);
     } catch (err) {
       setStatus('idle');
       if (core.notify) core.notify('Could not save this track offline.');
@@ -182,11 +204,16 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
   });
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!c.paletteOpen) setHistoryExpanded(false);
+  }, [c.paletteOpen]);
 
   const handleSaveHistory = (term: string) => {
     if (!term.trim()) return;
     setSearchHistory(prev => {
-      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())].slice(0, 10);
+      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())];
       localStorage.setItem('void-search-history', JSON.stringify(updated));
       return updated;
     });
@@ -197,6 +224,7 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
     setSearchHistory(prev => {
       const updated = prev.filter(t => t !== term);
       localStorage.setItem('void-search-history', JSON.stringify(updated));
+      if (updated.length <= 4) setHistoryExpanded(false);
       return updated;
     });
   };
@@ -224,32 +252,32 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
             data-testid="input-search-palette"
             onKeyDown={e => {
               if (e.key !== 'Enter') return;
-              handleSaveHistory(c.paletteQuery);
-              if (c.allSearchResults[0]) { void c.playTrack(c.allSearchResults[0]); c.setPaletteOpen(false); }
-              else if (c.musicResults[0]) c.setPaletteOpen(false);
-              else if (c.albumSearchResults[0]) { c.setPaletteOpen(false); c.openCollection('album', c.albumSearchResults[0]); }
-              else if (c.artistSearchResults[0]) { c.setPaletteOpen(false); c.openCollection('artist', c.artistSearchResults[0]); }
-              else if (c.playlistSearchResults[0]) {
-                const playlist = c.playlistSearchResults[0];
-                c.setPaletteOpen(false); c.setPageAndRoute('playlists'); c.setDetail({ kind: 'playlist', name: playlist.name });
+              e.preventDefault();
+              e.stopPropagation();
+              if (c.paletteQuery.trim()) {
+                handleSaveHistory(c.paletteQuery);
               }
             }} />
           <div className="pg-palette-results">
-            {c.allSearchResults.map(track => (
-              <div key={track.id} className="pg-result" role="button" tabIndex={0} 
-                style={{ cursor: 'pointer' }}
-                onClick={() => { handleSaveHistory(c.paletteQuery); void c.playTrack(track); c.setPaletteOpen(false); }} data-testid={`search-result-${track.id}`}>
-                <PgCover track={track} />
-                <span className="pg-row-text"><span className="pg-row-name">{track.title}</span><span className="pg-row-artist">{track.artist} · {track.album}</span></span>
-                <Play size={13} />
-              </div>
-            ))}
+            {c.allSearchResults.map(track => {
+              const localQuality = getTrackQualityBadge(track);
+              return (
+                <div key={track.id} className="pg-result" role="button" tabIndex={0} 
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => { handleSaveHistory(c.paletteQuery); void c.playTrack(track); c.setPaletteOpen(false); }} data-testid={`search-result-${track.id}`}>
+                  <PgCover track={track} />
+                  <span className="pg-row-text"><span className="pg-row-name">{track.title}</span><span className="pg-row-artist">{track.artist} · {track.album}</span></span>
+                  {localQuality && <QualityBadge tier={localQuality} track={track} compact />}
+                  <Play size={13} />
+                </div>
+              );
+            })}
             {c.musicResults.map(track => {
-              const isYouTube = /^[\w-]{11}$/.test(track.id);
-              const sourceLabel = isYouTube ? 'void' : 'VOID';
+              const sourceLabel = formatProviderLabel(track.source, track) || 'Online';
+              const qualityTier = getTrackQualityBadge(track);
 
               return (
-                <div key={`api-${track.id}`} className="pg-result" data-testid={`search-music-${track.id}`}
+                <div key={`api-${track.source || ''}-${track.id}`} className="pg-result" data-testid={`search-music-${track.id}`}
                   style={{ cursor: 'pointer' }}
                   onClick={() => {
                     handleSaveHistory(c.paletteQuery);
@@ -258,19 +286,32 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
                       title: track.name, 
                       artist: track.artist, 
                       album: track.album, 
-                      fileName: `${track.name}.mp4`,
+                      fileName: `${track.name}.${track.codec ? track.codec.toLowerCase() : 'audio'}`,
                       audioUrl: track.downloadUrl, 
+                      downloadUrl: track.downloadUrl,
                       src: track.downloadUrl, 
                       image: track.image,
                       duration: track.duration,
+                      source: sourceLabel,
+                      qualityBadge: qualityTier,
+                      bitrate: track.bitrate,
+                      codec: track.codec,
+                      mimeType: track.mimeType,
+                      format: track.format,
+                      qualityVerified: track.qualityVerified,
+                      isLive: track.isLive,
+                      fallbackUrls: track.fallbackUrls,
                     };
                     c.setPaletteOpen(false);
                     void c.playTrack(remote);
                   }}>
                   <PgCover track={{ image: track.image }} />
                   <span className="pg-row-text"><span className="pg-row-name">{track.name}</span><span className="pg-row-artist">{track.artist}</span></span>
-                  <PgDownloadBtn track={track} core={c} />
-                  <span className="pg-tag search-source-label">{sourceLabel}</span>
+                  <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <PgDownloadBtn track={track} core={c} />
+                    {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
+                    <span className="pg-tag search-source-label" style={{ marginLeft: 0 }}>{sourceLabel}</span>
+                  </span>
                 </div>
               );
             })}
@@ -292,34 +333,57 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
                 <ListMusic size={16} /><span className="pg-row-name">{playlist.name}</span><span className="pg-tag">Playlist</span>
               </div>
             ))}
-            {c.musicSearching && c.paletteQuery && <div className="pg-palette-note">Searching…</div>}
+            {c.musicSearching && c.paletteQuery && <div className="pg-palette-note">Searching music providers…</div>}
             {c.paletteQuery && !c.allSearchResults.length && !c.musicResults.length && !c.musicSearching && !c.albumSearchResults.length && !c.artistSearchResults.length && !c.playlistSearchResults.length && (
-              <div className="pg-palette-note"><strong>No match in your library</strong><br />Try another title, artist or album.</div>
+              <div className="pg-palette-note"><strong>No match found</strong><br />Try another title, artist or album.</div>
             )}
             {!c.paletteQuery && searchHistory.length > 0 && (
-              <>
-                <div className="pg-palette-note" style={{ paddingBottom: 4 }}>Recent Searches</div>
-                {searchHistory.map((term, i) => (
-                  <div
-                    key={`history-${i}`}
-                    className="pg-result"
-                    style={{ cursor: 'pointer' }}
-                    onClick={() => c.setPaletteQuery(term)}
-                  >
-                    <Clock3 size={16} style={{ flex: 'none' }} />
-                    <span className="pg-row-name" style={{ flex: 1 }}>{term}</span>
-                    <button 
-                      className="pg-icon-btn" 
-                      style={{ marginLeft: 'auto', width: 28, height: 28, flex: 'none' }} 
-                      onClick={(e) => handleRemoveHistory(term, e)}
+              <div className="search-history-list" data-expanded={historyExpanded ? 'true' : 'false'}>
+                <div className="search-history-header">
+                  <span className="pg-palette-note" style={{ padding: 0 }}>Recent Searches</span>
+                  {searchHistory.length > 4 && (
+                    <button
+                      type="button"
+                      className={`pg-icon-btn search-history-more-btn${historyExpanded ? ' is-expanded' : ''}`}
+                      style={{ marginLeft: 'auto', width: 28, height: 28, flex: 'none' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setHistoryExpanded(prev => !prev);
+                      }}
+                      aria-label={historyExpanded ? 'Show fewer recent searches' : 'Show more recent searches'}
+                      aria-expanded={historyExpanded}
                     >
-                      <X size={14} />
+                      <ChevronDown size={15} strokeWidth={1.85} />
                     </button>
-                  </div>
-                ))}
-              </>
+                  )}
+                </div>
+                <div className={`search-history-items-scroll${historyExpanded ? ' is-expanded' : ''}`}>
+                  {(historyExpanded ? searchHistory : searchHistory.slice(0, 4)).map((term, i) => (
+                    <div
+                      key={`history-${term}-${i}`}
+                      className={`pg-result search-history-item${i >= 4 ? ' is-extra-history' : ''}`}
+                      style={
+                        i >= 4
+                          ? ({ cursor: 'pointer', '--hist-idx': Math.min(i - 4, 8) } as CSSProperties)
+                          : { cursor: 'pointer' }
+                      }
+                      onClick={() => c.setPaletteQuery(term)}
+                    >
+                      <Clock3 size={16} style={{ flex: 'none' }} />
+                      <span className="pg-row-name" style={{ flex: 1 }}>{term}</span>
+                      <button
+                        className="pg-icon-btn"
+                        style={{ marginLeft: 'auto', width: 28, height: 28, flex: 'none' }}
+                        onClick={(e) => handleRemoveHistory(term, e)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
-            {!c.paletteQuery && searchHistory.length === 0 && <div className="pg-palette-note">Search your local songs and the online catalog.</div>}
+            {!c.paletteQuery && searchHistory.length === 0 && <div className="pg-palette-note">Search your local songs and connected music providers.</div>}
           </div>
         </div>
       </div>
@@ -339,16 +403,22 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
               : <p>Create a playlist first, then add songs from their menus.</p>}
             <div className="pg-sheet-foot"><button className="pg-btn" onClick={closeModal} data-testid="button-cancel-add-playlist">Close</button></div>
           </> : modal === 'properties' && contextTrack ? <>
-            <p>File information stored with your local library.</p>
+            <p>Track and audio quality metadata.</p>
             <dl className="pg-props">
               <dt>File</dt><dd>{contextTrack.fileName}</dd>
               <dt>Title</dt><dd>{contextTrack.title}</dd>
               <dt>Artist</dt><dd>{contextTrack.artist}</dd>
               <dt>Album</dt><dd>{contextTrack.album}</dd>
-              <dt>Duration</dt><dd>{fmt(contextTrack.duration)}</dd>
-              <dt>Format</dt><dd>{contextTrack.mimeType || 'Unknown'}</dd>
-              <dt>Size</dt><dd>{formatBytes(contextTrack.fileSize)}</dd>
-              <dt>Added</dt><dd>{new Date(contextTrack.importedAt).toLocaleString()}</dd>
+              <dt>Source</dt><dd>{formatProviderLabel(contextTrack.source, contextTrack) || 'Local Library'}</dd>
+              <dt>Quality</dt><dd style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <QualityBadge tier={getTrackQualityBadge(contextTrack)} track={contextTrack} compact />
+                {contextTrack.bitrate ? <span>{contextTrack.bitrate} kbps</span> : null}
+                {contextTrack.codec ? <span>· {contextTrack.codec}</span> : null}
+              </dd>
+              <dt>Duration</dt><dd>{contextTrack.isLive ? 'Live Stream' : fmt(contextTrack.duration)}</dd>
+              <dt>Format</dt><dd>{contextTrack.format || contextTrack.mimeType || 'Unknown'}</dd>
+              {contextTrack.fileSize > 0 && <><dt>Size</dt><dd>{formatBytes(contextTrack.fileSize)}</dd></>}
+              {contextTrack.importedAt > 0 && <><dt>Added</dt><dd>{new Date(contextTrack.importedAt).toLocaleString()}</dd></>}
             </dl>
             <div className="pg-sheet-foot"><button className="pg-btn" onClick={() => { closeModal(); c.setContextTrack(null); }} data-testid="button-close-properties">Close</button></div>
           </> : <>
@@ -369,7 +439,7 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
     {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && (
       <div className="pg-backdrop" onMouseDown={onBackdrop(() => c.setContextTrack(null))}>
         <div className="pg-sheet pg-modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
-          <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {contextTrack.fileName}</p>
+          <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {formatProviderLabel(contextTrack.source, contextTrack) || contextTrack.fileName}</p>
           <button className="pg-result" onClick={() => { void c.playTrack(contextTrack); c.setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
           <button className="pg-result" onClick={() => { c.addToQueue(contextTrack); c.setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
           <button className="pg-result" onClick={() => { c.playNext(contextTrack); c.setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
@@ -429,6 +499,8 @@ export function PgNowPlaying({ core: c }: { core: VoidCore }) {
   if (!c.expanded) return null;
   const t = c.activeTrack;
   const { prefs } = c;
+  const npProvider = t ? formatProviderLabel(t.source, t) : '';
+  const npQuality = t ? getTrackQualityBadge(t) : undefined;
   return (
     <div className="pg-np" data-closing={c.closing ? '' : undefined} data-testid="now-playing-expanded">
       <div className="pg-np-scrim" aria-hidden="true" onMouseDown={c.closeExpanded} />
@@ -444,12 +516,20 @@ export function PgNowPlaying({ core: c }: { core: VoidCore }) {
               <div className="pg-np-art"><PgCover track={t} fill /></div>
               <div className="pg-np-meta">
                 <div className="pg-np-info">
-                  <div className="pg-np-titles"><h1>{t.title}</h1><p>{t.artist} · {t.album}</p></div>
+                  <div className="pg-np-titles">
+                    <h1>{t.title}</h1>
+                    <p>{t.artist} · {t.album}{npProvider ? ` · ${npProvider}` : ''}</p>
+                    {npQuality && (
+                      <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <QualityBadge tier={npQuality} track={t} />
+                      </div>
+                    )}
+                  </div>
                   <button className="pg-icon-btn" onClick={() => void c.toggleFavorite(t)} aria-label={t.favorite ? 'Remove favorite' : 'Add favorite'} title={t.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={t.favorite ? 'currentColor' : 'none'} /></button>
                 </div>
                 <input className="pg-range pg-range--np" type="range" min="0" max={c.duration || 0} step=".1" style={rangeStyle(c.duration ? c.position / c.duration : 0)}
                   value={Math.min(c.position, c.duration || 0)} aria-label="Now playing position" onChange={e => c.seekTo(Number(e.target.value))} data-testid="expanded-seek" />
-                <div className="pg-np-times"><span>{fmtElapsed(c.position)}</span><span>{fmt(c.duration)}</span></div>
+                <div className="pg-np-times"><span>{fmtElapsed(c.position)}</span><span>{t.isLive ? 'LIVE' : fmt(c.duration)}</span></div>
                 <div className="pg-np-controls">
                   <button className={`pg-icon-btn${prefs.shuffle ? ' is-on' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" onClick={() => void c.updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
                   <div className="pg-np-transport">

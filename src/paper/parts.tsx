@@ -2,6 +2,8 @@ import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowDown, ArrowUp, Check, Disc3, Heart, ListMusic, Mic2, MoreHorizontal, Pause, Play, Plus, Volume1, Volume2, VolumeX, X } from 'lucide-react';
 import type { Page, RowActions } from '../core/voidCore';
 import { Reveal } from './motion';
+import { QualityBadge } from '../components/QualityBadge';
+import { formatProviderLabel, getTrackQualityBadge } from '../api/quality';
 
 /* ───────────── formatting helpers (presentation only) ───────────── */
 export const fmt = (seconds: number) => {
@@ -128,7 +130,7 @@ export const PgTrackList = memo(function PgTrackList({
   return (
     <div className="pg-list" role="list" data-selecting={selecting ? '' : undefined} style={{ '--pg-aw': reorder ? '176px' : '84px' } as CSSProperties}>
       <div className="pg-list-head" role="presentation">
-        <span>{showIndex ? '' : 'Title'}</span><span>Album</span><span>Time</span>
+        <span>{showIndex ? '' : 'Title'}</span><span>Album</span><span>Time</span><span className="pg-col-quality">Quality</span>
         <span className="pg-list-head-end">
           {page === 'songs' && toggleSelectAll
             ? <button className="pg-dot" data-on={isAllSelected ? '' : undefined} onClick={toggleSelectAll} aria-label="Select all" title="Select all"><Check /></button>
@@ -138,6 +140,8 @@ export const PgTrackList = memo(function PgTrackList({
       {items.map((track, index) => {
         const current = activeId === track.id;
         const selected = selectedIds.includes(track.id);
+        const providerLabel = formatProviderLabel(track.source, track);
+        const qualityBadge = getTrackQualityBadge(track);
         return (
           <Reveal key={track.id} dir="left" index={index} role="listitem"
             className={`pg-row${current ? ' is-current' : ''}${selected ? ' is-selected' : ''}`} data-testid={`row-track-${track.id}`}>
@@ -147,18 +151,44 @@ export const PgTrackList = memo(function PgTrackList({
               <button className="pg-row-main" aria-label={`Play ${track.title}`} data-testid={`button-play-${track.id}`}
                 onClick={() => { try { document.querySelector('audio')?.load(); } catch { /* ignore */ } actions.play(track, items.map(item => item.id)); }}>
                 <PgCover track={track} />
-                <span className="pg-row-text"><span className="pg-row-name">{track.title}</span><span className="pg-row-artist">{track.artist}</span></span>
+                <span className="pg-row-text">
+                  <span className="pg-row-name">{track.title}</span>
+                  <span className="pg-row-artist">
+                    {track.artist}
+                    {providerLabel ? ` · ${providerLabel}` : ''}
+                  </span>
+                </span>
               </button>
               {current && isPlaying && <span className="pg-eq" aria-hidden="true"><i /><i /><i /></span>}
             </div>
             <button className="pg-row-album" onClick={() => actions.openAlbum(track.album)} data-testid={`link-album-${track.id}`}>{track.album}</button>
-            <span className="pg-row-time">{fmt(track.duration)}</span>
+            <span className="pg-row-time">{track.isLive ? 'LIVE' : fmt(track.duration)}</span>
+            <span className="pg-row-quality">{qualityBadge ? <QualityBadge tier={qualityBadge} track={track} compact /> : null}</span>
             <div className="pg-row-actions">
               {reorder && <>
                 <button className="pg-icon-btn" aria-label={`Move ${track.title} up`} onClick={() => actions.move(track, index, -1)} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button>
                 <button className="pg-icon-btn" aria-label={`Move ${track.title} down`} onClick={() => actions.move(track, index, 1)} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button>
                 <button className="pg-icon-btn" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={() => actions.removeFromList(track.id)} data-testid={`button-remove-from-list-${track.id}`}><X /></button>
               </>}
+              {page !== 'downloads' && actions.canDownload?.(track) && (
+                <button
+                  className={`download-icon-button row-download-button${actions.isDownloading?.(track) ? ' is-downloading' : ''}${actions.isDownloadSuccess?.(track) ? ' is-download-success' : ''}`}
+                  aria-label={actions.isDownloadSuccess?.(track) ? `Downloaded ${track.title}` : `Download ${track.title}`}
+                  title={actions.isDownloadSuccess?.(track) ? 'Downloaded' : actions.isDownloading?.(track) ? 'Saving offline…' : `Save ${track.title} for offline listening`}
+                  disabled={Boolean(actions.isDownloading?.(track) || actions.isDownloadSuccess?.(track))}
+                  onClick={event => { event.stopPropagation(); actions.download?.(track); }}
+                  style={{ opacity: 1, transform: 'none', pointerEvents: 'auto', marginRight: 8, width: 30, height: 32 }}
+                  data-testid={`button-download-${track.id}`}
+                >
+                  <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                    {actions.isDownloadSuccess?.(track) ? (
+                      <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : (
+                      <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                    )}
+                  </svg>
+                </button>
+              )}
               <button className="pg-icon-btn" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={() => actions.favorite(track)} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
               <button className="pg-icon-btn" aria-label={`More actions for ${track.title}`} onClick={() => actions.menu(track)} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
             </div>

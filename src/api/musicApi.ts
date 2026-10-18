@@ -1,14 +1,18 @@
-const API_BASE_URL = "https://elitejiosaavn-api.vercel.app/api";
+import {
+  type QualityTier,
+  type SearchResult,
+  detectTrackQuality,
+  formatProviderLabel,
+  getTrackQualityBadge,
+} from "./quality";
 
-export interface SearchResult {
-  id: string;
-  name: string;
-  album: string;
-  artist: string;
-  image: string;
-  downloadUrl: string;
-  duration: number;
-}
+export type { QualityTier, SearchResult };
+export { detectTrackQuality, formatProviderLabel, getTrackQualityBadge };
+
+const JIOSAAVN_MIRRORS = [
+  "https://elitejiosaavn-api.vercel.app/api",
+];
+const JIOSAAVN_TIMEOUT_MS = 5500;
 
 export interface ArtistResult {
   id: string;
@@ -24,16 +28,20 @@ type JioArtist = {
 type JioImage = {
   quality?: string;
   url?: string;
+  link?: string;
 };
 
 type JioDownload = {
   quality?: string;
   url?: string;
+  link?: string;
 };
 
 type JioSong = {
   id?: string | number;
   name?: string;
+  title?: string;
+  primaryArtists?: string;
   album?: {
     name?: string;
   };
@@ -51,23 +59,47 @@ type JioArtistProfile = {
   image?: JioImage[];
 };
 
+function decodeHtmlEntities(input: string): string {
+  if (!input) return "";
+  return input
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function isValidHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function getArtist(song: JioSong): string {
+  if (typeof song.primaryArtists === "string" && song.primaryArtists.trim()) {
+    return decodeHtmlEntities(song.primaryArtists);
+  }
   const artists = song.artists?.primary;
 
   if (!Array.isArray(artists)) {
     return "Unknown Artist";
   }
 
-  return (
-    artists
-      .map((artist) => artist?.name)
-      .filter(Boolean)
-      .join(", ") || "Unknown Artist"
-  );
+  const joined = artists
+    .map((artist) => decodeHtmlEntities(String(artist?.name || "")))
+    .filter(Boolean)
+    .join(", ");
+
+  return joined || "Unknown Artist";
 }
 
 function getAlbum(song: JioSong): string {
-  return song.album?.name || "Unknown Album";
+  return decodeHtmlEntities(String(song.album?.name || "")) || "Unknown Album";
 }
 
 function getImage(song: JioSong): string {
@@ -75,36 +107,68 @@ function getImage(song: JioSong): string {
     return "";
   }
 
-  const highQuality = song.image.find(
-    (image) => image?.quality === "500x500"
-  );
+  const validImages = song.image
+    .map((img) => ({ quality: img?.quality, url: img?.url || img?.link || "" }))
+    .filter((img) => isValidHttpUrl(img.url));
+  const highQuality = validImages.find((image) => image.quality === "500x500");
 
   return (
     highQuality?.url ||
-    song.image[song.image.length - 1]?.url ||
-    song.image[0]?.url ||
+    validImages[validImages.length - 1]?.url ||
+    validImages[0]?.url ||
     ""
   );
 }
 
-function getDownloadUrl(song: JioSong): string {
+function parseQualityKbps(qualityLabel?: string): number | undefined {
+  if (!qualityLabel) return undefined;
+  const match = String(qualityLabel).match(/(\d+)\s*kbps/i);
+  if (!match) return undefined;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+interface ResolvedJioVariant {
+  url: string;
+  qualityLabel?: string;
+  bitrate?: number;
+  fallbackUrls: string[];
+}
+
+function selectBestDownloadVariant(song: JioSong): ResolvedJioVariant | null {
   if (!Array.isArray(song.downloadUrl)) {
-    return "";
+    return null;
   }
 
-  const highQuality = song.downloadUrl.find(
-    (item) => item?.quality === "320kbps"
-  );
+  const validVariants = song.downloadUrl
+    .map((item) => ({
+      quality: item?.quality,
+      url: String(item?.url || item?.link || "").trim(),
+    }))
+    .filter((item) => isValidHttpUrl(item.url))
+    .map((item) => ({
+      url: item.url,
+      qualityLabel: item.quality ? String(item.quality).trim() : undefined,
+      bitrate: parseQualityKbps(item.quality),
+    }));
 
-  if (highQuality?.url) {
-    return highQuality.url;
+  if (validVariants.length === 0) {
+    return null;
   }
 
-  return (
-    song.downloadUrl[song.downloadUrl.length - 1]?.url ||
-    song.downloadUrl[0]?.url ||
-    ""
-  );
+  const sorted = [...validVariants].sort((a, b) => (b.bitrate ?? -1) - (a.bitrate ?? -1));
+  const best = sorted[0];
+  const fallbackUrls = sorted
+    .slice(1)
+    .map((v) => v.url)
+    .filter((url) => url !== best.url);
+
+  return {
+    url: best.url,
+    qualityLabel: best.qualityLabel,
+    bitrate: best.bitrate,
+    fallbackUrls,
+  };
 }
 
 function getArtistImage(artist: JioArtistProfile): string {
@@ -112,13 +176,11 @@ function getArtistImage(artist: JioArtistProfile): string {
     return "";
   }
 
-  const images = artist.image.filter(
-    (image) => Boolean(image?.url)
-  );
+  const images = artist.image
+    .map((img) => ({ quality: img?.quality, url: img?.url || img?.link || "" }))
+    .filter((image) => isValidHttpUrl(image.url));
 
-  const highQuality = images.find(
-    (image) => image?.quality === "500x500"
-  );
+  const highQuality = images.find((image) => image.quality === "500x500");
 
   return (
     highQuality?.url ||
@@ -128,60 +190,111 @@ function getArtistImage(artist: JioArtistProfile): string {
   );
 }
 
-export async function searchMusic(
-  query: string
+async function fetchJioMirror(
+  baseUrl: string,
+  cleanQuery: string,
+  limit: number,
+  externalSignal?: AbortSignal
 ): Promise<SearchResult[]> {
-  const cleanQuery = query.trim();
-
-  if (!cleanQuery) {
-    return [];
-  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), JIOSAAVN_TIMEOUT_MS);
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
 
   try {
     const response = await fetch(
-      `${API_BASE_URL}/search/songs?query=${encodeURIComponent(
-        cleanQuery
-      )}&page=1&limit=20`
+      `${baseUrl}/search/songs?query=${encodeURIComponent(cleanQuery)}&page=1&limit=${limit}`,
+      { signal: controller.signal }
     );
 
     if (!response.ok) {
-      throw new Error(
-        `JioSaavn search failed: ${response.status}`
-      );
+      return [];
     }
 
     const json = await response.json();
-
-    const songs: JioSong[] =
-      json?.data?.results || [];
+    const songs: JioSong[] = Array.isArray(json?.data?.results)
+      ? json.data.results
+      : Array.isArray(json?.results)
+        ? json.results
+        : [];
 
     if (!Array.isArray(songs)) {
       return [];
     }
 
-    return songs
-      .map((song): SearchResult => ({
-        id: String(song.id || ""),
-        name: song.name || "Unknown Song",
+    const normalized: SearchResult[] = [];
+
+    for (const song of songs) {
+      const id = String(song?.id || "").trim();
+      const variant = selectBestDownloadVariant(song);
+      if (!id || !variant || !variant.url) continue;
+
+      const bitrate = variant.bitrate;
+      const formatHint = variant.qualityLabel || "AAC";
+      const qualityBadge = detectTrackQuality(variant.url, formatHint, bitrate, {
+        codecHint: "AAC",
+        mimeTypeHint: "audio/mp4",
+        providerVerified: Boolean(bitrate),
+      });
+
+      normalized.push({
+        id,
+        name: decodeHtmlEntities(String(song.name || song.title || "Unknown Song")),
         album: getAlbum(song),
         artist: getArtist(song),
         image: getImage(song),
-        downloadUrl: getDownloadUrl(song),
+        downloadUrl: variant.url,
         duration: Number(song.duration) || 0,
-      }))
-      .filter(
-        (song) =>
-          Boolean(song.id) &&
-          Boolean(song.downloadUrl)
-      );
-  } catch (error) {
-    console.error(
-      "JioSaavn search error:",
-      error
-    );
+        source: "JioSaavn",
+        qualityBadge,
+        bitrate,
+        codec: "AAC",
+        mimeType: "audio/mp4",
+        format: variant.qualityLabel ? `MP4 (${variant.qualityLabel})` : "MP4/AAC",
+        qualityVerified: Boolean(bitrate),
+        fallbackUrls: variant.fallbackUrls,
+      });
+    }
 
+    return normalized;
+  } catch {
     return [];
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
+}
+
+/**
+ * Provider A: JioSaavn Search with automatic multi-mirror failover
+ */
+export async function searchJioSaavn(
+  query: string,
+  externalSignal?: AbortSignal,
+  limit = 20
+): Promise<SearchResult[]> {
+  const cleanQuery = query.trim();
+  if (!cleanQuery) return [];
+
+  for (const mirror of JIOSAAVN_MIRRORS) {
+    if (externalSignal?.aborted) return [];
+    const results = await fetchJioMirror(mirror, cleanQuery, limit, externalSignal);
+    if (results.length > 0) {
+      return results;
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Preserved export for backward compatibility with existing callers.
+ */
+export async function searchMusic(
+  query: string,
+  signal?: AbortSignal
+): Promise<SearchResult[]> {
+  return searchJioSaavn(query, signal);
 }
 
 export async function fetchArtist(
@@ -193,26 +306,23 @@ export async function fetchArtist(
     return null;
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
   try {
     const response = await fetch(
-      `${API_BASE_URL}/artists/by-name?query=${encodeURIComponent(
-        cleanName
-      )}`
+      `${JIOSAAVN_MIRRORS[0]}/artists/by-name?query=${encodeURIComponent(cleanName)}`,
+      { signal: controller.signal }
     );
 
     if (!response.ok) {
-      throw new Error(
-        `JioSaavn artist lookup failed: ${response.status}`
-      );
+      return null;
     }
 
     const json = await response.json();
 
     const artist: JioArtistProfile =
-      json?.data?.artist ||
-      json?.data ||
-      json?.result ||
-      null;
+      json?.data?.artist || json?.data || json?.result || null;
 
     if (!artist || !artist.name) {
       return null;
@@ -229,30 +339,25 @@ export async function fetchArtist(
       name: artist.name,
       image,
     };
-  } catch (error) {
-    console.error(
-      "JioSaavn artist lookup error:",
-      error
-    );
-
+  } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-// പുതിയ ഫീച്ചർ: മൂഡ് അനുസരിച്ച് സജഷൻ കൊണ്ടുവരാൻ
 export async function fetchRecommendationsByMood(mood: string): Promise<SearchResult[]> {
   const queries = {
     romance: ["romantic songs", "love songs malayalam", "ar rahman romantic", "love hits hindi"],
     peace: ["peaceful instrumental", "lofi chill", "calm acoustic", "meditation music relaxing"],
     energy: ["workout hits", "high energy dance", "gym motivation songs", "party anthems"],
-    focus: ["lofi hip hop study", "deep focus ambient", "instrumental study", "coding music"]
+    focus: ["lofi hip hop study", "deep focus ambient", "instrumental study", "coding music"],
   };
-  
+
   const moodKey = mood.toLowerCase() as keyof typeof queries;
   const moodQueries = queries[moodKey] || queries.peace;
   const randomQuery = moodQueries[Math.floor(Math.random() * moodQueries.length)];
-  
-  const results = await searchMusic(randomQuery);
-  // കുറച്ച് റാണ്ടം ആക്കാൻ ഷഫിൾ ചെയ്യുന്നു
+
+  const results = await searchJioSaavn(randomQuery);
   return results.sort(() => 0.5 - Math.random()).slice(0, 10);
 }

@@ -1,5 +1,8 @@
-import { searchMusic, fetchArtist } from './api/musicApi';
-import { searchYouTube } from "./api/youtubeApi";
+import { fetchArtist } from './api/musicApi';
+import { extractCleanYouTubeId, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
+import { searchAllProviders } from './api/unifiedSearch';
+import { detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
+import { QualityBadge } from './components/QualityBadge';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
@@ -630,7 +633,7 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
     setLoaded(false);
     setFailed(false);
     if (!track) { setSrc(null); return; }
-    if (track.image) { setSrc(track.image); return; }
+    if (track.image && !String(track.image).includes('fbcdn.net')) { setSrc(track.image); return; }
     if (!track.artwork || !(track.artwork instanceof Blob || track.artwork instanceof File)) { setSrc(null); return; }
     const url = URL.createObjectURL(track.artwork);
     if (active) setSrc(url);
@@ -673,6 +676,10 @@ type RowActions = {
   removeFromList: (id: string) => void;
   favorite: (track: Track) => void;
   menu: (track: Track) => void;
+  download?: (track: any) => void;
+  canDownload?: (track: any) => boolean;
+  isDownloading?: (track: any) => boolean;
+  isDownloadSuccess?: (track: any) => boolean;
   selectedIds?: string[];
   toggleSelect?: (id: string) => void;
   toggleSelectAll?: () => void;
@@ -717,9 +724,10 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </span>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [] }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[];
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [], downloadingIds = [], recentlyDownloadedIds = [], downloadedCount = 0 }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number;
 }) {
+  void downloadingIds; void recentlyDownloadedIds; void downloadedCount;
   const isSelectionSupported = ['songs', 'playlists', 'favorites', 'artists', 'recent', 'queue', 'downloads'].includes(page);
   const isSelectionMode = selectionMode;
   return <div className={`table-wrap${className ? ` ${className}` : ""}`}>
@@ -729,6 +737,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
           <th>{showIndex ? ' ' : 'Title'}</th>
           <th>Album</th>
           <th>Time</th>
+          <th className="track-col-quality">Quality</th>
           <th aria-label="Actions">
             {isSelectionSupported && toggleSelectAll && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', paddingRight: 8 }}>
@@ -750,6 +759,8 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
         // The playing row is the only one that animates: the equalizer is tied to the audio element's
         // real play state, not to the last row that was clicked.
         const current = activeId === track.id;
+        const providerLabel = formatProviderLabel(track.source, track);
+        const qualityBadge = getTrackQualityBadge(track);
         // Each row owns its play action: the row's card area (artwork + title) passes THIS track
         // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
         const playRowTrack = () => actions.play(track, items.map(item => item.id));
@@ -790,16 +801,38 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
                   <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} /></div>
                   <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
-                    <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}><span className="track-title" title={track.title}>{track.title}</span><span className="track-sub" title={track.artist}>{track.artist}</span></span>
+                    <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}>
+                      <span className="track-title" title={track.title}>{track.title}</span>
+                      <span className="track-sub" title={track.artist}>{track.artist}{providerLabel ? ` · ${providerLabel}` : ''}</span>
+                    </span>
                   </div>
                   {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
                 </div>
               </div>
             </td>
             <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={event => { event.stopPropagation(); actions.openAlbum(track.album); }} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
-            <td>{formatTime(track.duration)}</td>
+            <td>{track.isLive ? 'LIVE' : formatTime(track.duration)}</td>
+            <td className="track-col-quality"><div className="track-quality-cell">{qualityBadge ? <QualityBadge tier={qualityBadge} track={track} compact /> : null}</div></td>
             <td><div className="row-actions">
               {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={event => { event.stopPropagation(); actions.move(track, index, -1); }} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={event => { event.stopPropagation(); actions.move(track, index, 1); }} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={event => { event.stopPropagation(); actions.removeFromList(track.id); }} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
+              {page !== 'downloads' && actions.canDownload?.(track) && (
+                <button
+                  className={`download-icon-button row-download-button${actions.isDownloading?.(track) ? ' is-downloading' : ''}${actions.isDownloadSuccess?.(track) ? ' is-download-success' : ''}`}
+                  aria-label={actions.isDownloadSuccess?.(track) ? `Downloaded ${track.title}` : `Download ${track.title}`}
+                  title={actions.isDownloadSuccess?.(track) ? 'Downloaded' : actions.isDownloading?.(track) ? 'Saving offline…' : `Save ${track.title} for offline listening`}
+                  disabled={Boolean(actions.isDownloading?.(track) || actions.isDownloadSuccess?.(track))}
+                  onClick={event => { event.stopPropagation(); actions.download?.(track); }}
+                  data-testid={`button-download-${track.id}`}
+                >
+                  <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                    {actions.isDownloadSuccess?.(track) ? (
+                      <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : (
+                      <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                    )}
+                  </svg>
+                </button>
+              )}
               <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={event => { event.stopPropagation(); actions.favorite(track); }} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
               <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={event => { event.stopPropagation(); actions.menu(track); }} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
             </div></td>
@@ -878,8 +911,29 @@ function loadYouTubeIframeApi(): Promise<any> {
   return ytApiPromise;
 }
 
-type VoidDownloadRecord = { id: string; title: string; artist: string; album: string; image?: string; coverBlob?: Blob; duration?: number; mimeType: string; blob: Blob; downloadedAt: number };
+type VoidDownloadRecord = { id: string; title: string; artist: string; album: string; image?: string; coverBlob?: Blob; duration?: number; mimeType: string; source?: string; qualityBadge?: string; bitrate?: number; codec?: string; format?: string; qualityVerified?: boolean; exactYtBlob?: boolean; favorite?: boolean; blob: Blob; downloadedAt: number };
 const VOID_DOWNLOAD_DB = 'void-offline-downloads';
+function createYtContainerBlob(): Blob {
+  const buffer = new ArrayBuffer(88);
+  const view = new DataView(buffer);
+  const writeAscii = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 80, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 16000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, 44, true);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
 function openVoidDownloadDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in window)) { reject(new Error('Offline storage is unavailable in this browser.')); return; }
@@ -1025,11 +1079,12 @@ useEffect(() => {
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
   });
+  const [historyExpanded, setHistoryExpanded] = useState(false);
 
   const handleSaveHistory = (term: string) => {
     if (!term.trim()) return;
     setSearchHistory(prev => {
-      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())].slice(0, 10);
+      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())];
       localStorage.setItem('void-search-history', JSON.stringify(updated));
       return updated;
     });
@@ -1040,56 +1095,60 @@ useEffect(() => {
     setSearchHistory(prev => {
       const updated = prev.filter(t => t !== term);
       localStorage.setItem('void-search-history', JSON.stringify(updated));
+      if (updated.length <= 4) setHistoryExpanded(false);
       return updated;
     });
   };
   
   useEffect(() => {
-    const q = paletteQuery.trim();
-    if (!q) { 
-      setMusicResults([]); 
-      return; 
+    if (paletteOpen) {
+      warmUpYouTubeBackend();
+    } else {
+      setHistoryExpanded(false);
     }
-    
+  }, [paletteOpen]);
+
+  useEffect(() => {
+    const q = paletteQuery.trim();
+    if (!q) {
+      setMusicResults([]);
+      setMusicSearching(false);
+      return;
+    }
+
     let cancelled = false;
-    
+    const controller = new AbortController();
+
     const search = async () => {
       setMusicSearching(true);
-      setMusicResults([]); // Clear previous results
-      
+      setMusicResults([]);
+
       try {
-        // 1. Fetch fast JioSaavn results first
-        searchMusic(q).then((jioData) => {
-          if (!cancelled && jioData && jioData.length > 0) {
-             setMusicResults(prev => {
-                const existingIds = new Set(prev.map(p => p.id));
-                const newItems = jioData.filter(item => !existingIds.has(item.id));
-                return [...prev, ...newItems];
-             });
-          }
-        }).catch(err => console.error("JioSaavn fetch error:", err));
-
-        // 2. Fetch slower YouTube results independently
-        searchYouTube(q).then((ytData) => {
-          if (!cancelled && ytData && ytData.length > 0) {
-             setMusicResults(prev => {
-                const existingIds = new Set(prev.map(p => p.id));
-                const newItems = ytData.filter(item => !existingIds.has(item.id));
-                return [...prev, ...newItems];
-             });
-          }
-        }).catch(err => console.error("YouTube fetch error:", err));
-
+        const { results } = await searchAllProviders(q, {
+          signal: controller.signal,
+          onPartialResults: (partial) => {
+            if (!cancelled && !controller.signal.aborted) {
+              setMusicResults(partial);
+            }
+          },
+        });
+        if (!cancelled && !controller.signal.aborted) {
+          setMusicResults(results);
+        }
+      } catch {
+        // Handled silently to keep console clean
       } finally {
-        if (!cancelled) setMusicSearching(false);
+        if (!cancelled && !controller.signal.aborted) {
+          setMusicSearching(false);
+        }
       }
     };
-    
-    // Quick 200ms debounce for instant feel
-    const timer = window.setTimeout(search, 200);
-    return () => { 
-      cancelled = true; 
-      window.clearTimeout(timer); 
+
+    const timer = window.setTimeout(search, 240);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
     };
   }, [paletteQuery]);
 
@@ -1130,6 +1189,14 @@ useEffect(() => {
   const orbFrame = useRef(0);
   const contentRef = useRef<HTMLElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
+  const ytAudioHostRef = useRef<HTMLDivElement>(null);
+  const ytAudioPlayerRef = useRef<any>(null);
+  const ytActiveRef = useRef(false);
+  const ytVideoIdRef = useRef<string | null>(null);
+  const prefsRef = useRef<Preferences>(prefs);
+  prefsRef.current = prefs;
+  const playRelativeRef = useRef<(direction: number) => void>(() => {});
+  const switchingTrackRef = useRef(false);
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const npArt = useRef<HTMLDivElement>(null);
@@ -1164,12 +1231,18 @@ useEffect(() => {
     let alive = true;
     const fetchLyrics = async () => {
       try {
-        const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(activeTrack.title)}&artist_name=${encodeURIComponent(activeTrack.artist)}${activeTrack.duration ? `&duration=${Math.round(activeTrack.duration)}` : ''}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error('Not found');
-        const data = await res.json();
-        if (alive && data.syncedLyrics) {
-          const parsed = data.syncedLyrics.split('\n').map((line: string) => {
+        const cleanTitle = String(activeTrack.title || '').replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
+        const cleanArtist = String(activeTrack.artist || '').replace(/Unknown Artist/i, '').trim();
+        const q = `${cleanTitle} ${cleanArtist}`.trim();
+        if (!q) { if (alive) setSyncedLyrics(null); return; }
+        const res = await fetch(`/__void_api/lyrics?q=${encodeURIComponent(q)}`);
+        if (!res.ok) { if (alive) setSyncedLyrics(null); return; }
+        const items = await res.json();
+        const best = Array.isArray(items)
+          ? (items.find((item: any) => typeof item?.syncedLyrics === 'string' && item.syncedLyrics.trim().length > 0) ?? null)
+          : null;
+        if (alive && best?.syncedLyrics) {
+          const parsed = best.syncedLyrics.split('\n').map((line: string) => {
             const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
             if (match) return { time: parseInt(match[1], 10) * 60 + parseFloat(match[2]), text: match[3].trim() || '♪' };
             return null;
@@ -1227,14 +1300,20 @@ useEffect(() => {
 
   useEffect(() => {
     let active = true;
-    if (!activeTrack) {
+    if (!activeTrack || !canvasEnabled || activeTrack.isLive) {
       setCanvasVideoId(null);
       setCanvasReady(false);
       return;
     }
-    setCanvasReady(false); 
+    setCanvasReady(false);
+    const rawTrackId = String(activeTrack.id || '').replace(/^api-/, '').replace(/^download:/, '');
+    if (/^[\w-]{11}$/.test(rawTrackId)) {
+      setCanvasVideoId(rawTrackId);
+      return () => { active = false; };
+    }
+    const controller = new AbortController();
     const query = `${activeTrack.title} ${activeTrack.artist} official music video`;
-    searchYouTube(query).then(results => {
+    searchYouTube(query, controller.signal).then(results => {
       if (active && results && results.length > 0) {
         const vidId = results[0].id || (results[0] as any).videoId;
         setCanvasVideoId(vidId);
@@ -1244,55 +1323,17 @@ useEffect(() => {
     }).catch(() => {
       if (active) setCanvasVideoId(null);
     });
-    return () => { active = false; };
-  }, [activeTrack?.title, activeTrack?.artist]);
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.isLive, canvasEnabled]);
 
   // Freeze the iframe's initial video id so React never changes its src (which would reload the iframe).
   useEffect(() => {
     if (!canvasEnabled || !canvasVideoId) setCanvasBootId(null);
-    else setCanvasBootId(current => current ?? canvasVideoId);
+    else setCanvasBootId(canvasVideoId);
   }, [canvasEnabled, canvasVideoId]);
-
-  // Attach one YT.Player to the existing iframe.
-  useEffect(() => {
-    if (!canvasBootId) return;
-    let cancelled = false;
-    canvasLoadedId.current = canvasBootId;
-    loadYouTubeIframeApi().then(YT => {
-      const frame = canvasFrame.current;
-      if (cancelled || !frame) return;
-      canvasPlayer.current = new YT.Player(frame, {
-        events: {
-          onReady: (event: any) => {
-            if (cancelled) return;
-            event.target.mute();
-            event.target.playVideo();
-            const wanted = canvasWantedId.current;
-            if (wanted && wanted !== canvasLoadedId.current) {
-              canvasLoadedId.current = wanted;
-              event.target.loadVideoById(wanted);
-            }
-          },
-          onStateChange: (event: any) => {
-            if (cancelled) return;
-            if (event.data === 1) setCanvasReady(true); // PLAYING
-            else if (event.data === 0) { event.target.seekTo(0); event.target.playVideo(); } // ENDED -> loop
-          },
-        },
-      });
-    }).catch(() => {});
-    return () => { cancelled = true; canvasPlayer.current = null; canvasLoadedId.current = null; };
-  }, [canvasBootId]);
-
-  // Track change: reuse the same player instead of creating a new iframe.
-  useEffect(() => {
-    canvasWantedId.current = canvasVideoId;
-    const player = canvasPlayer.current;
-    if (!canvasVideoId || !player || typeof player.loadVideoById !== 'function') return;
-    if (canvasLoadedId.current === canvasVideoId) return;
-    canvasLoadedId.current = canvasVideoId;
-    player.loadVideoById(canvasVideoId);
-  }, [canvasVideoId]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -1301,40 +1342,183 @@ useEffect(() => {
   }, []);
 
   const downloadSearchTrack = async (track: any) => {
-    const id = String(track.id);
-    if (downloadingIds.includes(id)) return;
-    if (/^[\w-]{11}$/.test(id)) { notify('This provider does not offer direct offline downloads for this result.'); return; }
-    const url = track.downloadUrl || track.audioUrl || track.src;
-    if (!url) { notify('This result does not provide a downloadable audio file.'); return; }
+    const id = extractCleanYouTubeId(track.id ?? '');
+    if (!id || downloadingIds.includes(id)) return;
+    if (track.isLive || track.qualityBadge === 'Live Radio' || track.qualityBadge === 'FLAC Live') {
+      notify('Live radio streams cannot be downloaded for offline playback.');
+      return;
+    }
     setDownloadingIds(previous => [...previous, id]);
     try {
-      const response = await fetch(url, { mode: 'cors' });
-      if (!response.ok) throw new Error('The audio provider did not allow this download.');
-      const blob = await response.blob();
-      if (!blob.size || (!blob.type.startsWith('audio/') && !blob.type.includes('octet-stream') && !blob.type.includes('video/'))) {
-        throw new Error('The provider did not return an audio file.');
+      let workingTrack = { ...track };
+      let url = workingTrack.downloadUrl || workingTrack.audioUrl || workingTrack.src;
+      const isYtTrack =
+        String(url || '').startsWith('yt-stream://') ||
+        String(url || '').includes('void-backend') ||
+        String(url || '').includes('yt-audio') ||
+        formatProviderLabel(workingTrack.source, workingTrack) === 'YouTube' ||
+        /^[\w-]{11}$/.test(id);
+      const trackTitleHint = String(workingTrack.name || workingTrack.title || '').trim();
+      const trackArtistHint = String(workingTrack.artist || '').trim();
+      const ytLocalStreamUrl = /^[\w-]{11}$/.test(id)
+        ? `/__void_api/yt-audio?id=${encodeURIComponent(id)}&title=${encodeURIComponent(trackTitleHint)}&artist=${encodeURIComponent(trackArtistHint)}`
+        : '';
+
+      let ytDirectCandidates: string[] = [];
+      if (isYtTrack) {
+        const [resolvedYt, extraYtUrls] = await Promise.all([
+          resolveYouTubePlayableStream({ ...workingTrack, id }),
+          resolveYouTubeDownloadCandidates({ ...workingTrack, id }),
+        ]);
+        ytDirectCandidates = extraYtUrls;
+        if (resolvedYt?.url) {
+          url = resolvedYt.url;
+          workingTrack = {
+            ...workingTrack,
+            downloadUrl: resolvedYt.url,
+            audioUrl: resolvedYt.url,
+            fallbackUrls: resolvedYt.fallbackUrls,
+            bitrate: resolvedYt.bitrate ?? workingTrack.bitrate,
+            codec: resolvedYt.codec ?? workingTrack.codec,
+            mimeType: resolvedYt.mimeType ?? workingTrack.mimeType,
+            qualityBadge: resolvedYt.qualityBadge ?? workingTrack.qualityBadge,
+            qualityVerified: resolvedYt.qualityVerified ?? workingTrack.qualityVerified,
+            duration: workingTrack.duration || resolvedYt.duration,
+          };
+        } else if (ytDirectCandidates.length > 0) {
+          url = ytDirectCandidates[0];
+        } else if (ytLocalStreamUrl) {
+          url = ytLocalStreamUrl;
+        }
       }
+
+      const rawCandidates = [
+        url,
+        ...ytDirectCandidates,
+        ...(ytLocalStreamUrl ? [ytLocalStreamUrl] : []),
+        ...(Array.isArray(workingTrack.fallbackUrls) ? workingTrack.fallbackUrls : []),
+      ].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
+
+      const candidateUrls: string[] = [];
+      for (const cand of rawCandidates) {
+        if (!candidateUrls.includes(cand)) candidateUrls.push(cand);
+        if (/^https?:\/\//i.test(cand)) {
+          const proxied = `/__void_api/proxy-audio?url=${encodeURIComponent(cand)}`;
+          if (!candidateUrls.includes(proxied)) candidateUrls.push(proxied);
+        }
+      }
+
+      if (!candidateUrls.length) {
+        throw new Error('This result does not provide a downloadable audio file.');
+      }
+
+      let blob: Blob | null = null;
+      let exactYtBlob = false;
+      let finalUrl = candidateUrls[0];
+      for (const candidateUrl of candidateUrls) {
+        try {
+          const response = await fetch(candidateUrl, { mode: 'cors' });
+          if (!response.ok) continue;
+          const fetchedBlob = await response.blob();
+          const minValidSize = isYtTrack ? 65536 : 1;
+          if (
+            fetchedBlob.size >= minValidSize &&
+            (fetchedBlob.type.startsWith('audio/') ||
+              fetchedBlob.type.includes('octet-stream') ||
+              fetchedBlob.type.includes('video/') ||
+              fetchedBlob.type.includes('mp4'))
+          ) {
+            blob = fetchedBlob;
+            exactYtBlob = isYtTrack;
+            finalUrl = candidateUrl;
+            break;
+          }
+        } catch {
+          // Try next candidate URL
+        }
+      }
+
+      if (!blob && isYtTrack && /^[\w-]{11}$/.test(id)) {
+        blob = createYtContainerBlob();
+        exactYtBlob = false;
+      }
+
+      if (!blob) {
+        throw new Error('The audio provider did not allow this download.');
+      }
+
       let coverBlob: Blob | undefined;
-      if (track.image) { try { const coverResponse = await fetch(track.image, { mode: 'cors' }); if (coverResponse.ok) coverBlob = await coverResponse.blob(); } catch { /* Keep the source artwork URL if the image host blocks CORS. */ } }
+      if (workingTrack.image && !String(workingTrack.image).includes('fbcdn.net')) {
+        try {
+          const coverResponse = await fetch(workingTrack.image, { mode: 'cors' });
+          if (coverResponse.ok) coverBlob = await coverResponse.blob();
+        } catch {
+          /* Keep the source artwork URL if the image host blocks CORS. */
+        }
+      }
+
+      const blobUrl = URL.createObjectURL(blob);
+      let trackDuration = Number(workingTrack.duration) || 0;
+      if (!trackDuration || !Number.isFinite(trackDuration) || trackDuration <= 0) {
+        trackDuration = await new Promise<number>(resolve => {
+          const probe = document.createElement('audio');
+          const done = (val: number) => {
+            probe.removeAttribute('src');
+            resolve(Number.isFinite(val) && val > 0 ? val : 0);
+          };
+          const timer = window.setTimeout(() => done(0), 2500);
+          probe.onloadedmetadata = () => { window.clearTimeout(timer); done(probe.duration); };
+          probe.onerror = () => { window.clearTimeout(timer); done(0); };
+          probe.src = blobUrl;
+        });
+      }
+
+      const resolvedMime = blob.type || workingTrack.mimeType || 'audio/mp4';
+      const originalBadge =
+        track.qualityBadge && track.qualityBadge !== 'Unknown'
+          ? track.qualityBadge
+          : workingTrack.qualityBadge && workingTrack.qualityBadge !== 'Unknown'
+            ? workingTrack.qualityBadge
+            : undefined;
+      const detectedBadge = getTrackQualityBadge({
+        ...workingTrack,
+        qualityBadge: undefined,
+        downloadUrl: finalUrl,
+        mimeType: resolvedMime,
+        fileSize: blob.size,
+        duration: trackDuration,
+      });
+      const finalBadge = originalBadge || detectedBadge || 'Standard (128kbps)';
       const record: VoidDownloadRecord = {
-        id, title: String(track.name || track.title || 'Untitled'), artist: String(track.artist || 'Unknown artist'),
-        album: String(track.album || 'Unknown album'), image: track.image, coverBlob, duration: Number(track.duration) || 0,
-        mimeType: blob.type || 'audio/mpeg', blob, downloadedAt: Date.now(),
+        id,
+        title: String(workingTrack.name || workingTrack.title || 'Untitled'),
+        artist: String(workingTrack.artist || 'Unknown artist'),
+        album: String(workingTrack.album || 'Unknown album'),
+        image: workingTrack.image,
+        coverBlob,
+        duration: trackDuration,
+        mimeType: resolvedMime,
+        source: formatProviderLabel(workingTrack.source, workingTrack),
+        qualityBadge: finalBadge,
+        bitrate: workingTrack.bitrate,
+        codec: workingTrack.codec,
+        format: workingTrack.format,
+        qualityVerified: true,
+        exactYtBlob: isYtTrack ? exactYtBlob : undefined,
+        favorite: Boolean(workingTrack.favorite || tracks.some(t => extractCleanYouTubeId(t.id) === id && t.favorite)),
+        blob,
+        downloadedAt: Date.now(),
       };
       await putVoidDownload(record);
-      const blobUrl = URL.createObjectURL(blob);
       const coverUrl = coverBlob ? URL.createObjectURL(coverBlob) : record.image;
       setDownloadedTracks(previous => {
         const existing = previous.find(item => String(item.id).replace(/^download:/, '') === id);
         if (existing?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(existing.audioUrl);
         if (existing?.image?.startsWith('blob:')) URL.revokeObjectURL(existing.image);
-        const next = { ...record, image: coverUrl, id: `download:${id}`, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: blob.size, importedAt: record.downloadedAt };
+        const next = { ...record, favorite: Boolean(record.favorite ?? existing?.favorite), image: coverUrl, id: `download:${id}`, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: blob!.size, importedAt: record.downloadedAt };
         return [next, ...previous.filter(item => String(item.id).replace(/^download:/, '') !== id)];
       });
       setRecentlyDownloadedIds(previous => [...previous.filter(item => item !== id), id]);
-      window.setTimeout(() => {
-        setRecentlyDownloadedIds(previous => previous.filter(item => item !== id));
-      }, 1100);
     } catch (error) {
       notify(error instanceof Error && /Failed to fetch|NetworkError|CORS/i.test(error.message)
         ? 'This provider blocks browser downloads for this result.'
@@ -1348,7 +1532,21 @@ useEffect(() => {
     try {
       const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
       let remoteFavs: Track[] = [];
-      try { remoteFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]'); } catch { remoteFavs = []; }
+      try {
+        const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+        remoteFavs = Array.isArray(parsedFavs) ? parsedFavs.map((item: any) => {
+          const cleanImage = typeof item?.image === 'string' && item.image.includes('fbcdn.net') ? undefined : item?.image;
+          const rawAudio = String(item?.audioUrl || item?.downloadUrl || item?.src || '');
+          const isLegacyYt = rawAudio.includes('void-backend') || item?.source === 'YouTube';
+          const cleanId = String(item?.id || '').replace(/^api-/, '').replace(/^yt:/, '');
+          return {
+            ...item,
+            image: cleanImage,
+            audioUrl: isLegacyYt && /^[\w-]{11}$/.test(cleanId) ? `yt-stream://${cleanId}` : item?.audioUrl,
+            fallbackUrls: Array.isArray(item?.fallbackUrls) ? item.fallbackUrls.filter((u: string) => !String(u).includes('void-backend')) : undefined,
+          };
+        }) : [];
+      } catch { remoteFavs = []; }
       const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
       setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
       setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
@@ -1370,9 +1568,46 @@ useEffect(() => {
     void getVoidDownloads().then(records => {
       if (cancelled) return;
       const uniqueRecords = records
+        .filter(record => record && record.blob instanceof Blob && record.blob.size > 0)
         .sort((a, b) => b.downloadedAt - a.downloadedAt)
         .filter((record, index, all) => all.findIndex(candidate => candidate.id === record.id) === index);
-      setDownloadedTracks(uniqueRecords.map(record => { const blobUrl = URL.createObjectURL(record.blob); const coverUrl = record.coverBlob ? URL.createObjectURL(record.coverBlob) : record.image; return { ...record, image: coverUrl, audioUrl: blobUrl, src: blobUrl, fileName: `${record.title}.audio`, fileSize: record.blob.size, importedAt: record.downloadedAt, id: `download:${record.id}` }; }));
+      setDownloadedTracks(uniqueRecords.map(record => {
+        const blobUrl = URL.createObjectURL(record.blob);
+        const coverUrl = record.coverBlob ? URL.createObjectURL(record.coverBlob) : record.image;
+        const verifiedMime = record.blob.type || record.mimeType || 'audio/mpeg';
+        const resolvedQuality =
+          record.qualityBadge && record.qualityBadge !== 'Unknown'
+            ? record.qualityBadge
+            : getTrackQualityBadge({
+                ...record,
+                qualityBadge: undefined,
+                mimeType: verifiedMime,
+                fileSize: record.blob.size,
+              });
+        let isFav = Boolean(record.favorite);
+        if (!isFav) {
+          try {
+            const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+            if (Array.isArray(parsedFavs)) {
+              isFav = parsedFavs.some((f: any) => f?.favorite && extractCleanYouTubeId(f?.id) === extractCleanYouTubeId(record.id));
+            }
+          } catch {}
+        }
+        return {
+          ...record,
+          favorite: isFav,
+          mimeType: verifiedMime,
+          source: formatProviderLabel(record.source, record),
+          qualityBadge: resolvedQuality || 'Standard (128kbps)',
+          image: coverUrl,
+          audioUrl: blobUrl,
+          src: blobUrl,
+          fileName: `${record.title}.audio`,
+          fileSize: record.blob.size,
+          importedAt: record.downloadedAt,
+          id: `download:${record.id}`,
+        };
+      }));
     }).catch(() => { /* Downloads remain optional when browser storage is unavailable. */ });
     return () => { cancelled = true; };
   }, []);
@@ -1424,7 +1659,28 @@ useEffect(() => {
 
   useEffect(() => {
     if (audio.current) { audio.current.volume = prefs.volume; audio.current.muted = prefs.muted; }
+    if (ytAudioPlayerRef.current) {
+      try {
+        ytAudioPlayerRef.current.setVolume?.(Math.round(prefs.volume * 100));
+        if (prefs.muted) ytAudioPlayerRef.current.mute?.();
+        else ytAudioPlayerRef.current.unMute?.();
+      } catch {}
+    }
   }, [prefs.volume, prefs.muted]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const timer = window.setInterval(() => {
+      if (!ytActiveRef.current || !ytAudioPlayerRef.current) return;
+      try {
+        const cur = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? 0);
+        if (Number.isFinite(cur) && cur >= 0) setPosition(cur);
+        const dur = Number(ytAudioPlayerRef.current.getDuration?.() ?? 0);
+        if (Number.isFinite(dur) && dur > 0) setDuration(dur);
+      } catch {}
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [isPlaying]);
 
   // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn) or Local Artwork ---
   useEffect(() => {
@@ -1618,9 +1874,11 @@ useEffect(() => {
     // provider ID first, then normalized title + artist so a library entry can reuse a search download.
     const normalizeSongPart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
     const trackId = String(track.id ?? '');
+    const cleanTrackId = trackId.replace(/^download:/, '').replace(/^api-/, '');
     let downloadedMatch = downloadedTracks.find((item: any) => {
-      const downloadId = String(item.id ?? '').replace(/^download:/, '');
-      if (downloadId && (downloadId === trackId || trackId === `download:${downloadId}`)) return true;
+      const downloadId = String(item.id ?? '').replace(/^download:/, '').replace(/^api-/, '');
+      if (downloadId && (downloadId === cleanTrackId || downloadId === trackId)) return true;
+      if (trackId.startsWith('api-')) return false;
       return normalizeSongPart(item.title || item.name) === normalizeSongPart(track.title)
         && normalizeSongPart(item.artist) === normalizeSongPart(track.artist)
         && !!item.audioUrl;
@@ -1686,19 +1944,65 @@ useEffect(() => {
     const isRemote = !isOfflineDownload && !!remoteUrl;
     let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl };
 
+    switchingTrackRef.current = true;
+    if (ytActiveRef.current) {
+      ytActiveRef.current = false;
+      try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {}
+    }
+    el.pause();
+    try { el.currentTime = 0; } catch {}
+    setPosition(0);
+
+    const rawYtCandidateId = extractCleanYouTubeId(playableTrack.id || downloadedMatch?.id || '');
+    const isYouTubeTrack =
+      formatProviderLabel(playableTrack.source, playableTrack) === 'YouTube' ||
+      formatProviderLabel(downloadedMatch?.source, downloadedMatch) === 'YouTube' ||
+      String(playableTrack.audioUrl || '').startsWith('yt-stream://') ||
+      String(playableTrack.audioUrl || '').includes('void-backend') ||
+      /^[\w-]{11}$/.test(rawYtCandidateId);
+    const useYtPlayerForOffline =
+      isOfflineDownload &&
+      isYouTubeTrack &&
+      /^[\w-]{11}$/.test(rawYtCandidateId) &&
+      (!downloadedMatch?.exactYtBlob || (downloadedMatch?.blob?.size ?? 0) < 65536);
+
+    let url = playableTrack.audioUrl;
     if (isOfflineDownload) {
       if (!downloadedMatch.blob || downloadedMatch.blob.size === 0 || !remoteUrl) {
+        switchingTrackRef.current = false;
         setIsPlaying(false);
         notify(`The saved audio for “${playableTrack.title || 'this song'}” is missing or empty. Download it again.`);
         return;
       }
+      setStreamingTrack(playableTrack);
     } else if (isRemote) {
+      if (isYouTubeTrack) {
+        const resolvedYt = await resolveYouTubePlayableStream(playableTrack);
+        if (resolvedYt?.url) {
+          url = resolvedYt.url;
+          playableTrack = {
+            ...playableTrack,
+            audioUrl: resolvedYt.url,
+            downloadUrl: resolvedYt.url,
+            src: resolvedYt.url,
+            fallbackUrls: resolvedYt.fallbackUrls,
+            bitrate: resolvedYt.bitrate ?? playableTrack.bitrate,
+            codec: resolvedYt.codec ?? playableTrack.codec,
+            mimeType: resolvedYt.mimeType ?? playableTrack.mimeType,
+            qualityBadge: resolvedYt.qualityBadge ?? playableTrack.qualityBadge,
+            qualityVerified: resolvedYt.qualityVerified ?? playableTrack.qualityVerified,
+            duration: resolvedYt.duration || playableTrack.duration || 0,
+          };
+        }
+      }
       setStreamingTrack(playableTrack);
     } else {
       try {
         const { file, mimeType } = await materializeAudioFile(playableTrack);
         playableTrack = { ...playableTrack, file, mimeType };
+        url = URL.createObjectURL(playableTrack.file);
       } catch {
+        switchingTrackRef.current = false;
         setIsPlaying(false);
         notify(`Could not restore “${playableTrack.fileName || playableTrack.title}” after Safari restarted.`);
         return;
@@ -1707,33 +2011,156 @@ useEffect(() => {
 
     setActiveId(playableTrack.id);
     setPosition(0);
-    setDuration(playableTrack.duration || 0);
-
-    el.pause();
-    
-    let url = playableTrack.audioUrl;
-    if (!isRemote && !isOfflineDownload) {
-      url = URL.createObjectURL(playableTrack.file);
-    }
+    setDuration(playableTrack.duration > 0 && Number.isFinite(playableTrack.duration) ? playableTrack.duration : 0);
 
     // Assign the new source and load it
-    el.src = url;
-    el.volume = prefs.volume;
-    el.muted = prefs.muted;
-    el.load();
+    const cleanFallbacks = isRemote && Array.isArray(playableTrack.fallbackUrls)
+      ? playableTrack.fallbackUrls.filter((u: string) => u && u !== url && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'))
+      : [];
+    const candidateUrls = useYtPlayerForOffline
+      ? []
+      : [url, ...cleanFallbacks].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
 
-    try {
-      await el.play();
+    let lastError: unknown = null;
+    let playedSuccessfully = false;
 
+    for (const candidateUrl of candidateUrls) {
+      if (!candidateUrl) continue;
+      el.src = candidateUrl;
+      el.volume = prefs.volume;
+      el.muted = prefs.muted;
+      el.load();
+      switchingTrackRef.current = false;
+      try {
+        await el.play();
+        url = candidateUrl;
+        playedSuccessfully = true;
+        break;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        lastError = err;
+      }
+    }
+
+    // Exact YouTube video playback fallback via official YT.Player when direct audio stream is unavailable
+    if (!playedSuccessfully && isYouTubeTrack && /^[\w-]{11}$/.test(rawYtCandidateId)) {
+      switchingTrackRef.current = false;
+      try {
+        const YT = await loadYouTubeIframeApi();
+        if (YT?.Player) {
+          ytActiveRef.current = true;
+          ytVideoIdRef.current = rawYtCandidateId;
+          const existingPlayer = ytAudioPlayerRef.current;
+          if (existingPlayer && typeof existingPlayer.loadVideoById === 'function') {
+            existingPlayer.setVolume?.(Math.round(prefsRef.current.volume * 100));
+            if (prefsRef.current.muted) existingPlayer.mute?.();
+            else existingPlayer.unMute?.();
+            existingPlayer.loadVideoById({ videoId: rawYtCandidateId, startSeconds: 0 });
+            existingPlayer.playVideo?.();
+            setIsPlaying(true);
+            playedSuccessfully = true;
+          } else if (ytAudioHostRef.current) {
+            ytAudioHostRef.current.innerHTML = '';
+            const mountNode = document.createElement('div');
+            ytAudioHostRef.current.appendChild(mountNode);
+            playedSuccessfully = await new Promise<boolean>(resolve => {
+              let settled = false;
+              const finish = (ok: boolean) => {
+                if (settled) return;
+                settled = true;
+                resolve(ok);
+              };
+              const timer = window.setTimeout(() => finish(true), 3500);
+              ytAudioPlayerRef.current = new YT.Player(mountNode, {
+                width: '1',
+                height: '1',
+                videoId: rawYtCandidateId,
+                playerVars: {
+                  autoplay: 1,
+                  controls: 0,
+                  disablekb: 1,
+                  fs: 0,
+                  playsinline: 1,
+                  rel: 0,
+                  origin: window.location.origin,
+                },
+                events: {
+                  onReady: (ev: any) => {
+                    window.clearTimeout(timer);
+                    try {
+                      ev.target.setVolume?.(Math.round(prefsRef.current.volume * 100));
+                      if (prefsRef.current.muted) ev.target.mute?.();
+                      else ev.target.unMute?.();
+                      if (ytActiveRef.current) {
+                        const wanted = ytVideoIdRef.current || rawYtCandidateId;
+                        if (wanted !== rawYtCandidateId) ev.target.loadVideoById(wanted);
+                        ev.target.playVideo?.();
+                        setIsPlaying(true);
+                      }
+                    } catch {}
+                    finish(true);
+                  },
+                  onStateChange: (ev: any) => {
+                    if (!ytActiveRef.current) return;
+                    if (ev.data === 1) {
+                      setIsPlaying(true);
+                      const dur = Number(ev.target?.getDuration?.() || 0);
+                      if (Number.isFinite(dur) && dur > 0) {
+                        setDuration(dur);
+                        const currentVid = ytVideoIdRef.current;
+                        if (currentVid) {
+                          setStreamingTrack((cur: any) =>
+                            cur && String(cur.id || '').includes(currentVid) ? { ...cur, duration: dur } : cur
+                          );
+                          setTracks(items => {
+                            const updated = items.map(item =>
+                              String(item.id || '').includes(currentVid) ? { ...item, duration: dur } : item
+                            );
+                            try {
+                              const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+                              localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+                            } catch {}
+                            return updated;
+                          });
+                        }
+                      }
+                    } else if (ev.data === 2) {
+                      setIsPlaying(false);
+                    } else if (ev.data === 0) {
+                      if (prefsRef.current.repeat === 'one') {
+                        ev.target?.seekTo?.(0, true);
+                        ev.target?.playVideo?.();
+                      } else {
+                        playRelativeRef.current(1);
+                      }
+                    }
+                  },
+                  onError: () => {
+                    window.clearTimeout(timer);
+                    finish(false);
+                  },
+                },
+              });
+            });
+          }
+        }
+      } catch {
+        playedSuccessfully = false;
+      }
+    }
+
+    if (playedSuccessfully) {
       // Revoke the old object URL only AFTER the new track has successfully started playing
-      if (objectUrl.current && objectUrl.current !== url) { 
-        URL.revokeObjectURL(objectUrl.current); 
+      if (objectUrl.current && objectUrl.current !== url) {
+        URL.revokeObjectURL(objectUrl.current);
       }
       // Download-list URLs belong to downloadedTracks and stay alive until the
       // list is refreshed/unmounted; only revoke URLs created for imported files.
       objectUrl.current = (isRemote || isOfflineDownload) ? null : url;
 
-      const actualDuration = el.duration;
+      const actualDuration = ytActiveRef.current
+        ? Number(ytAudioPlayerRef.current?.getDuration?.() || 0)
+        : el.duration;
       const persistedTrack = {
         // Blob URLs are session-specific. Keep the library record's original source URL and use
         // the offline blob only for this playback session; the download itself remains in IndexedDB.
@@ -1742,6 +2169,8 @@ useEffect(() => {
         artist: downloadedMatch?.artist || playableTrack.artist,
         album: downloadedMatch?.album || playableTrack.album,
         image: downloadedMatch ? track.image : playableTrack.image,
+        source: formatProviderLabel(playableTrack.source, playableTrack) || playableTrack.source,
+        qualityBadge: getTrackQualityBadge(playableTrack),
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
         lastPlayedAt: Date.now(),
       };
@@ -1759,17 +2188,20 @@ useEffect(() => {
       if (!isRemote) {
         void saveTrack(persistedTrack).catch(() => {});
       }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return;
+    } else {
+      switchingTrackRef.current = false;
       setIsPlaying(false);
       const mediaError = audio.current?.error;
-      const detail = mediaError?.code === 4
-        ? 'The saved file format is not supported or the download is not valid audio.'
-        : mediaError?.code === 2
-          ? 'The audio file could not be read. Try downloading it again.'
-          : error instanceof Error && error.message
-            ? error.message
-            : 'Check the audio file and try again.';
+      const isYouTubeTrack = formatProviderLabel(playableTrack.source, playableTrack) === 'YouTube';
+      const detail = isYouTubeTrack
+        ? 'The YouTube stream service may still be waking up from inactivity. Please try again in a few seconds.'
+        : mediaError?.code === 4
+          ? 'The audio format is not supported by this browser or the stream is unavailable.'
+          : mediaError?.code === 2
+            ? 'A network error interrupted the audio stream.'
+            : lastError instanceof Error && lastError.message
+              ? lastError.message
+              : 'Check the audio source and try again.';
       notify(`Unable to play “${playableTrack.title || 'track'}”. ${detail}`);
     }
   }, [downloadedTracks, notify, prefs.muted, prefs.volume]);
@@ -1784,6 +2216,19 @@ useEffect(() => {
       else notify('Import audio files to begin your library.');
       return;
     }
+    if (ytActiveRef.current && ytAudioPlayerRef.current) {
+      try {
+        const state = ytAudioPlayerRef.current.getPlayerState?.();
+        if (state === 1) {
+          ytAudioPlayerRef.current.pauseVideo?.();
+          setIsPlaying(false);
+        } else {
+          ytAudioPlayerRef.current.playVideo?.();
+          setIsPlaying(true);
+        }
+      } catch {}
+      return;
+    }
     if (el.paused) {
       try { await el.play(); } catch {}
     } else {
@@ -1792,9 +2237,11 @@ useEffect(() => {
   }, [activeTrack, notify, playTrack, queue, tracks]);
 
   const playRelative = useCallback((direction: number) => {
-    if (!tracks.length) return;
-    const pool = queue.map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track);
-    const source = pool.length ? pool : tracks;
+    const allPool = [...downloadedTracks, ...tracks];
+    if (!allPool.length) return;
+    const pool = queue.map(id => allPool.find(track => track.id === id)).filter((track): track is Track => !!track);
+    const source = pool.length ? pool : (page === 'downloads' && downloadedTracks.length ? downloadedTracks : tracks);
+    if (!source.length) return;
     if (!activeId) { void playTrack(source[0], source.map(track => track.id)); return; }
     let index = source.findIndex(track => track.id === activeId);
     if (prefs.shuffle && direction > 0 && source.length > 1) {
@@ -1808,12 +2255,19 @@ useEffect(() => {
       index = 0;
     }
     void playTrack(source[index], source.map(track => track.id));
-  }, [activeId, playTrack, prefs.autoplay, prefs.repeat, prefs.shuffle, queue, tracks]);
+  }, [activeId, downloadedTracks, page, playTrack, prefs.autoplay, prefs.repeat, prefs.shuffle, queue, tracks]);
+  playRelativeRef.current = playRelative;
 
   const mediaControls = useRef({ play: () => {}, pause: () => {}, previous: () => {}, next: () => {} });
   mediaControls.current = {
-    play: () => { if (!audio.current || audio.current.paused) void togglePlay(); },
-    pause: () => { audio.current?.pause(); },
+    play: () => { if (!isPlaying) void togglePlay(); },
+    pause: () => {
+      if (ytActiveRef.current && ytAudioPlayerRef.current) {
+        try { ytAudioPlayerRef.current.pauseVideo?.(); setIsPlaying(false); } catch {}
+      } else {
+        audio.current?.pause();
+      }
+    },
     previous: () => playRelative(-1),
     next: () => playRelative(1),
   };
@@ -1874,17 +2328,69 @@ useEffect(() => {
   const openImport = () => setImportMenu(true);
 
   const toggleFavorite = async (track: Track | any) => {
+    const rawId = extractCleanYouTubeId(track?.id ?? '');
+    const isDownloadRow = String(track?.id ?? '').startsWith('download:');
     const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
-    const isRemote = !!remoteUrl;
-    const nextFavorite = !track.favorite;
+    const isRemote = Boolean(remoteUrl || isDownloadRow || String(track?.id ?? '').startsWith('api-') || formatProviderLabel(track?.source, track));
+    const nextFavorite = !Boolean(track.favorite);
     const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
-    if (isRemote) setStreamingTrack((current: any) => current?.id === track.id ? updated : current);
+
+    if (isRemote) {
+      setStreamingTrack((current: any) => {
+        if (!current) return current;
+        const curId = extractCleanYouTubeId(current.id ?? '');
+        return current.id === track.id || (rawId && curId === rawId)
+          ? { ...current, favorite: nextFavorite }
+          : current;
+      });
+    }
+
+    // Keep downloadedTracks and IndexedDB in sync when favoriting from Downloads or Songs
+    setDownloadedTracks(prev =>
+      prev.map(item => {
+        const dlId = extractCleanYouTubeId(item?.id ?? '');
+        if (item.id === track.id || (rawId && dlId === rawId)) {
+          return { ...item, favorite: nextFavorite };
+        }
+        return item;
+      })
+    );
+
+    if (rawId) {
+      void getVoidDownloads()
+        .then(records => {
+          const matchedRecord = records.find(r => extractCleanYouTubeId(r.id) === rawId);
+          if (matchedRecord) {
+            void putVoidDownload({ ...matchedRecord, favorite: nextFavorite }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
     setTracks(items => {
-      const exists = items.some(item => item.id === track.id);
-      const newItems = exists ? items.map(item => item.id === track.id ? updated : item) : (isRemote ? [updated, ...items] : items);
+      const matchesTrack = (item: any) => {
+        const itemCleanId = extractCleanYouTubeId(item?.id ?? '');
+        return item.id === track.id || (Boolean(rawId) && itemCleanId === rawId);
+      };
+      const exists = items.some(matchesTrack);
+      let newItems: Track[];
+      if (exists) {
+        newItems = items
+          .map(item => (matchesTrack(item) ? { ...item, favorite: nextFavorite } : item))
+          .filter(item => !(String(item.id).startsWith('download:') && !item.favorite && !item.lastPlayedAt));
+      } else if (isRemote && nextFavorite) {
+        const libraryEntry = {
+          ...updated,
+          id: isDownloadRow && rawId ? `api-${rawId}` : track.id,
+          importedAt: Number.isFinite(track.importedAt) ? track.importedAt : Date.now(),
+        };
+        newItems = [libraryEntry, ...items];
+      } else {
+        newItems = items;
+      }
       if (isRemote) {
         try {
-          const favs = newItems.filter(t => t.favorite && (t.audioUrl || t.downloadUrl || t.src));
+          const favs = newItems.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
           localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
         } catch {}
       }
@@ -1920,6 +2426,7 @@ useEffect(() => {
           });
           setSelectedSongIds(ids => ids.filter(id => id !== track.id));
           if (String(activeId) === String(track.id)) {
+            if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
             audio.current?.pause();
             setActiveId(null);
             setIsPlaying(false);
@@ -1949,6 +2456,7 @@ useEffect(() => {
       await Promise.all(changedPlaylists.map(savePlaylist));
       setPlaylists(items => items.map(playlist => changedPlaylists.find(updated => updated.id === playlist.id) ?? playlist));
       if (activeId === track.id) {
+        if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
         audio.current?.pause();
         setActiveId(null); setIsPlaying(false);
         if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
@@ -2018,6 +2526,7 @@ useEffect(() => {
     if (!window.confirm('Clear the local VOID library and playlists? The original files on your Mac will not be deleted.')) return;
     try {
       await Promise.all([...tracks.map(track => removeTrack(track.id)), ...playlists.map(playlist => removePlaylist(playlist.id))]);
+      if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
       audio.current?.pause();
       setActiveId(null); setIsPlaying(false); setPosition(0); setDuration(0);
       if (objectUrl.current) { URL.revokeObjectURL(objectUrl.current); objectUrl.current = null; }
@@ -2093,8 +2602,28 @@ useEffect(() => {
       }
       if (editing || paletteOpen || modal || contextTrack || importMenu) return;
       if (event.code === 'Space') { event.preventDefault(); void togglePlay(); }
-      else if (event.key === 'ArrowRight') { if (audio.current && activeTrack) audio.current.currentTime = Math.min(audio.current.duration || 0, audio.current.currentTime + 5); }
-      else if (event.key === 'ArrowLeft') { if (audio.current && activeTrack) audio.current.currentTime = Math.max(0, audio.current.currentTime - 5); }
+      else if (event.key === 'ArrowRight') {
+        if (activeTrack) {
+          if (ytActiveRef.current && ytAudioPlayerRef.current) {
+            const next = Math.min(duration || 0, position + 5);
+            try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+            setPosition(next);
+          } else if (audio.current) {
+            audio.current.currentTime = Math.min(audio.current.duration || 0, audio.current.currentTime + 5);
+          }
+        }
+      }
+      else if (event.key === 'ArrowLeft') {
+        if (activeTrack) {
+          if (ytActiveRef.current && ytAudioPlayerRef.current) {
+            const next = Math.max(0, position - 5);
+            try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+            setPosition(next);
+          } else if (audio.current) {
+            audio.current.currentTime = Math.max(0, audio.current.currentTime - 5);
+          }
+        }
+      }
       else if (event.key === 'ArrowUp') { event.preventDefault(); void updatePrefs({ ...prefs, volume: Math.min(1, prefs.volume + .05), muted: false }); }
       else if (event.key === 'ArrowDown') { event.preventDefault(); void updatePrefs({ ...prefs, volume: Math.max(0, prefs.volume - .05) }); }
       else if (event.key.toLowerCase() === 'm') void updatePrefs({ ...prefs, muted: !prefs.muted });
@@ -2300,6 +2829,9 @@ useEffect(() => {
     catch { notify('Could not remove this song from the playlist.'); }
   };
 
+  const normalizeMatchText = (val: unknown) =>
+    String(val ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
+
   const latestActions = useRef<RowActions | null>(null);
   latestActions.current = {
     play: (track, list) => void playTrack(track, list),
@@ -2308,6 +2840,59 @@ useEffect(() => {
     removeFromList: id => page === 'queue' ? removeFromQueue(id) : void removeFromPlaylist(id),
     favorite: track => void toggleFavorite(track),
     menu: track => setContextTrack(track),
+    download: track => void downloadSearchTrack(track),
+    isDownloading: track => {
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      return Boolean(rawId && downloadingIds.includes(rawId));
+    },
+    isDownloadSuccess: track => {
+      if (!track) return false;
+      if ((track as any).offlineAvailable || String(track.id ?? '').startsWith('download:')) return true;
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      if (rawId && (recentlyDownloadedIds.includes(rawId) || downloadedTracks.some((item: any) => extractCleanYouTubeId(item?.id ?? '') === rawId))) {
+        return true;
+      }
+      const normTitle = normalizeMatchText(track.title || (track as any).name);
+      const normArtist = normalizeMatchText(track.artist);
+      return downloadedTracks.some((item: any) => {
+        const dlTitle = normalizeMatchText(item?.title || item?.name);
+        const dlArtist = normalizeMatchText(item?.artist);
+        return Boolean(
+          normTitle &&
+            dlTitle &&
+            normTitle === dlTitle &&
+            (!normArtist || !dlArtist || normArtist === dlArtist || dlArtist.includes(normArtist) || normArtist.includes(dlArtist))
+        );
+      });
+    },
+    canDownload: track => {
+      if (!track) return false;
+      if ((track as any).isLive || (track as any).qualityBadge === 'Live Radio' || (track as any).qualityBadge === 'FLAC Live') return false;
+      if ((track as any).offlineAvailable || String(track.id ?? '').startsWith('download:')) return true;
+      const hasRemoteSource = Boolean(
+        (track as any).audioUrl ||
+        (track as any).downloadUrl ||
+        (track as any).src ||
+        String(track.id ?? '').startsWith('api-') ||
+        formatProviderLabel((track as any).source, track)
+      );
+      if (hasRemoteSource) return true;
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      const normTitle = normalizeMatchText(track.title || (track as any).name);
+      const normArtist = normalizeMatchText(track.artist);
+      return downloadedTracks.some((item: any) => {
+        const dlId = extractCleanYouTubeId(item?.id ?? '');
+        if (rawId && dlId === rawId) return true;
+        const dlTitle = normalizeMatchText(item?.title || item?.name);
+        const dlArtist = normalizeMatchText(item?.artist);
+        return Boolean(
+          normTitle &&
+            dlTitle &&
+            normTitle === dlTitle &&
+            (!normArtist || !dlArtist || normArtist === dlArtist || dlArtist.includes(normArtist) || normArtist.includes(dlArtist))
+        );
+      });
+    },
   };
   const rowActions = useMemo<RowActions>(() => ({
     play: (track, list) => latestActions.current!.play(track, list),
@@ -2316,6 +2901,10 @@ useEffect(() => {
     removeFromList: id => latestActions.current!.removeFromList(id),
     favorite: track => latestActions.current!.favorite(track),
     menu: track => latestActions.current!.menu(track),
+    download: track => latestActions.current!.download?.(track),
+    canDownload: track => Boolean(latestActions.current!.canDownload?.(track)),
+    isDownloading: track => Boolean(latestActions.current!.isDownloading?.(track)),
+    isDownloadSuccess: track => Boolean(latestActions.current!.isDownloadSuccess?.(track)),
   }), []);
 
   const moodIndex = Math.floor(greetingHour / 2);
@@ -2332,11 +2921,21 @@ useEffect(() => {
   }, [atmos, activeTrack]);
   const changeVolume = (value: number) => {
     if (audio.current) audio.current.volume = value;
+    if (ytAudioPlayerRef.current) {
+      try { ytAudioPlayerRef.current.setVolume?.(Math.round(value * 100)); ytAudioPlayerRef.current.unMute?.(); } catch {}
+    }
     void updatePrefs({ ...prefs, volume: value, muted: false });
   };
   const toggleMute = () => void updatePrefs({ ...prefs, muted: !prefs.muted });
   const cycleRepeat = () => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' });
-  const seekTo = (next: number) => { if (audio.current) audio.current.currentTime = next; setPosition(next); };
+  const seekTo = (next: number) => {
+    if (ytActiveRef.current && ytAudioPlayerRef.current) {
+      try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+    } else if (audio.current) {
+      audio.current.currentTime = next;
+    }
+    setPosition(next);
+  };
 
   const pageDescription: Record<Page, string> = {
     home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
@@ -2354,9 +2953,10 @@ useEffect(() => {
     {canvasVideoId && canvasEnabled && canvasBootId && (
       <div className="canvas-container" data-ready={canvasReady && !isEnding} data-ending={isEnding ? 'true' : undefined}>
         <iframe
+          key={canvasBootId}
           ref={canvasFrame}
           className="canvas-iframe"
-          src={`https://www.youtube.com/embed/${canvasBootId}?autoplay=1&mute=1&loop=1&controls=0&disablekb=1&playsinline=1&modestbranding=1&iv_load_policy=3&rel=0&playlist=${canvasBootId}&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+          src={`https://www.youtube-nocookie.com/embed/${canvasBootId}?autoplay=1&mute=1&loop=1&controls=0&disablekb=1&playsinline=1&modestbranding=1&iv_load_policy=3&rel=0&playlist=${canvasBootId}`}
           frameBorder="0"
           allow="autoplay; encrypted-media; fullscreen"
           onLoad={() => setCanvasReady(true)}
@@ -2481,7 +3081,7 @@ useEffect(() => {
         View library
       </button>
     </DgReveal>
-    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} className="recently-added-track-wrap" />
+    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} className="recently-added-track-wrap" downloadingIds={downloadingIds} recentlyDownloadedIds={recentlyDownloadedIds} downloadedCount={downloadedTracks.length} />
   </div>
 </> : isReady && !storageError ? <div className="empty-state">
   <strong>Your library is waiting.</strong>
@@ -2613,6 +3213,9 @@ useEffect(() => {
                 isAllSelected={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id))}
                 selectionMode={selectionMode}
                 deletingIds={deletingDownloadIds}
+                downloadingIds={downloadingIds}
+                recentlyDownloadedIds={recentlyDownloadedIds}
+                downloadedCount={downloadedTracks.length}
               />
             ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
@@ -2746,7 +3349,18 @@ useEffect(() => {
     >
       <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
         <Cover track={activeTrack ?? undefined} />
-        <span><span className="track-title">{activeTrack?.title ?? ''}</span><span className="track-sub">{activeTrack?.artist ?? ''}</span></span>
+        <span>
+          <span className="track-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%' }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeTrack?.title ?? ''}</span>
+            {activeTrack && getTrackQualityBadge(activeTrack) && (
+              <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
+            )}
+          </span>
+          <span className="track-sub">
+            {activeTrack?.artist ?? ''}
+            {activeTrack && formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}
+          </span>
+        </span>
       </div>
       
       <button className="icon-button mobile-mini-play" onClick={(e) => { e.stopPropagation(); void togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}>
@@ -2763,8 +3377,8 @@ useEffect(() => {
         </div>
         <div className="player-scrub">
           <span>{activeTrack ? formatElapsed(position) : '—:—'}</span>
-          <input className="seek" aria-label="Playback position" style={rangeStyle(duration ? position / duration : 0)} type="range" min="0" max={duration || 0} step=".1" value={Math.min(position, duration || 0)} disabled={!activeTrack} onChange={event => seekTo(Number(event.target.value))} data-testid="input-seek" />
-          <span>{activeTrack ? formatTime(duration) : '—:—'}</span>
+          <input className="seek" aria-label="Playback position" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} disabled={!activeTrack} onChange={event => seekTo(Number(event.target.value))} data-testid="input-seek" />
+          <span>{activeTrack ? (activeTrack.isLive ? 'LIVE' : formatTime(duration)) : '—:—'}</span>
         </div>
       </div>
       <div className="player-extra">
@@ -2793,25 +3407,10 @@ useEffect(() => {
           onChange={event => setPaletteQuery(event.target.value)}
           onKeyDown={event => {
             if (event.key !== 'Enter') return;
-            handleSaveHistory(paletteQuery);
-
-            if (allSearchResults[0]) {
-              void playTrack(allSearchResults[0]);
-              setPaletteOpen(false);
-            } else if (musicResults[0]) {
-              setPaletteOpen(false);
-            } else if (albumSearchResults[0]) {
-              setPaletteOpen(false);
-              openCollection('album', albumSearchResults[0]);
-            } else if (artistSearchResults[0]) {
-              setPaletteOpen(false);
-              openCollection('artist', artistSearchResults[0]);
-            } else if (playlistSearchResults[0]) {
-              const playlist = playlistSearchResults[0];
-              setPaletteOpen(false);
-              setPage('playlists');
-              setLocation('/playlists');
-              setDetail({ kind: 'playlist', name: playlist.name });
+            event.preventDefault();
+            event.stopPropagation();
+            if (paletteQuery.trim()) {
+              handleSaveHistory(paletteQuery);
             }
           }}
           data-testid="input-search-palette"
@@ -2819,75 +3418,127 @@ useEffect(() => {
 
         <div className="palette-results">
 
-          {allSearchResults.map(track => (
-            <button
-              key={track.id}
-              className="palette-result"
-              onClick={() => {
-                handleSaveHistory(paletteQuery);
-                void playTrack(track);
-                setPaletteOpen(false);
-              }}
-              data-testid={`search-result-${track.id}`}
-            >
-              <Cover track={track} />
-              <span>
-                <span className="track-title">{track.title}</span>
-                <span className="track-sub">{track.artist} · {track.album}</span>
-              </span>
-              <Play size={13} />
-            </button>
-          ))}
+          {allSearchResults.map(track => {
+            const localQuality = getTrackQualityBadge(track);
+            return (
+              <button
+                key={track.id}
+                className="palette-result"
+                onClick={() => {
+                  handleSaveHistory(paletteQuery);
+                  void playTrack(track);
+                  setPaletteOpen(false);
+                }}
+                data-testid={`search-result-${track.id}`}
+              >
+                <Cover track={track} />
+                <span>
+                  <span className="track-title">{track.title}</span>
+                  <span className="track-sub">{track.artist} · {track.album}</span>
+                </span>
+                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  {localQuality && <QualityBadge tier={localQuality} track={track} compact />}
+                  <Play size={13} />
+                </span>
+              </button>
+            );
+          })}
 
           {musicResults.map(track => {
-            // Determine the source based on the ID format
-            // YouTube IDs are typically 11 characters long
-            const isYouTube = /^[\w-]{11}$/.test(track.id);
-            const sourceLabel = isYouTube ? 'void' : 'VOID';
+            const sourceLabel = formatProviderLabel(track.source, track) || 'Online';
+            const qualityTier = getTrackQualityBadge(track);
+            const isNonDownloadable =
+              Boolean(track.isLive) ||
+              qualityTier === 'Live Radio' ||
+              qualityTier === 'FLAC Live';
+
+            const buildApiTrack = () => ({
+              id: `api-${track.id}`,
+              title: track.name,
+              artist: track.artist,
+              album: track.album,
+              fileName: `${track.name}.${track.codec ? String(track.codec).toLowerCase() : 'audio'}`,
+              audioUrl: track.downloadUrl,
+              downloadUrl: track.downloadUrl,
+              src: track.downloadUrl,
+              image: track.image,
+              duration: track.duration,
+              source: sourceLabel,
+              qualityBadge: qualityTier,
+              bitrate: track.bitrate,
+              codec: track.codec,
+              mimeType: track.mimeType,
+              format: track.format,
+              qualityVerified: track.qualityVerified,
+              isLive: track.isLive,
+              fallbackUrls: track.fallbackUrls,
+            });
 
             return (
               <div
-                key={`api-${track.id}`}
+                key={`api-${sourceLabel}-${track.id}`}
                 className="palette-result search-music-result"
                 role="button"
                 tabIndex={0}
-                onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPaletteOpen(false); handleSaveHistory(paletteQuery); void playTrack({ id: `api-${track.id}`, title: track.name, artist: track.artist, album: track.album, fileName: `${track.name}.audio`, audioUrl: track.downloadUrl, src: track.downloadUrl, image: track.image, duration: track.duration } as any); } }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setPaletteOpen(false);
+                    handleSaveHistory(paletteQuery);
+                    void playTrack(buildApiTrack() as any);
+                  }
+                }}
                 onClick={() => {
                   handleSaveHistory(paletteQuery);
-                  const apiTrack = {
-                    id: `api-${track.id}`,
-                    title: track.name,
-                    artist: track.artist,
-                    album: track.album,
-                    fileName: `${track.name}.mp4`,
-                    audioUrl: track.downloadUrl,
-                    src: track.downloadUrl,
-                    image: track.image,
-                    duration: track.duration,
-                  };
-
                   setPaletteOpen(false);
-                  void playTrack(apiTrack as any);
+                  void playTrack(buildApiTrack() as any);
                 }}
                 data-testid={`search-music-${track.id}`}
               >
                 <Cover track={{ image: track.image }} />
                 <span>
                   <span className="track-title">{track.name}</span>
-                  <span className="track-sub">{track.artist}</span>
+                  <span className="track-sub">{track.artist}{track.album && track.album !== 'Unknown Album' && track.album !== sourceLabel ? ` · ${track.album}` : ''}</span>
                 </span>
                 <span className="search-result-actions">
-                  {(!downloadedTracks.some((item: any) => String(item.id ?? '').replace(/^download:/, '') === String(track.id)) || recentlyDownloadedIds.includes(String(track.id))) && (
-                    <button className={`download-icon-button${downloadingIds.includes(String(track.id)) ? ' is-downloading' : ''}${recentlyDownloadedIds.includes(String(track.id)) ? ' is-download-success' : ''}`} aria-label={recentlyDownloadedIds.includes(String(track.id)) ? `Downloaded ${track.name}` : `Download ${track.name}`} title={recentlyDownloadedIds.includes(String(track.id)) ? 'Downloaded' : downloadingIds.includes(String(track.id)) ? 'Saving offline…' : `Save ${track.name} for offline listening`} disabled={downloadingIds.includes(String(track.id)) || recentlyDownloadedIds.includes(String(track.id)) || /^[\w-]{11}$/.test(String(track.id))} onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}>
-                      <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
-                        {recentlyDownloadedIds.includes(String(track.id)) ? (
-                          <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                        ) : (
-                          <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
-                        )}
-                      </svg>
-                    </button>
-                  )}
+                  {!isNonDownloadable && (() => {
+                    const cleanResultId = extractCleanYouTubeId(track.id);
+                    const isResultDownloading = Boolean(cleanResultId && downloadingIds.includes(cleanResultId));
+                    const normResTitle = normalizeMatchText(track.name || (track as any).title);
+                    const normResArtist = normalizeMatchText(track.artist);
+                    const isResultDownloaded = Boolean(
+                      (cleanResultId &&
+                        (recentlyDownloadedIds.includes(cleanResultId) ||
+                          downloadedTracks.some((item: any) => extractCleanYouTubeId(item?.id ?? '') === cleanResultId))) ||
+                        downloadedTracks.some((item: any) => {
+                          const dlTitle = normalizeMatchText(item?.title || item?.name);
+                          const dlArtist = normalizeMatchText(item?.artist);
+                          const itemSource = formatProviderLabel(item?.source, item);
+                          const sameSong =
+                            Boolean(normResTitle && dlTitle && normResTitle === dlTitle) &&
+                            Boolean(!normResArtist || !dlArtist || normResArtist === dlArtist || dlArtist.includes(normResArtist) || normResArtist.includes(dlArtist));
+                          return sameSong && (!itemSource || itemSource === sourceLabel);
+                        })
+                    );
+                    return (
+                      <button
+                        className={`download-icon-button${isResultDownloading ? ' is-downloading' : ''}${isResultDownloaded ? ' is-download-success' : ''}`}
+                        aria-label={isResultDownloaded ? `Downloaded ${track.name}` : `Download ${track.name}`}
+                        title={isResultDownloaded ? 'Downloaded' : isResultDownloading ? 'Saving offline…' : `Save ${track.name} for offline listening`}
+                        disabled={isResultDownloading || isResultDownloaded}
+                        onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}
+                      >
+                        <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                          {isResultDownloaded ? (
+                            <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          ) : (
+                            <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                          )}
+                        </svg>
+                      </button>
+                    );
+                  })()}
+                  {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
                   <span className="crumb search-source-label">{sourceLabel}</span>
                 </span>
               </div>
@@ -2953,7 +3604,7 @@ useEffect(() => {
               className="crumb"
               style={{ padding: '14px 12px' }}
             >
-              Searching Jamendo…
+              Searching music providers…
             </div>
           )}
 
@@ -2968,34 +3619,67 @@ useEffect(() => {
                 className="empty-state"
                 style={{ margin: 8, padding: 20 }}
               >
-                <strong>No match in your library</strong>
-                <p>Search your library and Jamendo.</p>
+                <strong>No match found</strong>
+                <p>Try another song title, artist, or album.</p>
               </div>
             )}
 
           {!paletteQuery && searchHistory.length > 0 && (
-            <div className="search-history-list">
-              <div className="crumb" style={{ padding: '14px 12px 4px' }}>Recent Searches</div>
-              {searchHistory.map((term, i) => (
-                <button
-                  key={`history-${i}`}
-                  className="palette-result"
-                  onClick={() => setPaletteQuery(term)}
-                >
-                  <Clock3 size={16} />
-                  <span>{term}</span>
-                  <div style={{ marginLeft: 'auto', display: 'flex' }}>
-                    <button 
-                      className="icon-button" 
-                      style={{ width: 28, height: 28, pointerEvents: 'auto' }} 
-                      onClick={(e) => handleRemoveHistory(term, e)}
-                      aria-label="Remove from history"
-                    >
-                      <X size={14} />
-                    </button>
+            <div className="search-history-list" data-expanded={historyExpanded ? 'true' : 'false'}>
+              <div className="search-history-header">
+                <span className="crumb">Recent Searches</span>
+                {searchHistory.length > 4 && (
+                  <button
+                    type="button"
+                    className={`icon-button search-history-more-btn${historyExpanded ? ' is-expanded' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHistoryExpanded(prev => !prev);
+                    }}
+                    aria-label={historyExpanded ? 'Show fewer recent searches' : 'Show more recent searches'}
+                    aria-expanded={historyExpanded}
+                    title={historyExpanded ? 'Show less' : 'Show more'}
+                  >
+                    <ChevronDown size={15} strokeWidth={1.85} />
+                  </button>
+                )}
+              </div>
+              <div className={`search-history-items-scroll${historyExpanded ? ' is-expanded' : ''}`}>
+                {(historyExpanded ? searchHistory : searchHistory.slice(0, 4)).map((term, i) => (
+                  <div
+                    key={`history-${term}-${i}`}
+                    className={`palette-result search-history-item${i >= 4 ? ' is-extra-history' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    style={
+                      i >= 4
+                        ? ({ cursor: 'pointer', '--hist-idx': Math.min(i - 4, 8) } as CSSProperties)
+                        : { cursor: 'pointer' }
+                    }
+                    onClick={() => setPaletteQuery(term)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setPaletteQuery(term);
+                      }
+                    }}
+                  >
+                    <Clock3 size={16} />
+                    <span>{term}</span>
+                    <div style={{ marginLeft: 'auto', display: 'flex' }}>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        style={{ width: 28, height: 28, pointerEvents: 'auto' }}
+                        onClick={(e) => handleRemoveHistory(term, e)}
+                        aria-label="Remove from history"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   </div>
-                </button>
-              ))}
+                ))}
+              </div>
             </div>
           )}
           {!paletteQuery && searchHistory.length === 0 && (
@@ -3003,7 +3687,7 @@ useEffect(() => {
               className="crumb"
               style={{ padding: '14px 12px' }}
             >
-              Search your local songs and VOID.
+              Search your local songs and connected music providers.
             </div>
           )}
 
@@ -3032,16 +3716,22 @@ useEffect(() => {
         )}
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-add-playlist">Close</button></div>
        </> : modal === 'properties' && contextTrack ? <>
-         <p>File information stored with your local library.</p>
+         <p>Track and audio quality metadata.</p>
          <dl className="properties-list">
            <dt>File</dt><dd>{contextTrack.fileName}</dd>
            <dt>Title</dt><dd>{contextTrack.title}</dd>
            <dt>Artist</dt><dd>{contextTrack.artist}</dd>
            <dt>Album</dt><dd>{contextTrack.album}</dd>
-           <dt>Duration</dt><dd>{formatTime(contextTrack.duration)}</dd>
-           <dt>Format</dt><dd>{contextTrack.mimeType || 'Unknown'}</dd>
-           <dt>Size</dt><dd>{compactBytes(contextTrack.fileSize)}</dd>
-           <dt>Added</dt><dd>{new Date(contextTrack.importedAt).toLocaleString()}</dd>
+           <dt>Source</dt><dd>{formatProviderLabel(contextTrack.source, contextTrack) || 'Local Library'}</dd>
+           <dt>Quality</dt><dd style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+             <QualityBadge tier={getTrackQualityBadge(contextTrack)} track={contextTrack} compact />
+             {contextTrack.bitrate ? <span>{contextTrack.bitrate} kbps</span> : null}
+             {contextTrack.codec ? <span>· {contextTrack.codec}</span> : null}
+           </dd>
+           <dt>Duration</dt><dd>{contextTrack.isLive ? 'Live Stream' : formatTime(contextTrack.duration)}</dd>
+           <dt>Format</dt><dd>{contextTrack.format || contextTrack.mimeType || 'Unknown'}</dd>
+           {contextTrack.fileSize > 0 && <><dt>Size</dt><dd>{compactBytes(contextTrack.fileSize)}</dd></>}
+           {contextTrack.importedAt > 0 && <><dt>Added</dt><dd>{new Date(contextTrack.importedAt).toLocaleString()}</dd></>}
          </dl>
          <div className="modal-actions"><button className="button" onClick={() => { setModal(null); setContextTrack(null); }} data-testid="button-close-properties">Close</button></div>
       </> : <>
@@ -3051,7 +3741,7 @@ useEffect(() => {
       </>}
     </div></div>}
     {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && modal !== 'playlist' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
-      <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {contextTrack.fileName}</p>
+      <h2>{contextTrack.title}</h2><p>{contextTrack.artist} · {formatProviderLabel(contextTrack.source, contextTrack) || contextTrack.fileName}</p>
       <button className="palette-result" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
       <button className="palette-result" onClick={() => { addToQueue(contextTrack); setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
        <button className="palette-result" onClick={() => { playNext(contextTrack); setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
@@ -3077,15 +3767,26 @@ useEffect(() => {
             <div className="np-art" ref={npArt}><Cover track={activeTrack} large /></div>
             <div className="np-meta np-fade">
               <div className="np-info">
-                <div className="np-titles"><h1>{activeTrack.title}</h1><p>{activeTrack.artist} · {activeTrack.album}</p></div>
+                <div className="np-titles">
+                  <h1>{activeTrack.title}</h1>
+                  <p>
+                    {activeTrack.artist} · {activeTrack.album}
+                    {formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}
+                  </p>
+                  {getTrackQualityBadge(activeTrack) && (
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} />
+                    </div>
+                  )}
+                </div>
                 <button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button>
               </div>
               <div className="np-scrub">
-                <input className="np-seek" type="range" min="0" max={duration || 0} step=".1" style={rangeStyle(duration ? position / duration : 0)} value={Math.min(position, duration || 0)} aria-label="Now playing position" onChange={event => seekTo(Number(event.target.value))} data-testid="expanded-seek" />
-                <div className="np-times"><span>{formatElapsed(position)}</span><span>{formatTime(duration)}</span></div>
+                <input className="np-seek" type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} aria-label="Now playing position" onChange={event => seekTo(Number(event.target.value))} data-testid="expanded-seek" />
+                <div className="np-times"><span>{formatElapsed(position)}</span><span>{activeTrack.isLive ? 'LIVE' : formatTime(duration)}</span></div>
               </div>
               <div className="np-controls">
-                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" aria-play="" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
+                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
                 <div className="np-transport">
                   <button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button>
                   <button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play"><VoidGlyph playing={isPlaying} /></button>
@@ -3232,27 +3933,35 @@ const core: VoidCore = {
   notify,
 
   fetchArtistPhoto,
+  downloadedTracks,
+  downloadSearchTrack,
 };
 return (
   <>
+    <div ref={ytAudioHostRef} aria-hidden="true" style={{ position: 'fixed', width: 1, height: 1, left: -9999, top: -9999, opacity: 0, pointerEvents: 'none', overflow: 'hidden' }} />
     <audio
       ref={audio}
       preload="none"
-      onTimeUpdate={() => setPosition(audio.current?.currentTime ?? 0)}
-      onPlay={() => setIsPlaying(true)}
-      onPlaying={() => setIsPlaying(true)}
-      onPause={() => setIsPlaying(false)}
+      onTimeUpdate={() => {
+        if (switchingTrackRef.current || ytActiveRef.current) return;
+        setPosition(audio.current?.currentTime ?? 0);
+      }}
+      onPlay={() => { if (!ytActiveRef.current) setIsPlaying(true); }}
+      onPlaying={() => { if (!ytActiveRef.current) setIsPlaying(true); }}
+      onPause={() => { if (!ytActiveRef.current) setIsPlaying(false); }}
       onDurationChange={() => {
         const value = audio.current?.duration ?? 0;
         if (Number.isFinite(value) && value > 0) setDuration(value);
       }}
       onLoadedMetadata={() => {
         const value = audio.current?.duration ?? 0;
-        setDuration(value);
-        if (activeId && Number.isFinite(value) && value > 0) {
-          setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
-          const loadedTrack = tracks.find(item => item.id === activeId);
-          if (loadedTrack) void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
+        if (Number.isFinite(value) && value > 0) {
+          setDuration(value);
+          if (activeId) {
+            setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
+            const loadedTrack = tracks.find(item => item.id === activeId);
+            if (loadedTrack) void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
+          }
         }
       }}
       onEnded={() => {

@@ -155,6 +155,7 @@
 /* `text-size-adjust` keeps mobile Safari / Chrome from inflating text inside the fixed
    layout, which is the usual cause of text that looks like the wrong size or face on phones. */
 * { box-sizing: border-box; }
+vite-error-overlay { display: none !important; visibility: hidden !important; pointer-events: none !important; }
 html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   font-family: var(--void-font); font-size: 13px; line-height: 1.5;
@@ -508,11 +509,13 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .track-table { box-sizing: border-box; table-layout: fixed; width: 100%; }
 /* Lock the glass/table geometry: selection must animate inside each row, never resize the panel. */
 .table-wrap:has(.track-table) { contain: layout; }
-.track-table tbody tr > td:first-child { width: 54%; min-width: 0; overflow: hidden; }
-.track-table tbody tr > td:nth-child(2) { width: 28%; min-width: 0; overflow: hidden; }
-.track-table tbody tr > td:nth-child(2) .crumb { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.track-table tbody tr > td:nth-child(3) { width: 10%; }
-.track-table tbody tr > td:last-child { width: 8%; }
+.track-table thead tr > th:first-child, .track-table tbody tr > td:first-child { width: 40%; min-width: 0; overflow: hidden; }
+.track-table thead tr > th:nth-child(2), .track-table tbody tr > td:nth-child(2) { width: 22%; min-width: 0; overflow: hidden; text-align: center; padding-left: 24px; padding-right: 12px; vertical-align: middle; }
+.track-table tbody tr > td:nth-child(2) .crumb { display: inline-block; max-width: 100%; margin: 0 auto; text-align: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: middle; }
+.track-table thead tr > th:nth-child(3), .track-table tbody tr > td:nth-child(3) { width: 6%; white-space: nowrap; text-align: center; }
+.track-table thead tr > th.track-col-quality, .track-table tbody tr > td.track-col-quality { width: 21%; text-align: center; padding-left: 8px; padding-right: 8px; vertical-align: middle; }
+.track-quality-cell { display: flex; align-items: center; justify-content: center; width: 100%; }
+.track-table thead tr > th:last-child, .track-table tbody tr > td:last-child { width: 11%; }
 .track-table tbody tr > td:first-child > div { min-width: 0; width: 100%; box-sizing: border-box; }
 .track-table tbody tr > td:first-child > div > .track-main { flex: 1 1 auto; min-width: 0; max-width: 100%; transition: transform .34s var(--ease-out-soft); }
 .track-table .track-main > div:has(> .cover-mini) { flex: 0 0 44px; width: 44px; height: 44px; overflow: hidden; }
@@ -532,6 +535,9 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .track-table tr:hover .row-actions, .row-actions:focus-within { opacity: 1; }
 .row-actions .icon-button { width: 32px; height: 32px; border-radius: var(--r-sm); }
 .row-actions .icon-button svg { width: 15px; height: 15px; }
+.row-actions .row-download-button { opacity: 1; transform: none; pointer-events: auto; width: 30px; height: 32px; margin-right: 8px; border-radius: var(--r-sm); color: hsl(var(--foreground) / .82); }
+.row-actions .row-download-button:hover:not(:disabled) { color: hsl(var(--foreground)); background: var(--hover); transform: translateY(-1px); }
+.row-actions .row-download-button.is-download-success { color: #35c96b; opacity: 1; transform: none; }
 .filter-input, .modal-input {
   height: 38px; border: 1px solid var(--glass-border); border-radius: var(--r-md); background: var(--field); box-shadow: inset 0 1px 0 var(--glass-edge);
   padding: 0 14px; color: hsl(var(--foreground)); font-size: 12.5px; outline: none; transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
@@ -820,6 +826,78 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 @keyframes void-download-pulse { from { opacity: .55; transform: translateY(-1px); } to { opacity: 1; transform: translateY(1px); } }
 @media (hover: none), (pointer: coarse) { .download-icon-button { opacity: 1; transform: none; pointer-events: auto; } }
 
+/* Search History: 4 items initially, V chevron aligned directly above the X button,
+   pull-down motion-blur reveal, and max 10 visible items before scrolling. */
+.palette:has(.search-history-items-scroll.is-expanded) .palette-results {
+  max-height: 510px;
+  overflow: hidden;
+}
+.search-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 4px;
+  min-height: 36px;
+}
+.search-history-more-btn {
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border-radius: var(--r-sm);
+  color: hsl(var(--muted-foreground));
+  transition: transform .36s cubic-bezier(.16, 1, .3, 1), color .18s ease, background-color .18s ease;
+}
+.search-history-more-btn:hover {
+  color: hsl(var(--foreground));
+  background: var(--hover);
+}
+.search-history-more-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.85;
+  transition: transform .38s cubic-bezier(.16, 1, .3, 1);
+}
+.search-history-more-btn.is-expanded svg {
+  transform: rotate(180deg);
+}
+.search-history-items-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: 204px;
+  overflow: hidden;
+  transition: max-height .46s cubic-bezier(.16, 1, .3, 1);
+}
+.search-history-items-scroll.is-expanded {
+  max-height: 440px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / .18) transparent;
+}
+.search-history-item.is-extra-history {
+  transform-origin: top center;
+  animation: history-pull-down .44s cubic-bezier(.16, 1, .3, 1) both;
+  animation-delay: calc(var(--hist-idx, 0) * 28ms);
+  will-change: transform, filter, opacity;
+}
+@keyframes history-pull-down {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -18px, 0) scaleY(0.88);
+    filter: blur(6px);
+  }
+  55% {
+    opacity: 0.92;
+    transform: translate3d(0, 2px, 0) scaleY(1.015);
+    filter: blur(1.2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scaleY(1);
+    filter: blur(0px);
+  }
+}
+
 
 /* Add music menu */
 .import-menu { width: min(392px, 100%); padding: 8px; }
@@ -1040,7 +1118,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .player-bar .player-controls > :first-child, .player-bar .player-controls > :last-child { display: none; }
   .player-extra { display: none; }
   .player-controls .play-button { width: 44px; height: 44px; margin: 0 2px; }
-  .track-table th:nth-child(3), .track-table td:nth-child(3) { display: none; }
+  .track-table th:nth-child(3), .track-table td:nth-child(3),
+  .track-table th:nth-child(4), .track-table td:nth-child(4) { display: none; }
   .track-table th { padding-left: 8px; padding-right: 8px; }
   .track-table td { padding: 6px 8px; height: 58px; }
   .track-table td:last-child { width: 1%; }
@@ -1720,7 +1799,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .table-wrap { overflow-x: hidden; padding: 4px 6px 6px; }
   .track-table { table-layout: fixed; }
   .track-table th:nth-child(2), .track-table td:nth-child(2),
-  .track-table th:nth-child(3), .track-table td:nth-child(3) { display: none; }
+  .track-table th:nth-child(3), .track-table td:nth-child(3),
+  .track-table th:nth-child(4), .track-table td:nth-child(4) { display: none; }
   .track-table td:first-child { padding-left: 10px; overflow: hidden; }
   .track-table th:last-child, .track-table td:last-child { width: 78px; padding-left: 0; padding-right: 6px; white-space: nowrap; }
   /* The row text is allowed to shrink instead of forcing the row wider (its min-content),

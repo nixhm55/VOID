@@ -12,6 +12,8 @@ import {
   countLabel, fmt, fmtElapsed, formatBytes, rangeStyle,
 } from './parts';
 import { PgOverlays, PgNowPlaying } from './Overlays';
+import { QualityBadge } from '../components/QualityBadge';
+import { formatProviderLabel, getTrackQualityBadge } from '../api/quality';
 
 const NAV: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'library'; compact: boolean }[] = [
   { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
@@ -544,7 +546,19 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         <div className="pg-player-track" role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track"
           onClick={() => activeTrack && c.openExpanded()} onKeyDown={e => { if (activeTrack && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); c.openExpanded(); } }}>
           <PgCover track={activeTrack ?? undefined} />
-          <span className="pg-row-text"><span className="pg-row-name">{activeTrack?.title ?? 'Nothing playing'}</span><span className="pg-row-artist">{activeTrack?.artist ?? 'Your music will be here'}</span></span>
+          <span className="pg-row-text">
+            <span className="pg-row-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span>{activeTrack?.title ?? 'Nothing playing'}</span>
+              {activeTrack && getTrackQualityBadge(activeTrack) && (
+                <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
+              )}
+            </span>
+            <span className="pg-row-artist">
+              {activeTrack
+                ? `${activeTrack.artist || ''}${formatProviderLabel(activeTrack.source, activeTrack) ? ` · ${formatProviderLabel(activeTrack.source, activeTrack)}` : ''}`
+                : 'Your music will be here'}
+            </span>
+          </span>
         </div>
 
         <button className="pg-icon-btn pg-play pg-play--mobile" onClick={e => { e.stopPropagation(); void c.togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}><PgPlayIcon playing={isPlaying} /></button>
@@ -559,9 +573,9 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
           </div>
           <div className="pg-scrub">
             <span>{activeTrack ? fmtElapsed(c.position) : '—:—'}</span>
-            <input className="pg-range" aria-label="Playback position" style={rangeStyle(c.duration ? c.position / c.duration : 0)} type="range" min="0" max={c.duration || 0} step=".1"
-              value={Math.min(c.position, c.duration || 0)} disabled={!activeTrack} onChange={e => c.seekTo(Number(e.target.value))} data-testid="input-seek" />
-            <span>{activeTrack ? fmt(c.duration) : '—:—'}</span>
+            <input className="pg-range" aria-label="Playback position" style={rangeStyle(c.duration > 0 && Number.isFinite(c.duration) ? c.position / c.duration : 0)} type="range" min="0" max={c.duration > 0 && Number.isFinite(c.duration) ? c.duration : 100} step=".1"
+              value={c.duration > 0 && Number.isFinite(c.duration) ? Math.min(c.position, c.duration) : 0} disabled={!activeTrack} onChange={e => c.seekTo(Number(e.target.value))} data-testid="input-seek" />
+            <span>{activeTrack ? (activeTrack.isLive ? 'LIVE' : fmt(c.duration)) : '—:—'}</span>
           </div>
         </div>
 
@@ -581,6 +595,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
       <input ref={c.fontInput} type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" hidden
         onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void c.importFont(file); }} data-testid="input-import-font" />
 
+      <PgNowPlaying core={c} />
       <PgOverlays core={c} />
     </div>
   );

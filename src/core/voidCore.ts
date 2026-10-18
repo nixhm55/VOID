@@ -31,6 +31,10 @@ export type RowActions = {
   removeFromList: (id: string) => void;
   favorite: (track: Track) => void;
   menu: (track: Track) => void;
+  download?: (track: any) => void;
+  canDownload?: (track: any) => boolean;
+  isDownloading?: (track: any) => boolean;
+  isDownloadSuccess?: (track: any) => boolean;
 };
 
 export type FontChoice = { id: string; name: string; tag: string; family: string; note: string; font: any };

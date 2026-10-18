@@ -16,6 +16,15 @@ export type Track = {
   audioUrl?: string;
   downloadUrl?: string;
   src?: string;
+  image?: string;
+  source?: string;
+  qualityBadge?: string;
+  bitrate?: number;
+  codec?: string;
+  format?: string;
+  qualityVerified?: boolean;
+  isLive?: boolean;
+  fallbackUrls?: string[];
 };
 
 export type Playlist = {
