@@ -47,6 +47,8 @@ export interface SearchResult {
   fallbackUrls?: string[];
   bitDepth?: number;
   sampleRate?: number;
+  language?: string;
+  label?: string;
 }
 
 export interface QualityDetectionOptions {
@@ -617,50 +619,338 @@ export function compareResultsByQuality(a: SearchResult, b: SearchResult, query?
 
 /**
  * Extracts normalized version markers (remix, live, acoustic, slowed, etc.) so
- * distinct releases or arrangements are never merged as duplicates.
+ * distinct musical arrangements are preserved while movie/soundtrack tags are stripped.
  */
-function extractVersionSignature(title: string): string {
-  const lower = title.toLowerCase();
+export function extractVersionSignature(title: string): string {
+  const lower = String(title || '').toLowerCase();
   const markers: string[] = [];
   const patterns: [RegExp, string][] = [
     [/\b(live|concert|unplugged)\b/, 'live'],
-    [/\b(remix|mix|vip|bootleg|flip|mashup)\b/, 'remix'],
+    [/\b(remix|vip|bootleg|flip|mashup|club\s*mix)\b/, 'remix'],
     [/\b(acoustic|stripped)\b/, 'acoustic'],
     [/\b(instrumental|karaoke)\b/, 'instrumental'],
     [/\b(slowed|reverb|sped\s*up|nightcore)\b/, 'altered'],
-    [/\b(remaster(?:ed)?)\b/, 'remaster'],
-    [/\b(radio\s*edit|extended|club\s*mix)\b/, 'edit'],
+    [/\b(radio\s*edit|extended\s*mix|extended\s*version)\b/, 'edit'],
     [/\b(cover)\b/, 'cover'],
     [/\b(lofi|lo-fi)\b/, 'lofi'],
   ];
   for (const [regex, tag] of patterns) {
     if (regex.test(lower)) markers.push(tag);
   }
+  const partOrder = extractPartOrder(title);
+  if (partOrder > 0) {
+    markers.push(`part-${partOrder}`);
+  }
   return markers.sort().join('|');
 }
 
-function normalizeForDedup(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/&amp;/g, 'and')
+/**
+ * Strips trailing/embedded movie tags like `(From "Rockstar")`, `(From '...')`,
+ * `[Soundtrack]`, `(Original Motion Picture Soundtrack)`, `(Official Video)`, etc.,
+ * returning the cleanest canonical song title for display and comparison.
+ */
+export function cleanCanonicalTrackTitle(rawTitle: string): string {
+  if (!rawTitle) return '';
+  let cleaned = String(rawTitle)
     .replace(/&quot;/g, '"')
-    .replace(/\((?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|audio|hd|hq|4k)\)/gi, '')
-    .replace(/\[(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|audio|hd|hq|4k)\]/gi, '')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .trim();
+
+  // Strip parenthetical and bracketed movie/soundtrack/promotional metadata tags
+  const stripTagRegex =
+    /\s*(?:\((?:from\s+[^)]+|[^)]*\bsoundtrack\b[^)]*|[^)]*\bost\b[^)]*|[^)]*\bmotion\s*picture\b[^)]*|[^)]*\bfilm\s*version\b[^)]*|[^)]*\bofficial\s*(?:music\s*)?(?:video|audio|lyric\s*video|hd|4k)[^)]*|[^)]*\bfull\s*(?:video|song|audio|version)[^)]*|[^)]*\b(?:video|audio)\s*song\b[^)]*|[^)]*\blyrics?\b[^)]*|[^)]*\bhigh\s*q[uo]ality\b[^)]*|[^)]*\bremaster(?:ed)?(?:\s*\d{4})?\b[^)]*|\b(?:hd|hq|4k|audio|video)\b)\)|\[(?:from\s+[^\]]+|[^\]]*\bsoundtrack\b[^\]]*|[^\]]*\bost\b[^\]]*|[^\]]*\bmotion\s*picture\b[^\]]*|[^\]]*\bfilm\s*version\b[^\]]*|[^\]]*\bofficial\s*(?:music\s*)?(?:video|audio|lyric\s*video|hd|4k)[^\]]*|[^\]]*\bfull\s*(?:video|song|audio|version)[^\]]*|[^\]]*\b(?:video|audio)\s*song\b[^\]]*|[^\]]*\blyrics?\b[^\]]*|[^\]]*\bhigh\s*q[uo]ality\b[^\]]*|[^\]]*\bremaster(?:ed)?(?:\s*\d{4})?\b[^\]]*|\b(?:hd|hq|4k|audio|video)\b)\])/gi;
+
+  cleaned = cleaned.replace(stripTagRegex, '');
+
+  // Strip trailing dash/pipe movie or soundtrack suffixes: e.g. ` - From "Rockstar"`, ` - Original Motion Picture Soundtrack`
+  cleaned = cleaned.replace(
+    /\s*[-–—|:]\s*(?:from\s+["'“”]?[^-|()[\]]+["'“”]?|original\s+motion\s+picture\s+soundtrack|motion\s+picture\s+soundtrack|soundtrack(?:\s+version)?|ost|official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|full\s*(?:video|song|audio)|remaster(?:ed)?(?:\s*\d{4})?)\s*$/gi,
+    ''
+  );
+
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  return cleaned || String(rawTitle).trim();
+}
+
+/**
+ * Normalizes a song title for standard deduplication (after stripping movie/soundtrack tags
+ * and feat/ft credits).
+ */
+export function normalizeForDedup(text: string): string {
+  const canonical = cleanCanonicalTrackTitle(text);
+  return canonical
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\((?:feat\.?|ft\.?|with|prod\.?\s*by)\s+[^)]*\)/gi, '')
+    .replace(/\[(?:feat\.?|ft\.?|with|prod\.?\s*by)\s+[^\]]*\]/gi, '')
+    .replace(/\b(?:feat\.?|ft\.?)\s+.*$/i, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ');
 }
 
-function normalizePrimaryArtist(artist: string): string {
-  const first = String(artist || '')
-    .split(/(?:,|;|&|\bfeat\.?\b|\bft\.?\b|\/)/i)[0]
-    ?.trim() || '';
-  return normalizeForDedup(first);
+/**
+ * Generates a phonetic / transliteration-normalized skeleton of a song title so that
+ * transliterated duplicates like "Kun Faya Kun" and "Kun Faaya Kun", "Roobaroo" and "Rubaru",
+ * "Channa Mereya" and "Chana Mereya", or "Tum Hi Ho" and "Tum Hee Ho" resolve to the exact same key.
+ */
+export function getPhoneticSongKey(rawTitle: string): string {
+  const base = normalizeForDedup(rawTitle);
+  if (!base) return '';
+  return base
+    .replace(/aa+/g, 'a')
+    .replace(/ee+|ii+/g, 'i')
+    .replace(/oo+|uu+|ou|ow/g, 'u')
+    .replace(/ei|ey/g, 'i')
+    .replace(/ay/g, 'ai')
+    .replace(/aw/g, 'au')
+    .replace(/ph/g, 'f')
+    .replace(/q/g, 'k')
+    .replace(/([a-z])\1+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fuzzyEditDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const dp = Array.from({ length: a.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= b.length; j++) {
+    let prev = dp[0];
+    dp[0] = j;
+    for (let i = 1; i <= a.length; i++) {
+      const temp = dp[i];
+      dp[i] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[i], dp[i - 1]);
+      prev = temp;
+    }
+  }
+  return dp[a.length];
+}
+
+export function normalizePrimaryArtist(artist: string): string {
+  const first =
+    String(artist || '')
+      .split(/(?:,|;|&|·|\||\/|\bfeat\.?\b|\bft\.?\b|\bwith\b)/i)[0]
+      ?.trim() || '';
+  return normalizeForDedup(first).replace(/\b(?:unknown\s*artist|various\s*artists)\b/gi, '').trim();
+}
+
+function getPhoneticArtistKey(artist: string): string {
+  const norm = normalizePrimaryArtist(artist);
+  if (!norm) return '';
+  return norm
+    .replace(/aa+/g, 'a')
+    .replace(/ee+|ii+/g, 'i')
+    .replace(/oo+|uu+|ou/g, 'u')
+    .replace(/([a-z])\1+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function areArtistsCompatibleForDedup(artistA?: string, artistB?: string): boolean {
+  const rawA = String(artistA || '').toLowerCase();
+  const rawB = String(artistB || '').toLowerCase();
+  const a = getPhoneticArtistKey(artistA || '');
+  const b = getPhoneticArtistKey(artistB || '');
+  if (!a || !b) return true;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+
+  const splitAll = (raw: string) =>
+    raw
+      .split(/(?:,|;|&|·|\||\/|\bfeat\.?\b|\bft\.?\b|\bwith\b|\band\b)/i)
+      .map(part => getPhoneticArtistKey(part))
+      .filter(part => part.length >= 3);
+
+  const listA = splitAll(rawA);
+  const listB = splitAll(rawB);
+  for (const itemA of listA) {
+    for (const itemB of listB) {
+      if (itemA === itemB || itemA.includes(itemB) || itemB.includes(itemA)) return true;
+      if (Math.min(itemA.length, itemB.length) >= 5 && fuzzyEditDistance(itemA, itemB) <= 1) return true;
+    }
+  }
+
+  if (Math.min(a.length, b.length) >= 5 && fuzzyEditDistance(a, b) <= 2) return true;
+  return false;
 }
 
 /**
- * Carefully deduplicates unified search results while preserving distinct versions,
- * live recordings, remixes, and live radio stations, removes obvious ad/spam items,
+ * Determines whether two song titles (and optional artist strings) represent the same
+ * underlying song using strict fuzzy + phonetic comparison after stripping movie/soundtrack tags.
+ */
+export function areSongsFuzzyDuplicates(
+  titleA: string,
+  titleB: string,
+  artistA?: string,
+  artistB?: string,
+  ignoreArtist = false
+): boolean {
+  const verA = extractVersionSignature(titleA);
+  const verB = extractVersionSignature(titleB);
+  if (verA !== verB) return false;
+
+  const normA = normalizeForDedup(titleA);
+  const normB = normalizeForDedup(titleB);
+  if (!normA || !normB) return false;
+
+  const phonA = getPhoneticSongKey(titleA);
+  const phonB = getPhoneticSongKey(titleB);
+
+  let titlesMatch = false;
+  if (normA === normB || (phonA && phonA === phonB)) {
+    titlesMatch = true;
+  } else {
+    const wordsA = phonA.split(' ').filter(Boolean);
+    const wordsB = phonB.split(' ').filter(Boolean);
+    if (wordsA.length === wordsB.length && wordsA.length >= 1 && Math.min(phonA.length, phonB.length) >= 5) {
+      const dists = wordsA.map((wa, idx) => {
+        const wb = wordsB[idx];
+        if (wa === wb) return 0;
+        if (wa.length >= 4 && wb.length >= 4 && wa[0] === wb[0]) {
+          return fuzzyEditDistance(wa, wb);
+        }
+        return 99;
+      });
+      const maxWordDist = Math.max(...dists);
+      const totalDist = dists.reduce((sum, d) => sum + d, 0);
+      if (maxWordDist <= 1 && totalDist <= (phonA.length >= 10 ? 2 : 1)) {
+        titlesMatch = true;
+      }
+    }
+  }
+
+  if (!titlesMatch) return false;
+  if (ignoreArtist) return true;
+
+  if (areArtistsCompatibleForDedup(artistA, artistB)) {
+    return true;
+  }
+
+  const wordCount = phonA.split(' ').filter(Boolean).length;
+  if (wordCount >= 3 && phonA.length >= 10) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Scores how clean and canonical a track's display title is (penalizing leftover movie/soundtrack tags).
+ */
+export function scoreCanonicalTitleCleanliness(rawTitle: string): number {
+  const raw = String(rawTitle || '').trim();
+  if (!raw) return 0;
+  let score = 100;
+  if (/\bfrom\b|\bsoundtrack\b|\bost\b|\bmotion\s*picture\b/i.test(raw)) score -= 45;
+  if (/\bofficial\b|\blyric\b|\bvideo\b|\bfull\s*song\b|\baudio\b/i.test(raw)) score -= 35;
+  if (/[()[\]]/.test(raw)) score -= 10;
+  return score;
+}
+
+/**
+ * Generic global fuzzy song deduplicator for any track collection (Artist pages, Trending lists,
+ * Library songs, Favorites, Playlists, Queue). Keeps the cleanest canonical version of each unique song.
+ */
+export function deduplicateTrackCollection<T extends Record<string, any>>(
+  items: T[],
+  options?: { ignoreArtist?: boolean; cleanTitles?: boolean }
+): T[] {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const ignoreArtist = Boolean(options?.ignoreArtist);
+  const cleanTitles = options?.cleanTitles !== false;
+  const deduped: T[] = [];
+
+  for (const rawItem of items) {
+    if (!rawItem) continue;
+    const rawTitle = String(rawItem.title ?? rawItem.name ?? '').trim();
+    const cleanedTitle = cleanTitles ? cleanCanonicalTrackTitle(rawTitle) : rawTitle;
+    const item: T =
+      cleanTitles && cleanedTitle && cleanedTitle !== rawTitle
+        ? ({
+            ...rawItem,
+            ...(rawItem.title !== undefined ? { title: cleanedTitle } : {}),
+            ...(rawItem.name !== undefined ? { name: cleanedTitle } : {}),
+          } as T)
+        : rawItem;
+
+    if (item.isLive || item.qualityBadge === 'Live Radio' || item.qualityBadge === 'FLAC Live') {
+      deduped.push(item);
+      continue;
+    }
+
+    const candTitle = String(item.title ?? item.name ?? '');
+    const candArtist = String(item.artist ?? '');
+
+    const dupIdx = deduped.findIndex((existing) => {
+      if (existing.isLive || existing.qualityBadge === 'Live Radio' || existing.qualityBadge === 'FLAC Live') {
+        return false;
+      }
+      const exTitle = String(existing.title ?? existing.name ?? '');
+      const exArtist = String(existing.artist ?? '');
+      return areSongsFuzzyDuplicates(candTitle, exTitle, candArtist, exArtist, ignoreArtist);
+    });
+
+    if (dupIdx === -1) {
+      deduped.push(item);
+    } else {
+      const existing = deduped[dupIdx];
+      const candHasOffline = Boolean(item.offlineAvailable || String(item.id || '').startsWith('download:'));
+      const exHasOffline = Boolean(existing.offlineAvailable || String(existing.id || '').startsWith('download:'));
+      const candHasDirect = Boolean(
+        typeof (item.audioUrl || item.downloadUrl) === 'string' &&
+          String(item.audioUrl || item.downloadUrl).startsWith('http')
+      );
+      const exHasDirect = Boolean(
+        typeof (existing.audioUrl || existing.downloadUrl) === 'string' &&
+          String(existing.audioUrl || existing.downloadUrl).startsWith('http')
+      );
+
+      const candScore =
+        (candHasOffline ? 500 : 0) +
+        (item.favorite ? 250 : 0) +
+        (candHasDirect ? 120 : 0) +
+        (item.image ? 40 : 0) +
+        scoreCanonicalTitleCleanliness(rawTitle) +
+        getQualitySortRank(item as any);
+
+      const exScore =
+        (exHasOffline ? 500 : 0) +
+        (existing.favorite ? 250 : 0) +
+        (exHasDirect ? 120 : 0) +
+        (existing.image ? 40 : 0) +
+        scoreCanonicalTitleCleanliness(String(existing.title ?? existing.name ?? '')) +
+        getQualitySortRank(existing as any);
+
+      if (candScore > exScore) {
+        deduped[dupIdx] = {
+          ...existing,
+          ...item,
+          favorite: Boolean(item.favorite || existing.favorite),
+          image: item.image || existing.image,
+          offlineAvailable: Boolean(item.offlineAvailable || existing.offlineAvailable),
+        };
+      } else {
+        deduped[dupIdx] = {
+          ...existing,
+          favorite: Boolean(existing.favorite || item.favorite),
+          image: existing.image || item.image,
+          offlineAvailable: Boolean(existing.offlineAvailable || item.offlineAvailable),
+        };
+      }
+    }
+  }
+
+  return deduped;
+}
+
+/**
+ * Carefully deduplicates unified search results globally across all providers using strict
+ * fuzzy & phonetic song deduplication while preserving distinct versions, live recordings,
+ * remixes, and live radio stations, removes obvious ad/spam items, cleans movie tags from titles,
  * and sorts with JioSaavn locked at #1 and all remaining results ordered by song name relevance.
  */
 export function deduplicateAndSortSearchResults(results: SearchResult[], query?: string): SearchResult[] {
@@ -679,8 +969,11 @@ export function deduplicateAndSortSearchResults(results: SearchResult[], query?:
   const uniqueById = Array.from(byExactId.values());
   const merged: SearchResult[] = [];
 
-  for (const candidate of uniqueById) {
-    // Never merge live radio stations with recorded tracks
+  for (const rawCandidate of uniqueById) {
+    const cleanedName = cleanCanonicalTrackTitle(rawCandidate.name) || rawCandidate.name;
+    const candidate: SearchResult =
+      cleanedName !== rawCandidate.name ? { ...rawCandidate, name: cleanedName } : rawCandidate;
+
     if (candidate.isLive || candidate.qualityBadge === 'Live Radio' || candidate.qualityBadge === 'FLAC Live') {
       const dupStationIdx = merged.findIndex(
         existing =>
@@ -698,9 +991,6 @@ export function deduplicateAndSortSearchResults(results: SearchResult[], query?:
     }
 
     const candTitle = normalizeForDedup(candidate.name);
-    const candArtist = normalizePrimaryArtist(candidate.artist);
-    const candVersion = extractVersionSignature(candidate.name);
-
     if (!candTitle) {
       merged.push(candidate);
       continue;
@@ -710,28 +1000,27 @@ export function deduplicateAndSortSearchResults(results: SearchResult[], query?:
       if (existing.isLive || existing.qualityBadge === 'Live Radio' || existing.qualityBadge === 'FLAC Live') {
         return false;
       }
-      // Keep results from different providers visible in the unified list; only deduplicate within the same provider.
-      if (formatProviderLabel(existing.source, existing) !== formatProviderLabel(candidate.source, candidate)) {
-        return false;
-      }
-      const exTitle = normalizeForDedup(existing.name);
-      const exArtist = normalizePrimaryArtist(existing.artist);
-      const exVersion = extractVersionSignature(existing.name);
-
-      if (candTitle !== exTitle || candVersion !== exVersion) return false;
-      if (candArtist && exArtist && candArtist !== exArtist) return false;
-
-      if (candidate.duration > 0 && existing.duration > 0) {
-        if (Math.abs(candidate.duration - existing.duration) > 8) return false;
-      }
-
-      return true;
+      return areSongsFuzzyDuplicates(candidate.name, existing.name, candidate.artist, existing.artist, false);
     });
 
     if (dupIdx === -1) {
       merged.push(candidate);
-    } else if (compareResultsByQuality(candidate, merged[dupIdx], query) < 0) {
-      merged[dupIdx] = candidate;
+    } else {
+      const existing = merged[dupIdx];
+      const candidateWins = compareResultsByQuality(candidate, existing, query) < 0;
+      const winner = candidateWins ? candidate : existing;
+      const loser = candidateWins ? existing : candidate;
+      const combinedFallbacks = [
+        ...(Array.isArray(winner.fallbackUrls) ? winner.fallbackUrls : []),
+        loser.downloadUrl,
+        ...(Array.isArray(loser.fallbackUrls) ? loser.fallbackUrls : []),
+      ].filter((url, idx, arr) => Boolean(url) && url !== winner.downloadUrl && arr.indexOf(url) === idx);
+
+      merged[dupIdx] = {
+        ...winner,
+        image: winner.image || loser.image,
+        fallbackUrls: combinedFallbacks.length > 0 ? combinedFallbacks : winner.fallbackUrls,
+      };
     }
   }
 

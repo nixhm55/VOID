@@ -223,6 +223,34 @@ function buildSafeArchiveFileUrl(identifier: string, fileName: string): string {
   return `${IA_DOWNLOAD_BASE}/${cleanId}/${encodedPath}`;
 }
 
+const NON_MUSIC_ARCHIVE_PATTERN =
+  /\b(session|studio\s*session|interview|death\s*tape|jonestown|rigveda|rig\s*veda|veda|sermon|lecture|podcast|audiobook|spoken\s*word|speech|broadcast|radio\s*show|field\s*recording|test\s*tone|sound\s*effect|sample\s*pack|prelinger|librivox|fbi\s*no|tape\s*\d+)\b/i;
+
+async function resolveOfficialCoverArt(title: string, artist: string): Promise<string> {
+  const q = `${title} ${artist !== "Unknown Artist" ? artist : ""}`.trim();
+  if (!q) return "";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2400);
+  try {
+    const res = await fetch(
+      `/__void_api/itunes-search?term=${encodeURIComponent(q)}&entity=song&limit=4`,
+      { signal: ctrl.signal }
+    );
+    if (res.ok) {
+      const json: any = await res.json();
+      const item = Array.isArray(json?.results) ? json.results.find((r: any) => r?.artworkUrl100) : null;
+      if (item?.artworkUrl100) {
+        return String(item.artworkUrl100).replace("100x100bb", "600x600bb");
+      }
+    }
+  } catch {
+    /* ignore */
+  } finally {
+    clearTimeout(timer);
+  }
+  return "";
+}
+
 async function resolveArchiveItem(
   doc: IASearchDoc,
   flacSupported: boolean,
@@ -230,6 +258,12 @@ async function resolveArchiveItem(
 ): Promise<SearchResult | null> {
   const identifier = String(doc.identifier || "").trim();
   if (!identifier) return null;
+
+  const rawDocTitle = firstString(doc.title, "");
+  const rawDocCreator = firstString(doc.creator, "");
+  if (NON_MUSIC_ARCHIVE_PATTERN.test(`${identifier} ${rawDocTitle} ${rawDocCreator}`)) {
+    return null;
+  }
 
   if (metadataCache.has(identifier)) {
     return metadataCache.get(identifier) ?? null;
@@ -288,7 +322,16 @@ async function resolveArchiveItem(
       String(selectedFile.album || "").trim() ||
       firstString(meta.metadata?.title ?? doc.title, "Internet Archive");
 
+    if (NON_MUSIC_ARCHIVE_PATTERN.test(`${itemTitle} ${itemArtist} ${itemAlbum}`)) {
+      metadataCache.set(identifier, null);
+      return null;
+    }
+
     const duration = parseDurationSeconds(selectedFile.length);
+    if (duration > 0 && (duration < 60 || duration > 960)) {
+      metadataCache.set(identifier, null);
+      return null;
+    }
     const formatString = String(selectedFile.format || best.codec).trim();
 
     const qualityBadge = detectTrackQuality(downloadUrl, formatString, best.bitrate, {
@@ -297,12 +340,16 @@ async function resolveArchiveItem(
       providerVerified: best.isLossless || Boolean(best.bitrate),
     });
 
+    // Never return Archive.org's black-and-white waveform thumbnail (`archive.org/services/img/...`);
+    // resolve official Apple Music 600x600 artwork instead.
+    const officialCover = await resolveOfficialCoverArt(itemTitle, itemArtist);
+
     const result: SearchResult = {
       id: `ia:${identifier}`,
       name: itemTitle,
       album: itemAlbum,
       artist: itemArtist,
-      image: `${IA_IMG_BASE}/${encodeURIComponent(identifier)}`,
+      image: officialCover,
       downloadUrl,
       duration,
       source: "Internet Archive",

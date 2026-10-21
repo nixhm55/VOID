@@ -18,7 +18,7 @@ export const writeDesign = (design: DesignId) => {
   try { localStorage.setItem(DESIGN_STORAGE_KEY, design); } catch { /* storage unavailable */ }
 };
 
-export type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings' | 'downloads';
+export type Page = 'home' | 'songs' | 'trending' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'settings' | 'downloads';
 export type Detail = { kind: 'album' | 'artist' | 'playlist'; name: string } | null;
 export type Hue4 = readonly [number, number, number, number];
 export type Setter<T> = Dispatch<SetStateAction<T>>;
@@ -161,4 +161,17 @@ export interface VoidCore {
   downloadedTracks?: any[];
   downloadSearchTrack?: (track: any) => Promise<void>;
   downloadTrack?: (track: any) => Promise<void>;
+
+  trendingLanguages?: any[];
+  activeTrendingLang?: any | null;
+  openTrendingLanguage?: (langId: string | null) => void;
+  trendingTracks?: any[];
+  trendingLoading?: boolean;
+  trendingQuery?: string;
+  setTrendingQuery?: Setter<string>;
+
+  artistTopTracks?: any[];
+  artistTopLoading?: boolean;
+  artistViewTab?: 'top100' | 'library';
+  setArtistViewTab?: Setter<'top100' | 'library'>;
 }

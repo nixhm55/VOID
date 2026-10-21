@@ -90,9 +90,9 @@ function mapStationsToSearchResults(stations: RadioStation[]): SearchResult[] {
       name,
       album: "Live Radio",
       artist: artistSubtitle,
-      image: isValidStreamUrl(String(raw.favicon || "").trim())
-        ? String(raw.favicon).trim()
-        : "",
+      // Use VOID's built-in cover glyph rather than arbitrary third-party HTTP station favicons
+      // that frequently time out (`ERR_CONNECTION_TIMED_OUT`) in the browser console.
+      image: "",
       downloadUrl: resolvedUrl,
       duration: 0,
       source: "Radio Browser",

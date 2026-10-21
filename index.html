@@ -1,9 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#000000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>VOID Music Player</title>
     <script>
       // Prevent non-Error / AbortError / cross-origin null script events from triggering
@@ -38,7 +44,16 @@
       })();
     </script>
     <style>
-      html, body { background: #000 !important; margin: 0; }
+      html, body {
+        background: #000000 !important;
+        background-color: #000000 !important;
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 100dvh;
+        overscroll-behavior: none;
+      }
       vite-error-overlay { display: none !important; pointer-events: none !important; visibility: hidden !important; }
     </style>
 
@@ -52,20 +67,26 @@
     <meta name="twitter:description" content="A quiet, local-first music player for the music you already own." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
-      /* Prevents white flash on reload by locking background immediately */
-      html, body, #root { background: #000 !important; color: #f5f5f5; }
+      /* Prevents white flash and forces edge-to-edge obsidian background behind OS navigation bar */
+      html, body, #root {
+        background: #000000 !important;
+        background-color: #000000 !important;
+        color: #f5f5f5;
+      }
     </style>
     <script>
       try {
         const theme = localStorage.getItem('void-theme') || 'system';
         const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.classList.toggle('dark', dark);
-        document.documentElement.style.backgroundColor = dark ? '#000' : '#f6f4ef';
+        document.documentElement.style.backgroundColor = dark ? '#000000' : '#f6f4ef';
+        const metas = document.querySelectorAll('meta[name="theme-color"]');
+        metas.forEach((m) => m.setAttribute('content', dark ? '#000000' : '#f6f4ef'));
       } catch {}
     </script>
   </head>
-  <body bgcolor="#000" style="background: #000 !important; margin: 0;">
-    <div id="root" style="background: #000 !important; width: 100vw; height: 100dvh;"></div>
+  <body bgcolor="#000000" style="background: #000000 !important; margin: 0; padding: 0;">
+    <div id="root" style="background: #000000 !important; width: 100vw; height: 100dvh; min-height: 100vh;"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

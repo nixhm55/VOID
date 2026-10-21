@@ -1,6 +1,7 @@
 import {
   type QualityTier,
   type SearchResult,
+  cleanCanonicalTrackTitle,
   detectTrackQuality,
   formatProviderLabel,
   getTrackQualityBadge,
@@ -41,6 +42,9 @@ type JioSong = {
   id?: string | number;
   name?: string;
   title?: string;
+  subtitle?: string;
+  language?: string;
+  label?: string;
   primaryArtists?: string;
   album?: {
     name?: string;
@@ -237,10 +241,11 @@ async function fetchJioMirror(
         providerVerified: Boolean(bitrate),
       });
 
+      const rawSongName = decodeHtmlEntities(String(song.name || song.title || "Unknown Song"));
       normalized.push({
         id,
-        name: decodeHtmlEntities(String(song.name || song.title || "Unknown Song")),
-        album: getAlbum(song),
+        name: cleanCanonicalTrackTitle(rawSongName) || rawSongName,
+        album: cleanCanonicalTrackTitle(getAlbum(song)) || getAlbum(song),
         artist: getArtist(song),
         image: getImage(song),
         downloadUrl: variant.url,
@@ -253,6 +258,8 @@ async function fetchJioMirror(
         format: variant.qualityLabel ? `MP4 (${variant.qualityLabel})` : "MP4/AAC",
         qualityVerified: Boolean(bitrate),
         fallbackUrls: variant.fallbackUrls,
+        language: typeof song.language === "string" ? song.language.toLowerCase().trim() : undefined,
+        label: typeof song.label === "string" ? decodeHtmlEntities(song.label) : undefined,
       });
     }
 

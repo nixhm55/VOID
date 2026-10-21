@@ -28,15 +28,60 @@ function normalizeBaseUrl(url: string): string | null {
   return trimmed;
 }
 
+const SYNTHETIC_CATALOG_ID_REGEX =
+  /^(?:ar|arabic|english|malayalam|tamil|hindi|urdu|telugu|kannada|punjabi|spanish|french|bengali|artist|seed|mounir|jio|saavn|lossless|ia|jamendo|radio)[-_:]|-\d+-\d+$/i;
+
+function isStrict11CharYouTubeId(str: string): boolean {
+  if (!str || SYNTHETIC_CATALOG_ID_REGEX.test(str)) return false;
+  return /^[\w-]{11}$/.test(str);
+}
+
 export function extractCleanYouTubeId(raw: unknown): string {
-  const str = String(raw ?? "")
-    .trim()
+  const rawStr = String(raw ?? "").trim();
+  if (!rawStr) return "";
+
+  // First check if it's a URL or explicit yt-stream:// / yt-audio?id= URI
+  const urlMatch = rawStr.match(/(?:v=|youtu\.be\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
+  if (urlMatch && !SYNTHETIC_CATALOG_ID_REGEX.test(urlMatch[1])) {
+    return urlMatch[1];
+  }
+
+  return rawStr
     .replace(/^download:/i, "")
-    .replace(/^api-(?:youtube-|jiosaavn-|jamendo-|online-)?/i, "")
-    .replace(/^yt:/i, "");
-  if (/^[\w-]{11}$/.test(str)) return str;
-  const match = str.match(/(?:v=|youtu\.be\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
-  return match ? match[1] : str;
+    .replace(/^api-(?:youtube-|yt-|jiosaavn-|jamendo-|online-)?/i, "")
+    .replace(/^yt:/i, "")
+    .trim();
+}
+
+export function extractYouTubeIdFromTrack(track: any): string {
+  if (!track) return "";
+  const audioUrl = String(track.audioUrl || track.downloadUrl || track.src || "").trim();
+
+  // If the track already has a direct non-YouTube HTTP stream (such as JioSaavn saavncdn.com),
+  // it is NOT a YouTube track unless its stream URL explicitly points to yt-stream / yt-audio.
+  if (
+    /^https?:\/\//i.test(audioUrl) &&
+    !/youtube\.com|youtu\.be|yt-audio|yt-stream/i.test(audioUrl) &&
+    String(track.source || "").toLowerCase() === "jiosaavn"
+  ) {
+    return "";
+  }
+
+  const candidates = [track.audioUrl, track.downloadUrl, track.src, track.id];
+  for (const candidate of candidates) {
+    const rawStr = String(candidate ?? "").trim();
+    if (!rawStr) continue;
+    const urlMatch = rawStr.match(/(?:v=|youtu\.be\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
+    if (urlMatch && isStrict11CharYouTubeId(urlMatch[1])) {
+      return urlMatch[1];
+    }
+    if (/^https?:\/\//i.test(rawStr) || rawStr.startsWith("trending-resolve://")) {
+      continue;
+    }
+    const cleaned = extractCleanYouTubeId(rawStr);
+    if (isStrict11CharYouTubeId(cleaned)) return cleaned;
+  }
+  return "";
 }
 
 export function getYouTubeSearchBackends(): { url: string; timeoutMs: number }[] {
@@ -131,13 +176,17 @@ function parseYouTubeDuration(raw: unknown): number {
  * YouTube video's direct audio stream. Never substitutes a different video or song.
  */
 async function tryLocalViteYouTubeGateway(
-  videoId: string
+  videoId: string,
+  titleHint?: string,
+  artistHint?: string
 ): Promise<ResolvedYouTubeStream | null> {
   if (!/^[\w-]{11}$/.test(videoId)) return null;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 4500);
+  const timeout = setTimeout(() => controller.abort(), 7500);
   try {
     const params = new URLSearchParams({ id: videoId });
+    if (titleHint) params.set("title", titleHint);
+    if (artistHint) params.set("artist", artistHint);
     const res = await fetch(`/__void_api/yt-info?${params.toString()}`, {
       signal: controller.signal,
     });
@@ -147,16 +196,19 @@ async function tryLocalViteYouTubeGateway(
     const data: any = await res.json();
     if (!data?.ok || typeof data?.streamUrl !== "string") return null;
 
-    const bitrate = Number(data.bitrate) || 160;
+    const bitrate = Number(data.bitrate) || 320;
     const codec = String(data.codec || "AAC");
     const mimeType = String(data.mimeType || "audio/mp4");
     const duration = Number(data.duration) || undefined;
-    const qualityBadge = detectTrackQuality(data.streamUrl, codec, bitrate, {
-      codecHint: codec,
-      mimeTypeHint: mimeType,
-      providerVerified: true,
-      sourceHint: "YouTube",
-    });
+    const qualityBadge =
+      bitrate >= 280
+        ? "Very High (320kbps)"
+        : detectTrackQuality(data.streamUrl, codec, bitrate, {
+            codecHint: codec,
+            mimeTypeHint: mimeType,
+            providerVerified: true,
+            sourceHint: "YouTube",
+          });
 
     return {
       url: data.streamUrl,
@@ -187,9 +239,13 @@ export async function resolveYouTubeDownloadCandidates(track: {
   downloadUrl?: string;
 }): Promise<string[]> {
   const urls: string[] = [];
-  const rawId = extractCleanYouTubeId(track.id || track.downloadUrl || track.audioUrl);
+  const rawId = extractYouTubeIdFromTrack(track);
   if (/^[\w-]{11}$/.test(rawId)) {
-    const localInfo = await tryLocalViteYouTubeGateway(rawId);
+    const localInfo = await tryLocalViteYouTubeGateway(
+      rawId,
+      String(track.title || track.name || "").trim(),
+      String(track.artist || "").trim()
+    );
     if (localInfo?.url) {
       urls.push(localInfo.url);
     }
@@ -210,14 +266,18 @@ export async function resolveYouTubePlayableStream(track: {
   audioUrl?: string;
   downloadUrl?: string;
 }): Promise<ResolvedYouTubeStream | null> {
-  const rawId = extractCleanYouTubeId(track.id || track.downloadUrl || track.audioUrl);
+  const rawId = extractYouTubeIdFromTrack(track);
 
   if (rawId && resolvedStreamCache.has(rawId)) {
     return resolvedStreamCache.get(rawId)!;
   }
 
   if (/^[\w-]{11}$/.test(rawId)) {
-    const exactYt = await tryLocalViteYouTubeGateway(rawId);
+    const exactYt = await tryLocalViteYouTubeGateway(
+      rawId,
+      String(track.title || track.name || "").trim(),
+      String(track.artist || "").trim()
+    );
     if (exactYt) {
       resolvedStreamCache.set(rawId, exactYt);
       return exactYt;
@@ -356,6 +416,33 @@ export async function searchYouTube(
 ): Promise<SearchResult[]> {
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
+
+  if (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ) {
+    try {
+      const localController = new AbortController();
+      const localTimer = setTimeout(() => localController.abort(), 3200);
+      const onAbort = () => localController.abort();
+      externalSignal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        const res = await fetch(`/__void_api/yt-search?q=${encodeURIComponent(cleanQuery)}`, {
+          signal: localController.signal,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const normalized = normalizeYouTubeRows(Array.isArray(data) ? data : [], cleanQuery);
+          if (normalized.length > 0) return normalized;
+        }
+      } finally {
+        clearTimeout(localTimer);
+        externalSignal?.removeEventListener("abort", onAbort);
+      }
+    } catch {
+      // Fall through to remote backends
+    }
+  }
 
   const backends = getYouTubeSearchBackends();
   for (const backend of backends) {

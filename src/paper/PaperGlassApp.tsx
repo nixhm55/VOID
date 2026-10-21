@@ -2,7 +2,7 @@ import './paperGlass.css';
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   AudioLines, BookOpen, ChevronUp, Clock3, Disc3, Download, Heart, Home, ListMusic, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Play, Plus,
-  Repeat, Repeat1, Search, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Check, X,
+  Repeat, Repeat1, Search, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TrendingUp, Check, X,
 } from 'lucide-react';
 
 import { DESIGN_OPTIONS, type DesignId, type Page, type VoidCore } from '../core/voidCore';
@@ -14,9 +14,11 @@ import {
 import { PgOverlays, PgNowPlaying } from './Overlays';
 import { QualityBadge } from '../components/QualityBadge';
 import { formatProviderLabel, getTrackQualityBadge } from '../api/quality';
+import { areSameOrDuplicateArtist } from '../api/artistCatalogApi';
 
 const NAV: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'library'; compact: boolean }[] = [
   { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
+  { id: 'trending', label: 'Trending', icon: TrendingUp, group: 'listen', compact: true },
   { id: 'recent', label: 'Recently played', icon: Clock3, group: 'listen', compact: true },
   { id: 'songs', label: 'Songs', icon: Music2, group: 'library', compact: true },
   { id: 'albums', label: 'Albums', icon: Disc3, group: 'library', compact: false },
@@ -28,7 +30,7 @@ const NAV: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'libr
 const MOBILE_NAV: { id: Page | 'library'; icon: typeof Home; label: string }[] = [
   { id: 'home', icon: Home, label: 'Home' },
   { id: 'songs', icon: Music2, label: 'Songs' },
-  { id: 'favorites', icon: Heart, label: 'Favorites' },
+  { id: 'trending', icon: TrendingUp, label: 'Trending' },
   { id: 'library', icon: BookOpen, label: 'Library' },
   { id: 'settings', icon: Settings, label: 'Settings' },
 ];
@@ -95,15 +97,30 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const lastWord = words.pop() ?? '';
   const sleeveTrack = activeTrack ?? tracks[0];
   const filterMatch = (name: string) => !c.query || name.toLowerCase().includes(c.query.toLowerCase());
-  const artistTracks = (name: string) => tracks.filter(t => c.splitArtists(t.artist || '').map(x => x.toLowerCase()).includes(name.toLowerCase()));
+  const artistTracks = (name: string) => tracks.filter(t => c.splitArtists(t.artist || '').some(x => areSameOrDuplicateArtist(x, name)));
   const openPlaylist = (name: string) => { c.setDetail({ kind: 'playlist', name }); c.setQuery(''); };
   
-  const listItems = page === 'queue' ? c.queueTracks : ((page as string) === 'downloads' && (c as any).downloadedTracks ? (c as any).downloadedTracks : c.filteredTracks);
+  const [artistTopExpanded, setArtistTopExpanded] = useState(false);
+  useEffect(() => {
+    setArtistTopExpanded(false);
+  }, [page, detail?.kind, detail?.name, libraryOpen]);
+
+  const artistTopTracks = (c.artistTopTracks ?? []).slice(0, 15);
+  const artistViewTab = c.artistViewTab ?? 'top100';
+  const visibleArtistTopTracks = artistTopExpanded ? artistTopTracks : artistTopTracks.slice(0, 5);
+  const listItems =
+    detail?.kind === 'artist' && artistViewTab === 'top100'
+      ? visibleArtistTopTracks
+      : page === 'queue'
+        ? c.queueTracks
+        : ((page as string) === 'downloads' && (c as any).downloadedTracks ? (c as any).downloadedTracks : c.filteredTracks);
   
   const listProps = {
     activeId: c.activeId, isPlaying, page, actions: c.rowActions,
-    selectedIds: c.selectedSongIds, toggleSelect: c.toggleSelectSong, toggleSelectAll: () => c.toggleSelectAllSongs(listItems),
-    isAllSelected: listItems.length > 0 && c.selectedSongIds.length === listItems.length,
+    selectedIds: detail?.kind === 'artist' ? [] : c.selectedSongIds,
+    toggleSelect: detail?.kind === 'artist' ? undefined : c.toggleSelectSong,
+    toggleSelectAll: detail?.kind === 'artist' ? undefined : () => c.toggleSelectAllSongs(listItems),
+    isAllSelected: detail?.kind === 'artist' ? false : (listItems.length > 0 && c.selectedSongIds.length === listItems.length),
   };
 
   const navButton = (item: (typeof NAV)[number]) => {
@@ -187,20 +204,72 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
     : page === 'queue' ? 'Your queue is clear' : (page as string) === 'downloads' ? 'No downloaded songs yet' : detail ? 'No songs in this collection' : 'No songs in your library yet';
 
   const library = (
-    <div className="pg-page" key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`}>
-      <header className="pg-head">
-        <div>
-          <div className="pg-eyebrow">{detail ? (detail.kind === 'playlist' ? 'Your collection' : 'From your files') : 'Your collection'}</div>
-          <h1 className="pg-title">{c.title}</h1>
-          <p className="pg-sub">{c.pageDescription[page]}</p>
-        </div>
-        <div className="pg-head-actions">
-          {page === 'playlists' && !detail && <button className="pg-btn" onClick={() => { c.setModal('playlist'); c.setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
-          {page === 'queue' && c.queueTracks.length > 0 && <button className="pg-btn" onClick={c.clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
-          {['songs', 'albums', 'artists', 'favorites', 'recent', 'playlists'].includes(page) &&
-            <input className="pg-input pg-filter" aria-label={`Filter ${c.title}`} placeholder="Filter this view…" value={c.query} onChange={e => c.setQuery(e.target.value)} data-testid="input-filter-library" />}
-        </div>
-      </header>
+    <div className={`pg-page${detail?.kind === 'artist' ? ' dg-page--artist-view' : ''}`} key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`}>
+      {detail?.kind !== 'artist' && page !== 'favorites' && (
+        <header className="pg-head">
+          <div>
+            <div className="pg-eyebrow">{detail ? (detail.kind === 'playlist' ? 'Your collection' : 'From your files') : 'Your collection'}</div>
+            <h1 className="pg-title">{c.title}</h1>
+            <p className="pg-sub">{c.pageDescription[page]}</p>
+          </div>
+          <div className="pg-head-actions">
+            {page === 'playlists' && !detail && <button className="pg-btn" onClick={() => { c.setModal('playlist'); c.setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
+            {page === 'queue' && c.queueTracks.length > 0 && <button className="pg-btn" onClick={c.clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
+            {['songs', 'albums', 'artists', 'recent', 'playlists'].includes(page) &&
+              <input className="pg-input pg-filter" aria-label={`Filter ${c.title}`} placeholder="Filter this view…" value={c.query} onChange={e => c.setQuery(e.target.value)} data-testid="input-filter-library" />}
+          </div>
+        </header>
+      )}
+
+      {page === 'favorites' && !detail && (
+        <section className="cinematic-hero-banner favorites-hero-banner" data-testid="favorites-hero-banner">
+          <div className="cinematic-hero-backdrop" aria-hidden="true">
+            {c.filteredTracks[0] ? (
+              <div className="cinematic-hero-bg-img"><PgCover track={c.filteredTracks[0]} fill /></div>
+            ) : null}
+            <div className="cinematic-hero-gradient" />
+          </div>
+          <div className="cinematic-hero-topbar">
+            <button className="cinematic-back-btn cinematic-back-btn--chevron" onClick={() => c.setPageAndRoute('home')} aria-label="Back to home" title="Back to home" data-testid="button-back-home">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+          </div>
+          <div className="cinematic-hero-body">
+            <div className="cinematic-hero-portrait favorites-hero-portrait">
+              {c.filteredTracks[0] ? <PgCover track={c.filteredTracks[0]} fill /> : <Heart size={44} />}
+            </div>
+            <div className="cinematic-hero-copy">
+              <h1 className="cinematic-artist-title">Favorites</h1>
+              <div className="artist-verified-row">
+                <span className="verified-artist-badge" title="Verified Collection" aria-label="Verified Collection">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="verified-artist-icon">
+                    <path
+                      d="M12 2.25L14.62 4.39L17.96 3.96L19.06 7.16L22.25 8.26L21.82 11.6L23.96 14.22L21.82 16.84L22.25 20.18L19.06 21.28L17.96 24.48L14.62 24.05L12 26.19L9.38 24.05L6.04 24.48L4.94 21.28L1.75 20.18L2.18 16.84L0.04 14.22L2.18 11.6L1.75 8.26L4.94 7.16L6.04 3.96L9.38 4.39L12 2.25Z"
+                      transform="scale(0.84) translate(2.2, 0.8)"
+                      fill="currentColor"
+                    />
+                    <path
+                      d="M8.6 12.4L10.85 14.65L15.6 9.75"
+                      stroke="#06080c"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span className="artist-verified-label">Verified Collection</span>
+              </div>
+              <p className="cinematic-hero-subtitle artist-hero-subtitle">
+                {c.filteredTracks.length > 0
+                  ? `${c.filteredTracks.length} ${c.filteredTracks.length === 1 ? 'Top song' : 'Top songs'} saved in your favorites`
+                  : 'Songs you mark with a heart stay right here'}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {detail?.kind === 'playlist' && (
         <div className="pg-toolbar">
@@ -212,7 +281,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         </div>
       )}
 
-      {(detail?.kind === 'album' || detail?.kind === 'artist') && (
+      {detail?.kind === 'album' && (
         <Reveal as="section" dir="depth" className="pg-detail-hero">
           <PgCover track={c.filteredTracks[0]} fill />
           <div>
@@ -223,12 +292,78 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
           </div>
         </Reveal>
       )}
+      {detail?.kind === 'artist' && (() => {
+        const availableTopCount = artistTopTracks.length;
+        return (
+          <>
+            <section className="cinematic-hero-banner artist-hero-banner" data-testid="artist-hero-banner">
+              <div className="cinematic-hero-backdrop" aria-hidden="true">
+                <div className="cinematic-hero-bg-img cinematic-hero-bg-fallback">
+                  <PgArtistPhoto name={detail.name} fetchPhoto={c.fetchArtistPhoto} />
+                </div>
+                <div className="cinematic-hero-gradient" />
+              </div>
+              <div className="cinematic-hero-topbar">
+                <button className="cinematic-back-btn cinematic-back-btn--chevron" onClick={() => { c.setDetail(null); c.setQuery(''); }} aria-label="Back to artists" title="Back to artists" data-testid="button-back-artists">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                </button>
+              </div>
+              <div className="cinematic-hero-body">
+                <div className="cinematic-hero-portrait artist-hero-portrait">
+                  <PgArtistPhoto name={detail.name} fetchPhoto={c.fetchArtistPhoto} />
+                </div>
+                <div className="cinematic-hero-copy">
+                  <h1 className="cinematic-artist-title">{detail.name}</h1>
+                  <div className="artist-verified-row">
+                    <span className="verified-artist-badge" title="Verified Artist" aria-label="Verified Artist">
+                      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="verified-artist-icon">
+                        <path
+                          d="M12 2.25L14.62 4.39L17.96 3.96L19.06 7.16L22.25 8.26L21.82 11.6L23.96 14.22L21.82 16.84L22.25 20.18L19.06 21.28L17.96 24.48L14.62 24.05L12 26.19L9.38 24.05L6.04 24.48L4.94 21.28L1.75 20.18L2.18 16.84L0.04 14.22L2.18 11.6L1.75 8.26L4.94 7.16L6.04 3.96L9.38 4.39L12 2.25Z"
+                          transform="scale(0.84) translate(2.2, 0.8)"
+                          fill="currentColor"
+                        />
+                        <path
+                          d="M8.6 12.4L10.85 14.65L15.6 9.75"
+                          stroke="#06080c"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                    <span className="artist-verified-label">Verified Artist</span>
+                  </div>
+                  <p className="cinematic-hero-subtitle artist-hero-subtitle">
+                    {artistViewTab === 'top100'
+                      ? (c.artistTopLoading
+                          ? `Loading ${detail.name}’s top songs…`
+                          : availableTopCount > 0
+                            ? `${availableTopCount} ${availableTopCount === 1 ? 'Top song' : 'Top songs'} ranked by global popularity`
+                            : `${countLabel(c.filteredTracks.length, 'song')} in your library`)
+                      : `${countLabel(c.filteredTracks.length, 'song')} in your library`}
+                  </p>
+                </div>
+              </div>
+            </section>
+            <div className="artist-view-tabs" role="tablist" aria-label="Artist songs view">
+              <button type="button" role="tab" aria-selected={artistViewTab === 'top100'} className={`artist-view-tab ${artistViewTab === 'top100' ? 'active' : ''}`} onClick={() => c.setArtistViewTab?.('top100')}>
+                Top
+              </button>
+              <button type="button" role="tab" aria-selected={artistViewTab === 'library'} className={`artist-view-tab ${artistViewTab === 'library' ? 'active' : ''}`} onClick={() => c.setArtistViewTab?.('library')}>
+                Library
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
-      {(page === 'songs' || (page as string) === 'downloads') && (
+      {(page === 'songs' || (page as string) === 'downloads') && c.selectedSongIds.length > 0 && (
         <div className="pg-toolbar">
-          <span className="pg-sub">{(page as string) === 'downloads' ? 'Saved for offline listening' : 'Audio files imported into VOID'}</span>
+          <span className="pg-sub">{c.selectedSongIds.length} selected</span>
           <div className="pg-toolbar-end">
-            {c.selectedSongIds.length > 0 && <button className="pg-btn pg-btn--danger" onClick={() => {
+            <button className="pg-btn pg-btn--danger" onClick={() => {
               const originalConfirm = window.confirm;
               let confirmed = false;
               window.confirm = (msg) => {
@@ -265,8 +400,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
               const res = c.deleteSelectedSongs();
               if (res instanceof Promise) res.finally(finishDeletion);
               else finishDeletion();
-            }} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>}
-            {page === 'songs' && <button className="pg-btn" onClick={c.openImport} data-testid="button-add-songs"><Plus />Add music</button>}
+            }} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>
           </div>
         </div>
       )}
@@ -332,7 +466,23 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
       )}
 
       {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || (page as string) === 'downloads' || detail) && (listItems.length
-        ? <PgTrackList items={listItems} showIndex={page === 'queue'} reorder={page === 'queue' || detail?.kind === 'playlist'} {...listProps} />
+        ? (
+          <>
+            <PgTrackList items={listItems} showIndex={page === 'queue' || (detail?.kind === 'artist' && artistViewTab === 'top100')} reorder={page === 'queue' || detail?.kind === 'playlist'} {...listProps} />
+            {detail?.kind === 'artist' && artistViewTab === 'top100' && artistTopTracks.length > 5 && (
+              <div className="artist-see-more-row">
+                <button
+                  type="button"
+                  className="artist-see-more-btn"
+                  onClick={() => setArtistTopExpanded(v => !v)}
+                  data-testid="button-artist-see-more"
+                >
+                  {artistTopExpanded ? 'See less' : 'See more'}
+                </button>
+              </div>
+            )}
+          </>
+        )
         : <PgEmpty label={emptyLabel} onImport={c.openImport} />)}
     </div>
   );
@@ -504,11 +654,11 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
               <div className="pg-library-grid">
                 {([
                   { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: 'Saved for offline' },
+                  { id: 'favorites' as Page, label: 'Favorites', icon: Heart, count: countLabel(tracks.filter(t => t.favorite).length, 'song') },
                   { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(c.albumNames.length, 'album') },
                   { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(c.artistNames.length, 'artist') },
                   { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
                   { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(t => t.lastPlayedAt).length} played` },
-                  { id: 'queue' as Page, label: 'Queue', icon: AudioLines, count: countLabel(c.queueTracks.length, 'song') },
                 ]).map((entry, index) => {
                   const Icon = entry.icon;
                   return (
@@ -531,14 +681,113 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
             </div>
           )}
 
-          {c.isReady && !libraryOpen && (page === 'home' && !detail ? home : page === 'settings' ? settings : library)}
+          {c.isReady && !libraryOpen && page === 'trending' && !detail && (
+            !c.activeTrendingLang ? (
+              <div className="pg-page" key="trending-hub">
+                <header className="pg-head">
+                  <div>
+                    <div className="pg-eyebrow">Discover</div>
+                    <h1 className="pg-title">Trending</h1>
+                    <p className="pg-sub">Top 200 trending songs across languages</p>
+                  </div>
+                  <div className="pg-head-actions">
+                    <input
+                      className="pg-input pg-filter"
+                      aria-label="Search languages"
+                      placeholder="Search languages…"
+                      value={c.trendingQuery ?? ''}
+                      onChange={e => c.setTrendingQuery?.(e.target.value)}
+                      data-testid="input-filter-trending-languages"
+                    />
+                  </div>
+                </header>
+                <div className="trending-lang-grid">
+                  {(c.trendingLanguages ?? []).map((lang: any, index: number) => (
+                    <Reveal key={lang.id} dir="depth" index={index}>
+                      <button
+                        type="button"
+                        className="trending-lang-card"
+                        onClick={() => c.openTrendingLanguage?.(lang.id)}
+                        style={{ '--card-accent-bg': lang.accentGradient } as CSSProperties}
+                        aria-label={`${lang.label} — ${lang.subtitle}`}
+                        data-testid={`trending-lang-${lang.id}`}
+                      >
+                        <div className="trending-lang-card-bg-wrap" aria-hidden="true">
+                          {lang.bgFallbackUrls?.[0] && (
+                            <img
+                              src={lang.bgFallbackUrls[0]}
+                              alt=""
+                              className="trending-lang-card-bg is-loaded"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          )}
+                          <div className="trending-lang-card-atmosphere" />
+                        </div>
+                        <div className="trending-lang-card-artist-wrap" aria-hidden="true">
+                          <PgArtistPhoto name={lang.artistName} fetchPhoto={c.fetchArtistPhoto} />
+                        </div>
+                        <div className="trending-lang-card-scrim" aria-hidden="true" />
+                        <div className="trending-lang-card-copy">
+                          <strong className="trending-lang-card-title">{lang.label}</strong>
+                          <span className="trending-lang-card-subtitle">{lang.subtitle}</span>
+                        </div>
+                      </button>
+                    </Reveal>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="pg-page" key={`trending:${c.activeTrendingLang.id}`}>
+                <header className="pg-head">
+                  <div>
+                    <div className="pg-eyebrow">
+                      <button className="pg-link" onClick={() => c.openTrendingLanguage?.(null)} data-testid="button-back-trending">
+                        ← Trending
+                      </button>
+                    </div>
+                    <h1 className="pg-title">{c.activeTrendingLang.label}</h1>
+                    <p className="pg-sub">{`Top 200 most trending songs · 40 Top ${c.activeTrendingLang.id === 'arabic' ? 'Arab' : c.activeTrendingLang.id === 'english' ? 'Global' : c.activeTrendingLang.label} Artists`}</p>
+                  </div>
+                  <div className="pg-head-actions">
+                    <input
+                      className="pg-input pg-filter"
+                      aria-label={`Search ${c.activeTrendingLang.label} trending`}
+                      placeholder="Search this chart…"
+                      value={c.trendingQuery ?? ''}
+                      onChange={e => c.setTrendingQuery?.(e.target.value)}
+                      data-testid="input-filter-trending-tracks"
+                    />
+                  </div>
+                </header>
+                {(c.trendingTracks ?? []).length > 0 ? (
+                  <PgTrackList
+                    items={c.trendingTracks ?? []}
+                    showIndex={true}
+                    activeId={c.activeId}
+                    isPlaying={isPlaying}
+                    page={page}
+                    actions={c.rowActions}
+                    selectedIds={[]}
+                  />
+                ) : (c.trendingQuery ?? '').trim().length > 0 ? (
+                  <div className="pg-empty">
+                    <strong>No matching songs</strong>
+                    <p>Try another search term in {c.activeTrendingLang.label}.</p>
+                  </div>
+                ) : null}
+              </div>
+            )
+          )}
+
+          {c.isReady && !libraryOpen && page !== 'trending' && (page === 'home' && !detail ? home : page === 'settings' ? settings : library)}
         </main>
       </div>
 
       <nav className="pg-mobile-nav" aria-label="Mobile navigation" data-hidden={c.expanded ? '' : undefined}>
         {MOBILE_NAV.map(item => {
           const Icon = item.icon;
-          const LIBRARY_PAGES: Page[] = ['albums', 'artists', 'playlists', 'recent', 'queue'];
+          const LIBRARY_PAGES: Page[] = ['downloads', 'favorites', 'albums', 'artists', 'playlists', 'recent', 'queue'];
           const active = item.id === 'library'
             ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
             : page === item.id && !detail && !libraryOpen;

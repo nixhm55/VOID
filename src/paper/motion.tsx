@@ -1,26 +1,44 @@
 import { createElement, useEffect, useRef, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 
 /**
- * Paper Glass motion.
- * One shared IntersectionObserver drives every reveal. Each element enters once
- * (ENTER → SETTLE → STAY), then the observer lets go of it, so nothing keeps animating afterwards.
- * Direction, depth and stagger are expressed in CSS (see paperGlass.css, `[data-pg-r]`).
+ * Paper Glass sequential top-to-bottom motion system.
+ * Sorts entering elements strictly by visual top-to-bottom, left-to-right order
+ * so items always glide in 1st -> 2nd -> 3rd -> 4th -> 5th one-by-one with soft blur.
  */
-type Callback = () => void;
-const watchers = new WeakMap<Element, Callback>();
+type WatcherItem = {
+  index: number;
+  show: (waveOrder: number) => void;
+};
+
+const watchers = new WeakMap<Element, WatcherItem>();
 let observer: IntersectionObserver | null = null;
 
 function getObserver() {
   if (observer || typeof IntersectionObserver === 'undefined') return observer;
-  observer = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const callback = watchers.get(entry.target);
-      watchers.delete(entry.target);
-      observer?.unobserve(entry.target);
-      callback?.();
-    }
-  }, { rootMargin: '0px 0px -6% 0px', threshold: 0.06 });
+  observer = new IntersectionObserver(
+    entries => {
+      const visible = entries.filter(entry => entry.isIntersecting);
+      if (!visible.length) return;
+
+      visible.sort((a, b) => {
+        const dy = a.boundingClientRect.top - b.boundingClientRect.top;
+        if (Math.abs(dy) > 8) return dy;
+        const dx = a.boundingClientRect.left - b.boundingClientRect.left;
+        if (Math.abs(dx) > 8) return dx;
+        const wa = watchers.get(a.target)?.index ?? 0;
+        const wb = watchers.get(b.target)?.index ?? 0;
+        return wa - wb;
+      });
+
+      visible.forEach((entry, waveOrder) => {
+        const item = watchers.get(entry.target);
+        watchers.delete(entry.target);
+        observer?.unobserve(entry.target);
+        item?.show(waveOrder);
+      });
+    },
+    { rootMargin: '0px 0px -2% 0px', threshold: 0.04 },
+  );
   return observer;
 }
 
@@ -35,24 +53,26 @@ interface RevealProps extends HTMLAttributes<HTMLElement> {
 
 export function Reveal({ as = 'div', dir = 'up', index = 0, className, style, children, ...rest }: RevealProps) {
   const ref = useRef<HTMLElement | null>(null);
+  const initialStagger = Math.min(Math.max(0, index), 14);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const obs = getObserver();
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!obs || reduce) { el.setAttribute('data-in', ''); el.setAttribute('data-done', ''); return; }
-    const show = () => {
+    const show = (waveOrder: number) => {
+      const step = Math.min(waveOrder, 14);
+      el.style.setProperty('--pg-i', String(step));
       el.setAttribute('data-in', '');
-      window.setTimeout(() => el.setAttribute('data-done', ''), 1500 + Math.min(index, 8) * 70);
+      window.setTimeout(() => el.setAttribute('data-done', ''), 1350 + step * 75);
     };
-    watchers.set(el, show);
+    watchers.set(el, { index, show });
     obs.observe(el);
     return () => { watchers.delete(el); obs.unobserve(el); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [index]);
   return createElement(
     as,
-    { ref, className, 'data-pg-r': dir, style: { ...style, '--pg-i': Math.min(index, 8) } as CSSProperties, ...rest },
+    { ref, className, 'data-pg-r': dir, style: { ...style, '--pg-i': initialStagger } as CSSProperties, ...rest },
     children,
   );
 }

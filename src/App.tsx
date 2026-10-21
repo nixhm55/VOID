@@ -1,13 +1,17 @@
 import { fetchArtist } from './api/musicApi';
-import { extractCleanYouTubeId, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
+import { extractCleanYouTubeId, extractYouTubeIdFromTrack, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
 import { searchAllProviders } from './api/unifiedSearch';
-import { detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
+import { fetchTrendingTop100, getInitialTrendingTracks, getOrderedTrendingLanguages, prewarmArabicTopStreams, promoteTrendingLanguage, resolveTrendingTrackStream, warmUpTrendingCatalog, type TrendingLanguage, type TrendingTrackItem } from './api/trendingApi';
+import { computeAutoFitCoverScale, getCachedCoverScale, getInstantArabicTop200, getStickyCoverUrl, isCoverUrlLoaded, markCoverUrlLoaded, rememberStickyCover, resolveArabicYouTubeFallback } from './api/arabicTrendingCatalog';
+import { resolveUniversalTrackLyrics } from './api/lyricsApi';
+import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery, fetchArtistTop100, getInitialArtistTop100, isCompoundArtistString, isValidArtistAvatarUrl, normalizeArtistIdentityKey, pickCanonicalArtistDisplayName, scoreArtistAvatarUrl, searchCanonicalArtists } from './api/artistCatalogApi';
+import { areSongsFuzzyDuplicates, cleanCanonicalTrackTitle, deduplicateTrackCollection, detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
 import { QualityBadge } from './components/QualityBadge';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
   Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
-  Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, Volume1, Volume2, VolumeX, X,
+  Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TrendingUp, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -18,7 +22,7 @@ import { type DesignId, type VoidCore, readDesign, writeDesign } from './core/vo
 import { DgReveal } from './motion';
 const PaperGlassApp = lazy(() => import('./paper/PaperGlassApp'));
 
-type Page = 'home' | 'songs' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'downloads' | 'settings';
+type Page = 'home' | 'songs' | 'trending' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'downloads' | 'settings';
 const defaults: Preferences = { theme: 'system', autoplay: false, volume: 0.72, muted: false, shuffle: false, repeat: 'off' };
 const greetings = [
   'Still awake?',
@@ -37,6 +41,7 @@ const greetings = [
 // `compact` marks the pages that stay visible when the sidebar is collapsed to icons.
 const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'collection'; compact: boolean }[] = [
   { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
+  { id: 'trending', label: 'Trending', icon: TrendingUp, group: 'listen', compact: true },
   { id: 'recent', label: 'Recently played', icon: Clock3, group: 'listen', compact: true },
   { id: 'songs', label: 'Songs', icon: Music2, group: 'collection', compact: true },
   { id: 'albums', label: 'Albums', icon: Disc3, group: 'collection', compact: false },
@@ -51,12 +56,12 @@ const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 
 const mobileNavItems: { id: Page | 'library'; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'songs', label: 'Music', icon: Music2 },
-  { id: 'favorites', label: 'Favorites', icon: Heart },
+  { id: 'trending', label: 'Trending', icon: TrendingUp },
   { id: 'library', label: 'Library', icon: LibraryIcon },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 // Pages that the Library hub owns, so its tab stays lit while browsing inside the collection.
-const LIBRARY_PAGES: Page[] = ['albums', 'artists', 'playlists', 'recent', 'queue'];
+const LIBRARY_PAGES: Page[] = ['downloads', 'favorites', 'albums', 'artists', 'playlists', 'recent', 'queue'];
 
 const pathFor = (page: Page) => page === 'home' ? '/' : `/${page}`;
 const formatTime = (seconds: number) => {
@@ -387,6 +392,7 @@ async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
 
 // Sample ambient from remote image URL (JioSaavn / streaming cover)
 async function sampleImageUrlAmbient(url: string): Promise<Hue4 | null> {
+  if (!url || /archive\.org|ytimg\.com|fbcdn\.net/i.test(url)) return null;
   try {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -457,11 +463,44 @@ const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
 const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
 
 const artistPhotoCache = new Map<string, string | null>();
+const artistPhotoListeners = new Set<() => void>();
+
+function getCachedArtistPhoto(artistName: string): string | null {
+  if (!artistName) return null;
+  const direct = artistPhotoCache.get(artistName);
+  if (direct && isValidArtistAvatarUrl(direct)) return direct;
+  const normKey = normalizeArtistIdentityKey(artistName);
+  const byNorm = artistPhotoCache.get(normKey);
+  if (byNorm && isValidArtistAvatarUrl(byNorm)) return byNorm;
+  return null;
+}
+
+function rememberArtistPhoto(artistName: string, imageUrl: string | null): void {
+  const clean = artistName.trim();
+  const normKey = normalizeArtistIdentityKey(clean);
+  const validUrl = imageUrl && isValidArtistAvatarUrl(imageUrl) ? imageUrl.trim() : null;
+  if (validUrl) {
+    const existing = getCachedArtistPhoto(clean);
+    if (!existing || scoreArtistAvatarUrl(validUrl) >= scoreArtistAvatarUrl(existing)) {
+      artistPhotoCache.set(clean, validUrl);
+      if (normKey) artistPhotoCache.set(normKey, validUrl);
+      artistPhotoListeners.forEach(fn => fn());
+    }
+  } else if (!artistPhotoCache.has(clean)) {
+    artistPhotoCache.set(clean, null);
+    if (normKey && !artistPhotoCache.has(normKey)) artistPhotoCache.set(normKey, null);
+  }
+}
 
 function fetchArtistPhoto(artistName: string): Promise<string | null> {
   if (!artistName || artistName === 'Unknown Artist') return Promise.resolve(null);
-  if (artistPhotoCache.has(artistName)) return Promise.resolve(artistPhotoCache.get(artistName) || null);
+  const existing = getCachedArtistPhoto(artistName);
+  if (existing) return Promise.resolve(existing);
   const cleanName = artistName.trim();
+  const normTarget = normalizeArtistIdentityKey(cleanName);
+  if (artistPhotoCache.has(normTarget) && artistPhotoCache.get(normTarget) === null) {
+    return Promise.resolve(null);
+  }
   return new Promise((resolve) => {
     const callbackName = 'dz_cb_' + Math.round(1000000 * Math.random());
     let resolved = false;
@@ -470,13 +509,22 @@ function fetchArtistPhoto(artistName: string): Promise<string | null> {
       delete (window as any)[callbackName];
       const scriptEl = document.getElementById(callbackName);
       if (scriptEl) document.body.removeChild(scriptEl);
-      if (data && data.data && data.data.length > 0) {
-        const topArtists = [...data.data].sort((a: any, b: any) => (b.nb_fan || 0) - (a.nb_fan || 0));
-        const matched = topArtists.find((a: any) => a.name.toLowerCase() === cleanName.toLowerCase()) || topArtists[0];
-        const imageUrl = matched.picture_xl || matched.picture_big;
-        if (imageUrl) {
-          artistPhotoCache.set(artistName, imageUrl);
-          resolve(imageUrl);
+      if (data && Array.isArray(data.data) && data.data.length > 0) {
+        // Avatar-Priority sorting: valid high-res picture_xl/picture_big first, then exact/duplicate name match, then fan count
+        const candidates = data.data
+          .map((a: any) => {
+            const pic = String(a?.picture_xl || a?.picture_big || a?.picture_medium || '').trim();
+            const avScore = scoreArtistAvatarUrl(pic);
+            const nameMatch = areSameOrDuplicateArtist(String(a?.name || ''), cleanName) ? 1 : 0;
+            return { artist: a, pic, avScore, nameMatch, fans: Number(a?.nb_fan) || 0 };
+          })
+          .filter((c: any) => c.avScore > 0)
+          .sort((a: any, b: any) => b.nameMatch - a.nameMatch || b.avScore - a.avScore || b.fans - a.fans);
+
+        const best = candidates[0];
+        if (best && best.pic) {
+          rememberArtistPhoto(artistName, best.pic);
+          resolve(best.pic);
           return;
         }
       }
@@ -489,21 +537,35 @@ function fetchArtistPhoto(artistName: string): Promise<string | null> {
 
     const fallbackWiki = async () => {
       try {
-        const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=600&format=json&origin=*`);
+        const apiRes = await fetch(`/__void_api/artist-search?q=${encodeURIComponent(cleanName)}`);
+        if (apiRes.ok) {
+          const profiles = await apiRes.json();
+          if (Array.isArray(profiles) && profiles.length > 0) {
+            const valid = profiles.find((p: any) => isValidArtistAvatarUrl(p?.image));
+            if (valid?.image) {
+              rememberArtistPhoto(artistName, valid.image);
+              resolve(valid.image);
+              return;
+            }
+          }
+        }
+      } catch {}
+      try {
+        const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=1000&format=json&origin=*`);
         if (wikiRes.ok) {
           const wikiData = await wikiRes.json();
           if (wikiData.query && wikiData.query.pages) {
             const pages = Object.values(wikiData.query.pages) as any[];
-            if (pages.length > 0 && pages[0].thumbnail?.source) {
+            if (pages.length > 0 && isValidArtistAvatarUrl(pages[0].thumbnail?.source)) {
               const imgUrl = pages[0].thumbnail.source;
-              artistPhotoCache.set(artistName, imgUrl);
+              rememberArtistPhoto(artistName, imgUrl);
               resolve(imgUrl);
               return;
             }
           }
         }
       } catch (e) {}
-      artistPhotoCache.set(artistName, null);
+      rememberArtistPhoto(artistName, null);
       resolve(null);
     };
 
@@ -518,23 +580,297 @@ function fetchArtistPhoto(artistName: string): Promise<string | null> {
   });
 }
 
-const ArtistPhoto = memo(function ArtistPhoto({ artistName }: { artistName: string, fallbackTrack?: Track }) {
-  const [photoUrl, setPhotoUrl] = useState<string | null>(artistPhotoCache.get(artistName) || null);
+const VerifiedArtistBadge = memo(function VerifiedArtistBadge({ label = 'Verified Artist' }: { label?: string }) {
+  return (
+    <span className="verified-artist-badge" title={label} aria-label={label}>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="verified-artist-icon">
+        <path
+          d="M12 2.25L14.62 4.39L17.96 3.96L19.06 7.16L22.25 8.26L21.82 11.6L23.96 14.22L21.82 16.84L22.25 20.18L19.06 21.28L17.96 24.48L14.62 24.05L12 26.19L9.38 24.05L6.04 24.48L4.94 21.28L1.75 20.18L2.18 16.84L0.04 14.22L2.18 11.6L1.75 8.26L4.94 7.16L6.04 3.96L9.38 4.39L12 2.25Z"
+          transform="scale(0.84) translate(2.2, 0.8)"
+          fill="currentColor"
+        />
+        <path
+          d="M8.6 12.4L10.85 14.65L15.6 9.75"
+          stroke="#06080c"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+});
+
+const ArtistPhoto = memo(function ArtistPhoto({ artistName, fallbackTrack, square = false }: { artistName: string; fallbackTrack?: Track; square?: boolean }) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(() => getCachedArtistPhoto(artistName));
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let active = true;
     setLoaded(false);
-    const cached = artistPhotoCache.get(artistName);
+    const cached = getCachedArtistPhoto(artistName);
     if (cached) { setPhotoUrl(cached); return () => { active = false; }; }
     setPhotoUrl(null);
     fetchArtistPhoto(artistName).then(url => { if (active && url) setPhotoUrl(url); });
     return () => { active = false; };
   }, [artistName]);
+  const fallbackImg = !photoUrl && fallbackTrack ? (fallbackTrack.image || getStickyCoverUrl(fallbackTrack)) : '';
+  const finalUrl = photoUrl || fallbackImg || null;
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden', background: 'hsl(var(--foreground) / .06)' }}>
-      {!photoUrl && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'hsl(var(--muted-foreground) / .45)' }}><Mic2 size={28} strokeWidth={1.2} /></div>}
-      {photoUrl && <img src={photoUrl} alt={artistName} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .28s ease' }} onLoad={() => setLoaded(true)} />}
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: square ? 'inherit' : '50%', overflow: 'hidden', background: 'hsl(var(--foreground) / .06)' }}>
+      {!finalUrl && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'hsl(var(--muted-foreground) / .45)' }}><Mic2 size={28} strokeWidth={1.2} /></div>}
+      {finalUrl && <img src={finalUrl} alt={artistName} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .28s ease' }} onLoad={() => setLoaded(true)} />}
     </div>
+  );
+});
+
+const TRENDING_CARD_ARTIST_STORAGE_KEY = 'void-trending-card-artist-hd-v13:';
+const TRENDING_CARD_BG_STORAGE_KEY = 'void-trending-card-bg-v9:';
+const trendingCardArtistMemCache = new Map<string, string>();
+const trendingCardBgMemCache = new Map<string, string>();
+
+function getCachedTrendingCardArtistPhoto(lang: TrendingLanguage): string | null {
+  const mem = trendingCardArtistMemCache.get(lang.id);
+  if (mem && isValidArtistAvatarUrl(mem)) return mem;
+  try {
+    const stored = localStorage.getItem(`${TRENDING_CARD_ARTIST_STORAGE_KEY}${lang.id}`);
+    if (stored && isValidArtistAvatarUrl(stored)) {
+      trendingCardArtistMemCache.set(lang.id, stored);
+      return stored;
+    }
+  } catch {}
+  if (lang.preferWikiArtistPortrait && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+    return lang.artistPortraitUrl;
+  }
+  return null;
+}
+
+function saveTrendingCardArtistPhoto(lang: TrendingLanguage, url: string): void {
+  if (!url || !isValidArtistAvatarUrl(url)) return;
+  const clean = url.trim();
+  trendingCardArtistMemCache.set(lang.id, clean);
+  rememberArtistPhoto(lang.artistName, clean);
+  try {
+    localStorage.setItem(`${TRENDING_CARD_ARTIST_STORAGE_KEY}${lang.id}`, clean);
+  } catch {}
+}
+
+async function resolveTrendingCardArtistPhoto(lang: TrendingLanguage, skipStaticUrl = false): Promise<string | null> {
+  if (!skipStaticUrl) {
+    const existing = getCachedTrendingCardArtistPhoto(lang);
+    if (existing) return existing;
+    if (lang.preferWikiArtistPortrait && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+      saveTrendingCardArtistPhoto(lang, lang.artistPortraitUrl);
+      return lang.artistPortraitUrl;
+    }
+  }
+
+  if (lang.id === 'arabic') {
+    try {
+      const res = await fetch(`/__void_api/itunes-search?term=${encodeURIComponent('بسمتك يا زين تسوى الف بسمه ميحد حمد')}&country=ae&entity=song&limit=5`);
+      if (res.ok) {
+        const data = await res.json();
+        const items: any[] = Array.isArray(data?.results) ? data.results : [];
+        for (const item of items) {
+          const rawArt = String(item?.artworkUrl100 || '').trim();
+          if (rawArt) {
+            const hiRes = rawArt.replace('100x100bb', '1000x1000bb');
+            if (isValidArtistAvatarUrl(hiRes)) {
+              saveTrendingCardArtistPhoto(lang, hiRes);
+              return hiRes;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // When preferWikiArtistPortrait is false (e.g. K. J. Yesudas, Michael Jackson, Diljit Dosanjh, Shreya Ghoshal),
+  // prioritize the official 1000x1000 HD artist portrait from Deezer/Apple Music first!
+  if (!lang.preferWikiArtistPortrait) {
+    for (const candidateName of [lang.artistName, ...(lang.artistAliases || [])]) {
+      const primary = await fetchArtistPhoto(candidateName);
+      if (primary && isValidArtistAvatarUrl(primary)) {
+        saveTrendingCardArtistPhoto(lang, primary);
+        return primary;
+      }
+    }
+    if (!skipStaticUrl && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+      saveTrendingCardArtistPhoto(lang, lang.artistPortraitUrl);
+      return lang.artistPortraitUrl;
+    }
+  }
+
+  const wikiLangs = lang.wikiArtistLang ? [lang.wikiArtistLang, 'en'] : ['en'];
+  const wikiTitles = Array.from(new Set([lang.wikiArtistTitle, lang.artistName, ...(lang.artistAliases || [])].filter(Boolean)));
+  for (const wLang of wikiLangs) {
+    for (const title of wikiTitles) {
+      try {
+        const wikiRes = await fetch(
+          `https://${wLang}.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&redirects=1&prop=pageimages&pithumbsize=960&format=json&origin=*`
+        );
+        if (wikiRes.ok) {
+          const wikiData = await wikiRes.json();
+          const pages = wikiData?.query?.pages ? (Object.values(wikiData.query.pages) as any[]) : [];
+          for (const page of pages) {
+            const src = String(page?.thumbnail?.source || '').trim();
+            if (isValidArtistAvatarUrl(src) && !/stamp_of_india|postage|flag_of|commons-logo/i.test(src)) {
+              saveTrendingCardArtistPhoto(lang, src);
+              return src;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  for (const candidateName of [lang.artistName, ...(lang.artistAliases || [])]) {
+    const primary = await fetchArtistPhoto(candidateName);
+    if (primary && isValidArtistAvatarUrl(primary)) {
+      saveTrendingCardArtistPhoto(lang, primary);
+      return primary;
+    }
+  }
+
+  return null;
+}
+
+async function resolveTrendingCardWikiBg(lang: TrendingLanguage): Promise<string | null> {
+  const mem = trendingCardBgMemCache.get(lang.id);
+  if (mem) return mem;
+  try {
+    const stored = localStorage.getItem(`${TRENDING_CARD_BG_STORAGE_KEY}${lang.id}`);
+    if (stored && /^https?:\/\//i.test(stored)) {
+      trendingCardBgMemCache.set(lang.id, stored);
+      return stored;
+    }
+  } catch {}
+  if (!lang.bgWikiTitle) return null;
+  try {
+    const res = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(lang.bgWikiTitle)}&redirects=1&prop=pageimages&pithumbsize=1200&format=json&origin=*`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const pages = data?.query?.pages ? (Object.values(data.query.pages) as any[]) : [];
+      for (const page of pages) {
+        const src = String(page?.thumbnail?.source || '').trim();
+        if (/^https?:\/\//i.test(src)) {
+          trendingCardBgMemCache.set(lang.id, src);
+          try {
+            localStorage.setItem(`${TRENDING_CARD_BG_STORAGE_KEY}${lang.id}`, src);
+          } catch {}
+          return src;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+const TrendingLanguageCard = memo(function TrendingLanguageCard({
+  lang,
+  onSelect,
+}: {
+  lang: TrendingLanguage;
+  onSelect: (langId: string) => void;
+}) {
+  const [artistUrl, setArtistUrl] = useState<string | null>(() => getCachedTrendingCardArtistPhoto(lang));
+  const [artistLoaded, setArtistLoaded] = useState(false);
+  const [artistRetried, setArtistRetried] = useState(false);
+  const [bgIndex, setBgIndex] = useState(0);
+  const [wikiBgUrl, setWikiBgUrl] = useState<string | null>(() => trendingCardBgMemCache.get(lang.id) || null);
+  const [bgLoaded, setBgLoaded] = useState(false);
+
+  const bgCandidates = useMemo(() => {
+    const list = [...(lang.bgFallbackUrls || [])];
+    if (wikiBgUrl && !list.includes(wikiBgUrl)) list.push(wikiBgUrl);
+    return list;
+  }, [lang.bgFallbackUrls, wikiBgUrl]);
+
+  const currentBgUrl = bgCandidates[bgIndex] || null;
+
+  useEffect(() => {
+    let active = true;
+    setArtistRetried(false);
+    const cached = getCachedTrendingCardArtistPhoto(lang);
+    if (cached) {
+      setArtistUrl(cached);
+    } else {
+      setArtistLoaded(false);
+      resolveTrendingCardArtistPhoto(lang).then(url => {
+        if (active && url) setArtistUrl(url);
+      });
+    }
+    resolveTrendingCardWikiBg(lang).then(url => {
+      if (active && url) setWikiBgUrl(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [lang]);
+
+  return (
+    <button
+      type="button"
+      className="trending-lang-card"
+      onClick={() => onSelect(lang.id)}
+      style={{ '--card-accent-bg': lang.accentGradient } as CSSProperties}
+      aria-label={`${lang.label} — ${lang.subtitle}`}
+      data-testid={`trending-lang-${lang.id}`}
+    >
+      <div className="trending-lang-card-bg-wrap" aria-hidden="true">
+        {currentBgUrl && (
+          <img
+            src={currentBgUrl}
+            alt=""
+            className={`trending-lang-card-bg ${bgLoaded ? 'is-loaded' : ''}`}
+            loading="eager"
+            decoding="async"
+            onLoad={() => setBgLoaded(true)}
+            onError={() => {
+              setBgLoaded(false);
+              setBgIndex(i => i + 1);
+            }}
+          />
+        )}
+        <div className="trending-lang-card-atmosphere" />
+      </div>
+
+      {artistUrl && (
+        <div className="trending-lang-card-artist-wrap" aria-hidden="true">
+          <img
+            src={artistUrl}
+            alt={lang.artistName}
+            className={`trending-lang-card-artist ${artistLoaded ? 'is-loaded' : ''}`}
+            loading="eager"
+            decoding="async"
+            onLoad={() => setArtistLoaded(true)}
+            onError={() => {
+              setArtistLoaded(false);
+              if (!artistRetried) {
+                setArtistRetried(true);
+                resolveTrendingCardArtistPhoto(lang, true).then(fallbackUrl => {
+                  if (fallbackUrl && fallbackUrl !== artistUrl) {
+                    setArtistUrl(fallbackUrl);
+                  } else {
+                    setArtistUrl(null);
+                  }
+                });
+              } else {
+                setArtistUrl(null);
+              }
+            }}
+          />
+        </div>
+      )}
+
+      <div className="trending-lang-card-scrim" aria-hidden="true" />
+
+      <div className="trending-lang-card-copy">
+        <strong className="trending-lang-card-title">{lang.label}</strong>
+        <span className="trending-lang-card-subtitle">{lang.subtitle}</span>
+      </div>
+    </button>
   );
 });
 
@@ -624,34 +960,51 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
 }
 
 const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const stickyRemoteUrl = track ? getStickyCoverUrl(track) : '';
+  const [blobSrc, setBlobSrc] = useState<string | null>(null);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const finalSrc = stickyRemoteUrl || blobSrc;
+  const [fitScale, setFitScale] = useState<number>(() => getCachedCoverScale(finalSrc, track));
 
   useEffect(() => {
-    let active = true;
-    setLoaded(false);
-    setFailed(false);
-    if (!track) { setSrc(null); return; }
-    if (track.image && !String(track.image).includes('fbcdn.net')) { setSrc(track.image); return; }
-    if (!track.artwork || !(track.artwork instanceof Blob || track.artwork instanceof File)) { setSrc(null); return; }
-    const url = URL.createObjectURL(track.artwork);
-    if (active) setSrc(url);
-    return () => { active = false; URL.revokeObjectURL(url); };
-  }, [track?.artwork, track?.image, track?.id]);
+    setFitScale(getCachedCoverScale(finalSrc, track));
+  }, [finalSrc, track]);
 
+  useEffect(() => {
+    if (!track) { setBlobSrc(null); return; }
+    if (stickyRemoteUrl) {
+      rememberStickyCover(track, stickyRemoteUrl);
+      setBlobSrc(null);
+      return;
+    }
+    if (!track.artwork || !(track.artwork instanceof Blob || track.artwork instanceof File)) { setBlobSrc(null); return; }
+    let active = true;
+    const url = URL.createObjectURL(track.artwork);
+    if (active) setBlobSrc(url);
+    return () => { active = false; URL.revokeObjectURL(url); };
+  }, [track, stickyRemoteUrl, track?.artwork, track?.id]);
+
+  const failed = Boolean(finalSrc && failedUrl === finalSrc);
   const Glyph = kind === 'list' ? ListMusic : Disc3;
 
   return (
     <div className={large ? 'cover-large' : 'cover-mini'} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
-      {src && !failed ? (
+      {finalSrc && !failed ? (
         <img
-          src={src}
+          src={finalSrc}
           alt={`${track?.album ?? 'Album'} artwork`}
-          className={loaded ? 'loaded' : ''}
+          className="loaded"
+          style={{ opacity: 1, transform: fitScale > 1.005 ? `scale(${fitScale})` : undefined }}
           decoding="async"
-          onLoad={() => { if (src) setLoaded(true); }}
-          onError={() => { setFailed(true); }}
+          onLoad={(e) => {
+            markCoverUrlLoaded(finalSrc);
+            void isCoverUrlLoaded(finalSrc);
+            const computed = computeAutoFitCoverScale(e.currentTarget, finalSrc, track, (asyncScale) => {
+              setFitScale(prev => (Math.abs(asyncScale - prev) > 0.01 ? asyncScale : prev));
+            });
+            if (Math.abs(computed - fitScale) > 0.01) setFitScale(computed);
+          }}
+          onError={() => { setFailedUrl(finalSrc); }}
         />
       ) : (
         <Glyph aria-hidden="true" />
@@ -666,7 +1019,8 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
   a.track?.image === b.track?.image &&
   a.track?.id === b.track?.id &&
   a.track?.album === b.track?.album &&
-  a.track?.artist === b.track?.artist
+  a.track?.artist === b.track?.artist &&
+  a.track?.source === b.track?.source
 ));
 
 type RowActions = {
@@ -728,7 +1082,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
   items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number;
 }) {
   void downloadingIds; void recentlyDownloadedIds; void downloadedCount;
-  const isSelectionSupported = ['songs', 'playlists', 'favorites', 'artists', 'recent', 'queue', 'downloads'].includes(page);
+  const isSelectionSupported = ['songs', 'playlists', 'favorites', 'recent', 'queue', 'downloads'].includes(page) && Boolean(toggleSelectAll);
   const isSelectionMode = selectionMode;
   return <div className={`table-wrap${className ? ` ${className}` : ""}`}>
     <table className="track-table">
@@ -1007,6 +1361,18 @@ function App() {
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [canvasEnabled, setCanvasEnabled] = useState(true);
+  const [trendingLanguages, setTrendingLanguages] = useState<TrendingLanguage[]>(() => getOrderedTrendingLanguages());
+  const [activeTrendingLangId, setActiveTrendingLangId] = useState<string | null>(() => {
+    try { return sessionStorage.getItem('void-active-trending-lang') || null; } catch { return null; }
+  });
+  const [trendingTracks, setTrendingTracks] = useState<TrendingTrackItem[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('void-active-trending-lang');
+      return saved ? getInitialTrendingTracks(saved) : [];
+    } catch { return []; }
+  });
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingQuery, setTrendingQuery] = useState('');
 
   const [design, setDesign] = useState<DesignId>(readDesign);
 
@@ -1073,6 +1439,11 @@ useEffect(() => {
   const [query, setQuery] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
+  const [paletteTab, setPaletteTab] = useState<'songs' | 'artists'>('songs');
+  const [onlineArtistResults, setOnlineArtistResults] = useState<string[]>([]);
+  const [artistTopTracks, setArtistTopTracks] = useState<TrendingTrackItem[]>([]);
+  const [artistTopLoading, setArtistTopLoading] = useState(false);
+  const [artistViewTab, setArtistViewTab] = useState<'top100' | 'library'>('top100');
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
 
@@ -1085,7 +1456,7 @@ useEffect(() => {
     if (!term.trim()) return;
     setSearchHistory(prev => {
       const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())];
-      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
       return updated;
     });
   };
@@ -1094,7 +1465,7 @@ useEffect(() => {
     e.stopPropagation();
     setSearchHistory(prev => {
       const updated = prev.filter(t => t !== term);
-      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
       if (updated.length <= 4) setHistoryExpanded(false);
       return updated;
     });
@@ -1105,6 +1476,7 @@ useEffect(() => {
       warmUpYouTubeBackend();
     } else {
       setHistoryExpanded(false);
+      setPaletteTab('songs');
     }
   }, [paletteOpen]);
 
@@ -1112,6 +1484,7 @@ useEffect(() => {
     const q = paletteQuery.trim();
     if (!q) {
       setMusicResults([]);
+      setOnlineArtistResults([]);
       setMusicSearching(false);
       return;
     }
@@ -1123,17 +1496,26 @@ useEffect(() => {
       setMusicSearching(true);
       setMusicResults([]);
 
+      // Concurrently query canonical artist database (Deezer + Apple Music/iTunes spell-corrected artist lookup)
+      void searchCanonicalArtists(q, controller.signal, (name, img) => {
+        rememberArtistPhoto(name, img);
+      }).then(profiles => {
+        if (!cancelled && !controller.signal.aborted) {
+          setOnlineArtistResults(profiles.map(p => p.name));
+        }
+      }).catch(() => {});
+
       try {
         const { results } = await searchAllProviders(q, {
           signal: controller.signal,
           onPartialResults: (partial) => {
             if (!cancelled && !controller.signal.aborted) {
-              setMusicResults(partial);
+              setMusicResults(deduplicateTrackCollection(partial, { ignoreArtist: false, cleanTitles: true }));
             }
           },
         });
         if (!cancelled && !controller.signal.aborted) {
-          setMusicResults(results);
+          setMusicResults(deduplicateTrackCollection(results, { ignoreArtist: false, cleanTitles: true }));
         }
       } catch {
         // Handled silently to keep console clean
@@ -1197,6 +1579,8 @@ useEffect(() => {
   prefsRef.current = prefs;
   const playRelativeRef = useRef<(direction: number) => void>(() => {});
   const switchingTrackRef = useRef(false);
+  const userPausedRef = useRef(false);
+  const lastVisibilityHideRef = useRef(0);
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const npArt = useRef<HTMLDivElement>(null);
@@ -1229,31 +1613,18 @@ useEffect(() => {
   useEffect(() => {
     if (!activeTrack) { setSyncedLyrics(null); setLyricsManualScroll(false); return; }
     let alive = true;
-    const fetchLyrics = async () => {
-      try {
-        const cleanTitle = String(activeTrack.title || '').replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim();
-        const cleanArtist = String(activeTrack.artist || '').replace(/Unknown Artist/i, '').trim();
-        const q = `${cleanTitle} ${cleanArtist}`.trim();
-        if (!q) { if (alive) setSyncedLyrics(null); return; }
-        const res = await fetch(`/__void_api/lyrics?q=${encodeURIComponent(q)}`);
-        if (!res.ok) { if (alive) setSyncedLyrics(null); return; }
-        const items = await res.json();
-        const best = Array.isArray(items)
-          ? (items.find((item: any) => typeof item?.syncedLyrics === 'string' && item.syncedLyrics.trim().length > 0) ?? null)
-          : null;
-        if (alive && best?.syncedLyrics) {
-          const parsed = best.syncedLyrics.split('\n').map((line: string) => {
-            const match = line.match(/\[(\d+):(\d+\.\d+)\](.*)/);
-            if (match) return { time: parseInt(match[1], 10) * 60 + parseFloat(match[2]), text: match[3].trim() || '♪' };
-            return null;
-          }).filter(Boolean);
-          setSyncedLyrics(parsed.length > 0 ? parsed : null);
-        } else if (alive) setSyncedLyrics(null);
-      } catch { if (alive) setSyncedLyrics(null); }
-    };
-    fetchLyrics();
+    setLyricsManualScroll(false);
+    resolveUniversalTrackLyrics(activeTrack)
+      .then((lines) => {
+        if (alive) {
+          setSyncedLyrics(lines && lines.length > 0 ? lines : null);
+        }
+      })
+      .catch(() => {
+        if (alive) setSyncedLyrics(null);
+      });
     return () => { alive = false; };
-  }, [activeTrack?.title, activeTrack?.artist, activeTrack?.duration]);
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.duration]);
 
   useEffect(() => {
     if (lyricsManualScroll || activeLyricIndex < 0 || !sideLyricsRef.current) return;
@@ -1281,21 +1652,61 @@ useEffect(() => {
   const canvasLoadedId = useRef<string | null>(null); // id currently loaded in the player
   const canvasWantedId = useRef<string | null>(null); // latest id requested by the track effect
 
-  // ഡെസ്ക്ടോപ്പ് മാറുമ്പോൾ വീഡിയോ ഹൈഡ് ചെയ്ത് വീണ്ടും ഫേഡ് ഇൻ ആക്കാൻ
   useEffect(() => {
+    const resumeIfBackgroundPaused = () => {
+      if (userPausedRef.current || switchingTrackRef.current) return;
+      if (ytActiveRef.current && ytAudioPlayerRef.current) {
+        try {
+          const st = ytAudioPlayerRef.current.getPlayerState?.();
+          if (st === 2 || st === 5 || st === -1) {
+            ytAudioPlayerRef.current.playVideo?.();
+            setIsPlaying(true);
+          }
+        } catch {}
+      } else if (
+        audio.current &&
+        audio.current.src &&
+        audio.current.paused &&
+        !audio.current.ended &&
+        audio.current.currentTime > 0
+      ) {
+        void audio.current.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
+    };
     const handleVisibility = () => {
+      lastVisibilityHideRef.current = Date.now();
       if (document.visibilityState === 'hidden') {
         setCanvasReady(false);
+        window.setTimeout(resumeIfBackgroundPaused, 40);
+        window.setTimeout(resumeIfBackgroundPaused, 180);
+        window.setTimeout(resumeIfBackgroundPaused, 450);
       } else {
+        window.setTimeout(resumeIfBackgroundPaused, 40);
+        window.setTimeout(resumeIfBackgroundPaused, 200);
         if (canvasPlayer.current && typeof canvasPlayer.current.playVideo === 'function') {
           canvasPlayer.current.playVideo();
         }
-        // 2 സെക്കൻഡ് കഴിഞ്ഞ് മാത്രം കാണിക്കാൻ
         setTimeout(() => setCanvasReady(true), 2000);
       }
     };
+    const handleWindowBlurOrResize = () => {
+      lastVisibilityHideRef.current = Date.now();
+      window.setTimeout(resumeIfBackgroundPaused, 40);
+      window.setTimeout(resumeIfBackgroundPaused, 180);
+      window.setTimeout(resumeIfBackgroundPaused, 450);
+    };
+    const watchdog = window.setInterval(resumeIfBackgroundPaused, 400);
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleWindowBlurOrResize);
+    window.addEventListener('focus', handleWindowBlurOrResize);
+    window.addEventListener('resize', handleWindowBlurOrResize);
+    return () => {
+      window.clearInterval(watchdog);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('blur', handleWindowBlurOrResize);
+      window.removeEventListener('focus', handleWindowBlurOrResize);
+      window.removeEventListener('resize', handleWindowBlurOrResize);
+    };
   }, []);
 
   useEffect(() => {
@@ -1342,7 +1753,13 @@ useEffect(() => {
   }, []);
 
   const downloadSearchTrack = async (track: any) => {
-    const id = extractCleanYouTubeId(track.id ?? '');
+    const id =
+      extractCleanYouTubeId(track?.id ?? '') ||
+      extractYouTubeIdFromTrack(track) ||
+      String(track?.title || track?.name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gi, '-');
     if (!id || downloadingIds.includes(id)) return;
     if (track.isLive || track.qualityBadge === 'Live Radio' || track.qualityBadge === 'FLAC Live') {
       notify('Live radio streams cannot be downloaded for offline playback.');
@@ -1352,23 +1769,40 @@ useEffect(() => {
     try {
       let workingTrack = { ...track };
       let url = workingTrack.downloadUrl || workingTrack.audioUrl || workingTrack.src;
+      if (!url || String(url || '').startsWith('trending-resolve://')) {
+        const resolved = await resolveTrendingTrackStream(workingTrack);
+        if (resolved?.url) {
+          url = resolved.url;
+          workingTrack = {
+            ...workingTrack,
+            audioUrl: resolved.url,
+            downloadUrl: resolved.url,
+            src: resolved.url,
+            source: resolved.source || workingTrack.source,
+            fallbackUrls: resolved.fallbackUrls,
+            image: resolved.image || workingTrack.image,
+            duration: resolved.duration || workingTrack.duration,
+          };
+        }
+      }
+      const resolvedYtId = extractYouTubeIdFromTrack({ ...workingTrack, audioUrl: url, downloadUrl: url });
       const isYtTrack =
         String(url || '').startsWith('yt-stream://') ||
         String(url || '').includes('void-backend') ||
         String(url || '').includes('yt-audio') ||
         formatProviderLabel(workingTrack.source, workingTrack) === 'YouTube' ||
-        /^[\w-]{11}$/.test(id);
+        /^[\w-]{11}$/.test(resolvedYtId);
       const trackTitleHint = String(workingTrack.name || workingTrack.title || '').trim();
       const trackArtistHint = String(workingTrack.artist || '').trim();
-      const ytLocalStreamUrl = /^[\w-]{11}$/.test(id)
-        ? `/__void_api/yt-audio?id=${encodeURIComponent(id)}&title=${encodeURIComponent(trackTitleHint)}&artist=${encodeURIComponent(trackArtistHint)}`
+      const ytLocalStreamUrl = /^[\w-]{11}$/.test(resolvedYtId)
+        ? `/__void_api/yt-audio?id=${encodeURIComponent(resolvedYtId)}&title=${encodeURIComponent(trackTitleHint)}&artist=${encodeURIComponent(trackArtistHint)}`
         : '';
 
       let ytDirectCandidates: string[] = [];
       if (isYtTrack) {
         const [resolvedYt, extraYtUrls] = await Promise.all([
-          resolveYouTubePlayableStream({ ...workingTrack, id }),
-          resolveYouTubeDownloadCandidates({ ...workingTrack, id }),
+          resolveYouTubePlayableStream({ ...workingTrack, id: resolvedYtId || id, audioUrl: url, downloadUrl: url }),
+          resolveYouTubeDownloadCandidates({ ...workingTrack, id: resolvedYtId || id, audioUrl: url, downloadUrl: url }),
         ]);
         ytDirectCandidates = extraYtUrls;
         if (resolvedYt?.url) {
@@ -1401,44 +1835,63 @@ useEffect(() => {
 
       const candidateUrls: string[] = [];
       for (const cand of rawCandidates) {
-        if (!candidateUrls.includes(cand)) candidateUrls.push(cand);
         if (/^https?:\/\//i.test(cand)) {
           const proxied = `/__void_api/proxy-audio?url=${encodeURIComponent(cand)}`;
           if (!candidateUrls.includes(proxied)) candidateUrls.push(proxied);
         }
-      }
-
-      if (!candidateUrls.length) {
-        throw new Error('This result does not provide a downloadable audio file.');
+        if (!candidateUrls.includes(cand)) candidateUrls.push(cand);
       }
 
       let blob: Blob | null = null;
       let exactYtBlob = false;
-      let finalUrl = candidateUrls[0];
-      for (const candidateUrl of candidateUrls) {
-        try {
-          const response = await fetch(candidateUrl, { mode: 'cors' });
-          if (!response.ok) continue;
-          const fetchedBlob = await response.blob();
-          const minValidSize = isYtTrack ? 65536 : 1;
-          if (
-            fetchedBlob.size >= minValidSize &&
-            (fetchedBlob.type.startsWith('audio/') ||
-              fetchedBlob.type.includes('octet-stream') ||
-              fetchedBlob.type.includes('video/') ||
-              fetchedBlob.type.includes('mp4'))
-          ) {
-            blob = fetchedBlob;
-            exactYtBlob = isYtTrack;
-            finalUrl = candidateUrl;
-            break;
+      let finalUrl = candidateUrls[0] || '';
+      const tryFetchCandidates = async (urlsToTry: string[]) => {
+        for (const candidateUrl of urlsToTry) {
+          try {
+            const fetchTarget = /archive\.org/i.test(candidateUrl)
+              ? `/__void_api/proxy?url=${encodeURIComponent(candidateUrl)}`
+              : candidateUrl;
+            const response = await fetch(fetchTarget, { mode: 'cors' });
+            if (!response.ok) continue;
+            const fetchedBlob = await response.blob();
+            const minValidSize = isYtTrack ? 32768 : 1024;
+            const bType = String(fetchedBlob.type || '').toLowerCase();
+            if (
+              fetchedBlob.size >= minValidSize &&
+              !bType.includes('html') &&
+              !bType.includes('json')
+            ) {
+              blob = fetchedBlob;
+              exactYtBlob = isYtTrack;
+              finalUrl = candidateUrl;
+              return true;
+            }
+          } catch {
+            // Try next candidate URL
           }
-        } catch {
-          // Try next candidate URL
+        }
+        return false;
+      };
+
+      await tryFetchCandidates(candidateUrls);
+
+      // Fallback: if direct candidates failed, resolve via trending/JioSaavn/YouTube stream resolver
+      if (!blob && (trackTitleHint || trackArtistHint)) {
+        const fallbackResolved = await resolveTrendingTrackStream({
+          ...workingTrack,
+          audioUrl: 'trending-resolve://force',
+        });
+        if (fallbackResolved?.url) {
+          const fbList: string[] = [];
+          if (/^https?:\/\//i.test(fallbackResolved.url)) {
+            fbList.push(`/__void_api/proxy-audio?url=${encodeURIComponent(fallbackResolved.url)}`);
+          }
+          fbList.push(fallbackResolved.url);
+          await tryFetchCandidates(fbList);
         }
       }
 
-      if (!blob && isYtTrack && /^[\w-]{11}$/.test(id)) {
+      if (!blob && isYtTrack && /^[\w-]{11}$/.test(resolvedYtId || id)) {
         blob = createYtContainerBlob();
         exactYtBlob = false;
       }
@@ -1448,9 +1901,13 @@ useEffect(() => {
       }
 
       let coverBlob: Blob | undefined;
-      if (workingTrack.image && !String(workingTrack.image).includes('fbcdn.net')) {
+      const coverSourceUrl = workingTrack.image || getStickyCoverUrl(workingTrack);
+      if (coverSourceUrl && !String(coverSourceUrl).includes('fbcdn.net')) {
         try {
-          const coverResponse = await fetch(workingTrack.image, { mode: 'cors' });
+          const coverTarget = /^https?:\/\//i.test(String(coverSourceUrl))
+            ? `/__void_api/proxy?url=${encodeURIComponent(String(coverSourceUrl))}`
+            : String(coverSourceUrl);
+          const coverResponse = await fetch(coverTarget, { mode: 'cors' });
           if (coverResponse.ok) coverBlob = await coverResponse.blob();
         } catch {
           /* Keep the source artwork URL if the image host blocks CORS. */
@@ -1494,7 +1951,7 @@ useEffect(() => {
         title: String(workingTrack.name || workingTrack.title || 'Untitled'),
         artist: String(workingTrack.artist || 'Unknown artist'),
         album: String(workingTrack.album || 'Unknown album'),
-        image: workingTrack.image,
+        image: coverSourceUrl || workingTrack.image,
         coverBlob,
         duration: trackDuration,
         mimeType: resolvedMime,
@@ -1519,6 +1976,7 @@ useEffect(() => {
         return [next, ...previous.filter(item => String(item.id).replace(/^download:/, '') !== id)];
       });
       setRecentlyDownloadedIds(previous => [...previous.filter(item => item !== id), id]);
+      notify(`Saved “${record.title}” to Downloads.`);
     } catch (error) {
       notify(error instanceof Error && /Failed to fetch|NetworkError|CORS/i.test(error.message)
         ? 'This provider blocks browser downloads for this result.'
@@ -1534,11 +1992,23 @@ useEffect(() => {
       let remoteFavs: Track[] = [];
       try {
         const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+        const arabicCatalogMap = new Map(getInstantArabicTop200().map(t => [t.id, t]));
         remoteFavs = Array.isArray(parsedFavs) ? parsedFavs.map((item: any) => {
-          const cleanImage = typeof item?.image === 'string' && item.image.includes('fbcdn.net') ? undefined : item?.image;
+          const cleanImage = (typeof item?.image === 'string' && !item.image.includes('fbcdn.net') ? item.image : '') || getStickyCoverUrl(item) || undefined;
+          if (cleanImage) rememberStickyCover(item, cleanImage);
           const rawAudio = String(item?.audioUrl || item?.downloadUrl || item?.src || '');
-          const isLegacyYt = rawAudio.includes('void-backend') || item?.source === 'YouTube';
           const cleanId = String(item?.id || '').replace(/^api-/, '').replace(/^yt:/, '');
+          const canonicalArabic = arabicCatalogMap.get(`api-${cleanId}`);
+          if (canonicalArabic) {
+            return {
+              ...item,
+              ...canonicalArabic,
+              image: canonicalArabic.image || cleanImage,
+              favorite: item?.favorite,
+              lastPlayedAt: item?.lastPlayedAt,
+            };
+          }
+          const isLegacyYt = rawAudio.includes('void-backend') || item?.source === 'YouTube';
           return {
             ...item,
             image: cleanImage,
@@ -1589,7 +2059,8 @@ useEffect(() => {
           try {
             const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
             if (Array.isArray(parsedFavs)) {
-              isFav = parsedFavs.some((f: any) => f?.favorite && extractCleanYouTubeId(f?.id) === extractCleanYouTubeId(record.id));
+              const recYtId = extractCleanYouTubeId(record.id);
+              isFav = parsedFavs.some((f: any) => f?.favorite && (f?.id === record.id || (Boolean(recYtId) && extractCleanYouTubeId(f?.id) === recYtId)));
             }
           } catch {}
         }
@@ -1614,7 +2085,7 @@ useEffect(() => {
 
   useEffect(() => {
     const pageFromPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
-    if (['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
+    if (['home', 'songs', 'trending', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
   }, [location]);
 
   useLayoutEffect(() => {
@@ -1641,7 +2112,21 @@ useEffect(() => {
     return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibilityChange); };
   }, []);
 
-  useEffect(() => { localStorage.setItem('void-queue', JSON.stringify(queue)); }, [queue]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('void-queue', JSON.stringify(queue));
+    } catch {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('void-multilang-') || k.startsWith('void-trending-cache-') || k.startsWith('void-artist-top100-'))) {
+            localStorage.removeItem(k);
+          }
+        }
+        localStorage.setItem('void-queue', JSON.stringify(queue));
+      } catch {}
+    }
+  }, [queue]);
   useEffect(() => { try { localStorage.setItem('void-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded'); } catch {} }, [sidebarCollapsed]);
 
   useEffect(() => {
@@ -1713,17 +2198,17 @@ useEffect(() => {
   }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork]);
 
   useEffect(() => {
-    if (!atmos && !themeTint.current) return;
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    // Force pure obsidian #000000 in dark mode so Android / Samsung S24 Ultra OS navigation bar never turns white or light-tinted
     const base: [number, number, number] = dark ? [0, 0, 0] : [246, 244, 239];
     let target = base;
-    if (atmos) {
-      const tint = hslToRgb(atmos[0], atmos[3] / 100, dark ? .5 : .62);
-      const mix = dark ? .17 : .13;
+    if (!dark && atmos) {
+      const tint = hslToRgb(atmos[0], atmos[3] / 100, .62);
+      const mix = .13;
       target = [0, 1, 2].map(i => Math.round(base[i] + (tint[i] - base[i]) * mix)) as [number, number, number];
     }
     const apply = (color: number[]) => {
-      const value = `#${color.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+      const value = dark ? '#000000' : `#${color.map(v => v.toString(16).padStart(2, '0')).join('')}`;
       let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
       if (!metas.length) { const meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); metas = [meta]; }
       metas.forEach(meta => { meta.content = value; });
@@ -1930,6 +2415,8 @@ useEffect(() => {
       album: downloadedMatch.album || track.album,
       image: downloadedMatch.image || track.image,
       duration: downloadedMatch.duration || track.duration,
+      source: downloadedMatch.source || track.source,
+      exactYtBlob: downloadedMatch.exactYtBlob ?? track.exactYtBlob,
       // Use the object URL created from the persisted IndexedDB Blob when the
       // Downloads list loads. It is already a valid browser audio source and is
       // owned by downloadedTracks, so playback must not create/revoke another URL.
@@ -1942,8 +2429,11 @@ useEffect(() => {
       ? downloadedMatch.audioUrl
       : (sourceTrack.audioUrl || sourceTrack.downloadUrl || sourceTrack.src);
     const isRemote = !isOfflineDownload && !!remoteUrl;
-    let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl };
+    const stickyImg = getStickyCoverUrl(sourceTrack) || getStickyCoverUrl(track);
+    if (stickyImg) rememberStickyCover(sourceTrack, stickyImg);
+    let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl, image: stickyImg || sourceTrack.image || track.image };
 
+    userPausedRef.current = false;
     switchingTrackRef.current = true;
     if (ytActiveRef.current) {
       ytActiveRef.current = false;
@@ -1951,23 +2441,59 @@ useEffect(() => {
     }
     el.pause();
     try { el.currentTime = 0; } catch {}
-    setPosition(0);
 
-    const rawYtCandidateId = extractCleanYouTubeId(playableTrack.id || downloadedMatch?.id || '');
-    const isYouTubeTrack =
+    const isArabicCatalogTrack = /^(?:api-|download:)?ar-\d+-\d+$/.test(String(playableTrack.id || ''));
+
+    // Update active track state immediately (0ms) so UI responds on the exact tap
+    setActiveId(playableTrack.id);
+    setStreamingTrack(playableTrack);
+    setPosition(0);
+    setDuration(playableTrack.duration > 0 && Number.isFinite(playableTrack.duration) ? playableTrack.duration : 0);
+    setIsPlaying(true);
+
+    const rawPlayableUrl = String(playableTrack.audioUrl || '');
+    const needsTrendingResolve =
+      isRemote && rawPlayableUrl.startsWith('trending-resolve://');
+
+    if (needsTrendingResolve) {
+      const resolvedTrending = await resolveTrendingTrackStream(playableTrack);
+      if (resolvedTrending?.url) {
+        const resolvedCover = resolvedTrending.image || getStickyCoverUrl(resolvedTrending) || playableTrack.image;
+        if (resolvedCover) rememberStickyCover(playableTrack, resolvedCover);
+        playableTrack = {
+          ...playableTrack,
+          audioUrl: resolvedTrending.url,
+          downloadUrl: resolvedTrending.url,
+          src: resolvedTrending.url,
+          source: resolvedTrending.source || 'JioSaavn',
+          bitrate: resolvedTrending.bitrate ?? 320,
+          codec: resolvedTrending.codec ?? 'AAC',
+          mimeType: resolvedTrending.mimeType ?? 'audio/mp4',
+          format: resolvedTrending.format ?? 'MP4 (320kbps)',
+          qualityBadge: resolvedTrending.qualityBadge ?? 'Very High (320kbps)',
+          qualityVerified: true,
+          fallbackUrls: resolvedTrending.fallbackUrls,
+          image: resolvedCover,
+          duration: resolvedTrending.duration || playableTrack.duration || 0,
+        };
+        setStreamingTrack(playableTrack);
+      }
+    }
+
+    let rawYtCandidateId = extractYouTubeIdFromTrack({ ...playableTrack, id: playableTrack.id || downloadedMatch?.id });
+    let isYouTubeTrack =
       formatProviderLabel(playableTrack.source, playableTrack) === 'YouTube' ||
       formatProviderLabel(downloadedMatch?.source, downloadedMatch) === 'YouTube' ||
       String(playableTrack.audioUrl || '').startsWith('yt-stream://') ||
       String(playableTrack.audioUrl || '').includes('void-backend') ||
       /^[\w-]{11}$/.test(rawYtCandidateId);
-    const useYtPlayerForOffline =
+    const isDummyOfflineYtContainer =
       isOfflineDownload &&
       isYouTubeTrack &&
-      /^[\w-]{11}$/.test(rawYtCandidateId) &&
       (!downloadedMatch?.exactYtBlob || (downloadedMatch?.blob?.size ?? 0) < 65536);
 
     let url = playableTrack.audioUrl;
-    if (isOfflineDownload) {
+    if (isOfflineDownload && !isDummyOfflineYtContainer) {
       if (!downloadedMatch.blob || downloadedMatch.blob.size === 0 || !remoteUrl) {
         switchingTrackRef.current = false;
         setIsPlaying(false);
@@ -1975,9 +2501,12 @@ useEffect(() => {
         return;
       }
       setStreamingTrack(playableTrack);
-    } else if (isRemote) {
-      if (isYouTubeTrack) {
-        const resolvedYt = await resolveYouTubePlayableStream(playableTrack);
+    } else if (isRemote || isDummyOfflineYtContainer) {
+      if (isYouTubeTrack && !String(playableTrack.audioUrl || '').startsWith('/__void_api/yt-audio')) {
+        const resolvedYt = await resolveYouTubePlayableStream({
+          ...playableTrack,
+          id: rawYtCandidateId || playableTrack.id,
+        });
         if (resolvedYt?.url) {
           url = resolvedYt.url;
           playableTrack = {
@@ -2009,27 +2538,24 @@ useEffect(() => {
       }
     }
 
-    setActiveId(playableTrack.id);
-    setPosition(0);
-    setDuration(playableTrack.duration > 0 && Number.isFinite(playableTrack.duration) ? playableTrack.duration : 0);
-
-    // Assign the new source and load it
-    const cleanFallbacks = isRemote && Array.isArray(playableTrack.fallbackUrls)
+    // Assign the new source and start playback immediately without redundant synchronous reload lag
+    const cleanFallbacks = (isRemote || isDummyOfflineYtContainer) && Array.isArray(playableTrack.fallbackUrls)
       ? playableTrack.fallbackUrls.filter((u: string) => u && u !== url && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'))
       : [];
-    const candidateUrls = useYtPlayerForOffline
-      ? []
-      : [url, ...cleanFallbacks].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
+    const candidateUrls =
+      isDummyOfflineYtContainer && (!url || String(url).startsWith('blob:'))
+        ? []
+        : [url, ...cleanFallbacks].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
 
     let lastError: unknown = null;
     let playedSuccessfully = false;
 
     for (const candidateUrl of candidateUrls) {
       if (!candidateUrl) continue;
+      el.preload = 'auto';
       el.src = candidateUrl;
       el.volume = prefs.volume;
       el.muted = prefs.muted;
-      el.load();
       switchingTrackRef.current = false;
       try {
         await el.play();
@@ -2039,6 +2565,46 @@ useEffect(() => {
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         lastError = err;
+      }
+    }
+
+    // If a JioSaavn stream failed to play, immediately fall back to YouTube for that exact song
+    if (!playedSuccessfully && isRemote && !isYouTubeTrack) {
+      const ytFallback = await resolveArabicYouTubeFallback(playableTrack);
+      if (ytFallback) {
+        rawYtCandidateId = ytFallback.ytId;
+        isYouTubeTrack = true;
+        playableTrack = {
+          ...playableTrack,
+          audioUrl: ytFallback.url,
+          downloadUrl: ytFallback.url,
+          src: ytFallback.url,
+          source: 'YouTube',
+          bitrate: ytFallback.bitrate,
+          codec: ytFallback.codec,
+          mimeType: ytFallback.mimeType,
+          format: ytFallback.format,
+          qualityBadge: ytFallback.qualityBadge,
+          qualityVerified: true,
+          image: playableTrack.image || ytFallback.image,
+          duration: playableTrack.duration || ytFallback.duration || 0,
+        };
+        setStreamingTrack(playableTrack);
+        if (!ytFallback.url.startsWith('yt-stream://')) {
+          el.src = ytFallback.url;
+          el.volume = prefs.volume;
+          el.muted = prefs.muted;
+          el.load();
+          switchingTrackRef.current = false;
+          try {
+            await el.play();
+            url = ytFallback.url;
+            playedSuccessfully = true;
+          } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            lastError = err;
+          }
+        }
       }
     }
 
@@ -2103,6 +2669,7 @@ useEffect(() => {
                   onStateChange: (ev: any) => {
                     if (!ytActiveRef.current) return;
                     if (ev.data === 1) {
+                      userPausedRef.current = false;
                       setIsPlaying(true);
                       const dur = Number(ev.target?.getDuration?.() || 0);
                       if (Number.isFinite(dur) && dur > 0) {
@@ -2125,7 +2692,16 @@ useEffect(() => {
                         }
                       }
                     } else if (ev.data === 2) {
-                      setIsPlaying(false);
+                      if (!userPausedRef.current && !switchingTrackRef.current) {
+                        try { ev.target?.playVideo?.(); setIsPlaying(true); } catch {}
+                        window.setTimeout(() => {
+                          if (!userPausedRef.current && !switchingTrackRef.current && ytActiveRef.current) {
+                            try { ev.target?.playVideo?.(); setIsPlaying(true); } catch {}
+                          }
+                        }, 140);
+                      } else {
+                        setIsPlaying(false);
+                      }
                     } else if (ev.data === 0) {
                       if (prefsRef.current.repeat === 'one') {
                         ev.target?.seekTo?.(0, true);
@@ -2168,7 +2744,7 @@ useEffect(() => {
         title: downloadedMatch?.title || playableTrack.title,
         artist: downloadedMatch?.artist || playableTrack.artist,
         album: downloadedMatch?.album || playableTrack.album,
-        image: downloadedMatch ? track.image : playableTrack.image,
+        image: playableTrack.image || track.image || downloadedMatch?.image || getStickyCoverUrl(playableTrack),
         source: formatProviderLabel(playableTrack.source, playableTrack) || playableTrack.source,
         qualityBadge: getTrackQualityBadge(playableTrack),
         duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
@@ -2220,9 +2796,11 @@ useEffect(() => {
       try {
         const state = ytAudioPlayerRef.current.getPlayerState?.();
         if (state === 1) {
+          userPausedRef.current = true;
           ytAudioPlayerRef.current.pauseVideo?.();
           setIsPlaying(false);
         } else {
+          userPausedRef.current = false;
           ytAudioPlayerRef.current.playVideo?.();
           setIsPlaying(true);
         }
@@ -2230,20 +2808,33 @@ useEffect(() => {
       return;
     }
     if (el.paused) {
+      userPausedRef.current = false;
       try { await el.play(); } catch {}
     } else {
+      userPausedRef.current = true;
       el.pause();
     }
   }, [activeTrack, notify, playTrack, queue, tracks]);
 
   const playRelative = useCallback((direction: number) => {
-    const allPool = [...downloadedTracks, ...tracks];
+    const allPool = [...downloadedTracks, ...tracks, ...(trendingTracks as any[]), ...(artistTopTracks as any[]), ...(musicResults as any[])];
     if (!allPool.length) return;
     const pool = queue.map(id => allPool.find(track => track.id === id)).filter((track): track is Track => !!track);
-    const source = pool.length ? pool : (page === 'downloads' && downloadedTracks.length ? downloadedTracks : tracks);
+    const fallbackList =
+      detail?.kind === 'artist' && artistTopTracks.length
+        ? (artistTopTracks as any[])
+        : page === 'downloads' && downloadedTracks.length
+          ? downloadedTracks
+          : page === 'trending' && trendingTracks.length
+            ? (trendingTracks as any[])
+            : tracks.length
+              ? tracks
+              : allPool;
+    const source = pool.length ? pool : fallbackList;
     if (!source.length) return;
     if (!activeId) { void playTrack(source[0], source.map(track => track.id)); return; }
     let index = source.findIndex(track => track.id === activeId);
+    if (index < 0) index = 0;
     if (prefs.shuffle && direction > 0 && source.length > 1) {
       let next = index;
       while (next === index) next = Math.floor(Math.random() * source.length);
@@ -2251,17 +2842,21 @@ useEffect(() => {
     } else index += direction;
     if (index < 0) index = prefs.repeat === 'all' ? source.length - 1 : 0;
     if (index >= source.length) {
-      if (prefs.repeat === 'off' && !prefs.autoplay) { setIsPlaying(false); return; }
       index = 0;
     }
     void playTrack(source[index], source.map(track => track.id));
-  }, [activeId, downloadedTracks, page, playTrack, prefs.autoplay, prefs.repeat, prefs.shuffle, queue, tracks]);
+  }, [activeId, artistTopTracks, detail, downloadedTracks, musicResults, page, playTrack, prefs.repeat, prefs.shuffle, queue, tracks, trendingTracks]);
   playRelativeRef.current = playRelative;
 
   const mediaControls = useRef({ play: () => {}, pause: () => {}, previous: () => {}, next: () => {} });
   mediaControls.current = {
-    play: () => { if (!isPlaying) void togglePlay(); },
+    play: () => { userPausedRef.current = false; if (!isPlaying) void togglePlay(); },
     pause: () => {
+      // Ignore synthetic MediaSession pause events fired by Chrome Mobile Emulation when switching desktops or resizing
+      if (document.visibilityState === 'hidden' || Date.now() - lastVisibilityHideRef.current < 1500) {
+        return;
+      }
+      userPausedRef.current = true;
       if (ytActiveRef.current && ytAudioPlayerRef.current) {
         try { ytAudioPlayerRef.current.pauseVideo?.(); setIsPlaying(false); } catch {}
       } else {
@@ -2283,8 +2878,20 @@ useEffect(() => {
   }, []);
 
   useEffect(() => {
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-  }, [isPlaying]);
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    if (activeTrack && typeof MediaMetadata !== 'undefined') {
+      const cover = getStickyCoverUrl(activeTrack) || activeTrack.image;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: activeTrack.title || 'VOID Music',
+          artist: activeTrack.artist || 'VOID',
+          album: activeTrack.album || 'VOID',
+          artwork: cover && /^https?:\/\//i.test(cover) ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : [],
+        });
+      } catch {}
+    }
+  }, [isPlaying, activeTrack]);
 
   const importFiles = async (files: FileList | File[], note = '') => {
     const chosen = Array.from(files).filter(file => file.size > 0);
@@ -2632,8 +3239,217 @@ useEffect(() => {
     return () => window.removeEventListener('keydown', onKeys);
   }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
 
+  useEffect(() => {
+    warmUpTrendingCatalog();
+  }, []);
+
+  const openTrendingLanguage = useCallback((langId: string | null) => {
+    try {
+      if (langId) sessionStorage.setItem('void-active-trending-lang', langId);
+      else sessionStorage.removeItem('void-active-trending-lang');
+    } catch {}
+    if (langId) {
+      setTrendingLanguages(promoteTrendingLanguage(langId));
+      const initial = getInitialTrendingTracks(langId);
+      setTrendingTracks(initial);
+      setTrendingLoading(initial.length === 0);
+      if (langId === 'arabic') void prewarmArabicTopStreams(30);
+    } else {
+      setTrendingTracks([]);
+      setTrendingLoading(false);
+    }
+    setActiveTrendingLangId(langId);
+    setTrendingQuery('');
+  }, []);
+
+  useEffect(() => {
+    if (!activeTrendingLangId) {
+      setTrendingTracks([]);
+      setTrendingLoading(false);
+      return;
+    }
+    if (activeTrendingLangId === 'arabic') {
+      void prewarmArabicTopStreams(30);
+    }
+    const initial = getInitialTrendingTracks(activeTrendingLangId);
+    if (initial.length > 0) {
+      setTrendingTracks(initial);
+      setTrendingLoading(false);
+    } else {
+      setTrendingLoading(true);
+    }
+    const controller = new AbortController();
+    void fetchTrendingTop100(activeTrendingLangId, controller.signal, partialItems => {
+      if (!controller.signal.aborted && partialItems.length > 0) {
+        setTrendingTracks(partialItems);
+        setTrendingLoading(false);
+      }
+    })
+      .then(items => {
+        if (!controller.signal.aborted) {
+          if (items.length > 0) setTrendingTracks(items);
+          setTrendingLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setTrendingLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [activeTrendingLangId]);
+
+  const activeTrendingLang = useMemo(
+    () => trendingLanguages.find(l => l.id === activeTrendingLangId) ?? null,
+    [trendingLanguages, activeTrendingLangId]
+  );
+
+  const displayedTrendingLanguages = useMemo(() => {
+    const q = trendingQuery.trim().toLowerCase();
+    if (!q) return trendingLanguages;
+    return trendingLanguages.filter(l =>
+      `${l.label} ${l.nativeLabel} ${l.region} ${l.subtitle} ${l.artistName || ''}`.toLowerCase().includes(q)
+    );
+  }, [trendingLanguages, trendingQuery]);
+
+  // Load Artist Top 100 Songs automatically whenever an artist detail view is opened
+  useEffect(() => {
+    if (detail?.kind !== 'artist' || !detail.name) {
+      setArtistTopTracks([]);
+      setArtistTopLoading(false);
+      return;
+    }
+    setArtistViewTab('top100');
+    const initial = getInitialArtistTop100(detail.name);
+    if (initial.length > 0) {
+      setArtistTopTracks(initial);
+      setArtistTopLoading(false);
+    } else {
+      setArtistTopTracks([]);
+      setArtistTopLoading(true);
+    }
+    const controller = new AbortController();
+    void fetchArtistTop100(detail.name, controller.signal, partial => {
+      if (!controller.signal.aborted && partial.length > 0) {
+        setArtistTopTracks(partial);
+        setArtistTopLoading(false);
+      }
+    })
+      .then(items => {
+        if (!controller.signal.aborted) {
+          if (items.length > 0) setArtistTopTracks(items);
+          setArtistTopLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setArtistTopLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [detail?.kind, detail?.name]);
+
+  const deduplicatedArtistTopTracks = useMemo(() => {
+    if (detail?.kind !== 'artist') return [];
+    const mapped = artistTopTracks.map(t => {
+      const cleanTitle = cleanCanonicalTrackTitle(t.title || t.name || '');
+      const rawId = extractCleanYouTubeId(t.id);
+      const cleanItemId = String(t.id ?? '').replace(/^(?:download:|api-)/, '').trim();
+      const isFav = Boolean(
+        tracks.some(
+          tr =>
+            tr.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(tr.id) === rawId) ||
+              (Boolean(cleanItemId) && String(tr.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+              areSongsFuzzyDuplicates(tr.title || '', cleanTitle, tr.artist || '', t.artist || '', false))
+        )
+      );
+      const offline = downloadedTracks.find(
+        (item: any) =>
+          (Boolean(rawId) && extractCleanYouTubeId(item?.id ?? '') === rawId) ||
+          (Boolean(cleanItemId) && String(item?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+          areSongsFuzzyDuplicates(String(item?.title ?? item?.name ?? ''), cleanTitle, String(item?.artist ?? ''), t.artist || '', false)
+      );
+      return {
+        ...t,
+        title: cleanTitle,
+        name: cleanTitle,
+        favorite: isFav,
+        image: t.image || getStickyCoverUrl(t) || offline?.image,
+        offlineAvailable: Boolean(offline),
+      };
+    });
+    return deduplicateTrackCollection(mapped, { ignoreArtist: true, cleanTitles: true })
+      .slice(0, 15)
+      .map((item, idx) => ({
+        ...item,
+        trendingRank: idx + 1,
+      }));
+  }, [artistTopTracks, detail?.kind, downloadedTracks, tracks]);
+
+  const [artistTopExpanded, setArtistTopExpanded] = useState(false);
+
+  const displayedArtistTopTracks = useMemo(() => {
+    if (detail?.kind !== 'artist') return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return deduplicatedArtistTopTracks;
+    return deduplicatedArtistTopTracks.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q));
+  }, [deduplicatedArtistTopTracks, detail?.kind, query]);
+
+  const visibleArtistTopTracks = useMemo(() => {
+    if (artistTopExpanded) return displayedArtistTopTracks;
+    return displayedArtistTopTracks.slice(0, 5);
+  }, [artistTopExpanded, displayedArtistTopTracks]);
+
+  const displayedTrendingTracks = useMemo(() => {
+    const q = trendingQuery.trim().toLowerCase();
+    const mapped = trendingTracks.map(t => {
+      const cleanTitle = cleanCanonicalTrackTitle(t.title || t.name || '');
+      const rawId = extractCleanYouTubeId(t.id);
+      const cleanItemId = String(t.id ?? '').replace(/^(?:download:|api-)/, '').trim();
+      const isFav = Boolean(
+        tracks.some(
+          tr =>
+            tr.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(tr.id) === rawId) ||
+              (Boolean(cleanItemId) && String(tr.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+              areSongsFuzzyDuplicates(tr.title || '', cleanTitle, tr.artist || '', t.artist || '', false))
+        ) ||
+        downloadedTracks.some(
+          (dl: any) =>
+            dl.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(dl.id) === rawId) ||
+              (Boolean(cleanItemId) && String(dl?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId))
+        )
+      );
+      const offline = downloadedTracks.find(
+        (dl: any) =>
+          (Boolean(rawId) && extractCleanYouTubeId(dl.id) === rawId) ||
+          (Boolean(cleanItemId) && String(dl?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+          areSongsFuzzyDuplicates(String(dl?.title ?? dl?.name ?? ''), cleanTitle, String(dl?.artist ?? ''), t.artist || '', false)
+      );
+      const stickyImg = t.image || getStickyCoverUrl(t) || offline?.image;
+      if (t.image) rememberStickyCover(t, t.image);
+      return {
+        ...t,
+        title: cleanTitle,
+        name: cleanTitle,
+        favorite: isFav,
+        offlineAvailable: Boolean(offline),
+        image: stickyImg,
+      };
+    });
+    const deduped = deduplicateTrackCollection(mapped, { ignoreArtist: false, cleanTitles: true }).map((item, idx) => ({
+      ...item,
+      trendingRank: idx + 1,
+    }));
+    return q
+      ? deduped.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q))
+      : deduped;
+  }, [downloadedTracks, tracks, trendingQuery, trendingTracks]);
+
   const backLayerActive = Boolean(
-    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || libraryOpen || page !== 'home'
+    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || activeTrendingLangId || libraryOpen || page !== 'home'
   );
   const backStateRef = useRef({
     modal,
@@ -2643,6 +3459,7 @@ useEffect(() => {
     expanded,
     mobileFontOpen,
     detail,
+    activeTrendingLangId,
     libraryOpen,
     page,
   });
@@ -2654,6 +3471,7 @@ useEffect(() => {
     expanded,
     mobileFontOpen,
     detail,
+    activeTrendingLangId,
     libraryOpen,
     page,
   };
@@ -2664,13 +3482,13 @@ useEffect(() => {
     if (!window.history.state?.voidBackGuard) {
       window.history.pushState({ ...(window.history.state || {}), voidBackGuard: true }, '', currentPath);
     }
-  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, libraryOpen, page]);
+  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, activeTrendingLangId, libraryOpen, page]);
 
   useEffect(() => {
     const onPopState = (event: PopStateEvent) => {
       const st = backStateRef.current;
       const hasActiveLayer = Boolean(
-        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.libraryOpen || st.page !== 'home'
+        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.activeTrendingLangId || st.libraryOpen || st.page !== 'home'
       );
       if (!hasActiveLayer) return;
 
@@ -2690,11 +3508,15 @@ useEffect(() => {
         setMobileFontOpen(false);
       } else if (st.detail) {
         setDetail(null);
+      } else if (st.activeTrendingLangId) {
+        setActiveTrendingLangId(null);
+        setTrendingQuery('');
       } else if (st.libraryOpen) {
         setLibraryOpen(false);
       } else if (st.page !== 'home') {
         setLibraryOpen(false);
         setDetail(null);
+        setActiveTrendingLangId(null);
         setPage('home');
         setLocation('/');
         return;
@@ -2754,44 +3576,87 @@ useEffect(() => {
     el.style.setProperty('--ox', '0'); el.style.setProperty('--oy', '0');
   };
 
-  const setPageAndRoute = (target: Page) => { setLibraryOpen(false); setDetail(null); setPage(target); setLocation(pathFor(target)); };
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedSongIds([]);
+    setArtistTopExpanded(false);
+    if (page !== 'trending') {
+      setActiveTrendingLangId(null);
+      setTrendingQuery('');
+      try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
+    }
+  }, [page, detail?.kind, detail?.name, libraryOpen]);
+
+  const setPageAndRoute = (target: Page) => {
+    setLibraryOpen(false);
+    setDetail(null);
+    setSelectionMode(false);
+    setSelectedSongIds([]);
+    setArtistTopExpanded(false);
+    setActiveTrendingLangId(null);
+    try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
+    setTrendingQuery('');
+    setPage(target);
+    setLocation(pathFor(target));
+  };
   const splitArtists = useCallback((raw: string): string[] => {
     if (!raw) return [];
-    return raw.split(/(?:,\s*|;\s*|\s+\/\s+|\s+&\s+|\s+feat\.?\s+|\s+ft\.?\s+)/i).map(a => a.trim()).filter(Boolean);
+    // First split on common bilingual separators (·, |) and check if it's the same artist in two scripts (e.g. "عمرو دياب · Amr Diab")
+    const bilingualParts = raw.split(/\s*[·|]\s*/).map(p => p.trim()).filter(Boolean);
+    let normalizedRaw = raw;
+    if (bilingualParts.length >= 2) {
+      const latinPart = bilingualParts.find(p => /[A-Za-z]/.test(p) && !/[\u0600-\u06FF\u0900-\u0D7F]/.test(p));
+      const nonLatinPart = bilingualParts.find(p => /[\u0600-\u06FF\u0900-\u0D7F]/.test(p));
+      if (latinPart && nonLatinPart) {
+        normalizedRaw = latinPart;
+      }
+    }
+    const parts = normalizedRaw
+      .split(/(?:,\s*|;\s*|\s*[·|]\s*|\s+\/\s+|\s*&\s*|\s+[-–—]\s+|(?=[A-Za-z])[-–—](?=[A-Za-z])|\s+feat\.?\s+|\s+ft\.?\s+|\s+with\s+|\s+and\s+|\s+vs\.?\s+)/i)
+      .map(a => a.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim())
+      .filter(a => Boolean(a) && !/^(?:unknown artist|youtube|live radio|topic|official)$/i.test(a));
+    return parts;
   }, []);
 
   // A downloaded copy is the canonical version of that song throughout the UI.
   // Keep the original library record/ID for favorites and playlists, but hide duplicate
   // same-title/same-artist records when an offline copy exists and reuse its artwork.
-  const canonicalTracks = useMemo(() => {
-    const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
-    const downloadedKeys = new Set(downloadedTracks.map((item: any) => `${normalize(item.title || item.name)}|${normalize(item.artist)}`));
-    const seenDownloadedSongs = new Set<string>();
-    return tracks.filter(track => {
-      const key = `${normalize(track.title)}|${normalize(track.artist)}`;
-      if (!downloadedKeys.has(key)) return true;
-      if (seenDownloadedSongs.has(key)) return false;
-      seenDownloadedSongs.add(key);
-      return true;
-    }).map(track => {
-      const normalizePart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+  const [artistAvatarTick, setArtistAvatarTick] = useState(0);
+  useEffect(() => {
+    const onAvatarUpdate = () => setArtistAvatarTick(v => v + 1);
+    artistPhotoListeners.add(onAvatarUpdate);
+    return () => { artistPhotoListeners.delete(onAvatarUpdate); };
+  }, []);
+
+  const canonicalTracks = useMemo<Track[]>(() => {
+    const enriched: Track[] = tracks.map(track => {
+      const cleanTitle = cleanCanonicalTrackTitle(track.title);
       const offline = downloadedTracks.find((item: any) =>
         String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
-        (normalizePart(item.title || item.name) === normalizePart(track.title) && normalizePart(item.artist) === normalizePart(track.artist))
+        areSongsFuzzyDuplicates(String(item.title ?? item.name ?? ''), cleanTitle, String(item.artist ?? ''), track.artist || '', false)
       );
-      return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+      return {
+        ...track,
+        title: cleanTitle || track.title,
+        image: offline?.image || track.image || getStickyCoverUrl(track) || undefined,
+        offlineAvailable: Boolean(offline),
+      } as Track;
     });
+    return deduplicateTrackCollection(enriched, { ignoreArtist: false, cleanTitles: true });
   }, [downloadedTracks, tracks]);
 
-  const filteredTracks = useMemo(() => {
-    let list = canonicalTracks;
+  const filteredTracks = useMemo<Track[]>(() => {
+    let list: Track[] = canonicalTracks;
     if (page === 'favorites') list = list.filter(track => track.favorite);
     if (page === 'recent') list = list.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
     if (detail?.kind === 'album') list = list.filter(track => track.album === detail.name);
     if (detail?.kind === 'artist') {
       list = list.filter(track => {
-        const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
-        return artists.includes(detail.name.toLowerCase()) || (track.artist || '').toLowerCase() === detail.name.toLowerCase();
+        const artists = splitArtists(track.artist || '');
+        return (
+          artists.some(a => areSameOrDuplicateArtist(a, detail.name)) ||
+          areSameOrDuplicateArtist(track.artist || '', detail.name)
+        );
       });
     }
     if (detail?.kind === 'playlist') {
@@ -2800,56 +3665,165 @@ useEffect(() => {
     }
     const q = query.trim().toLowerCase();
     if (q) list = list.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
-    return list.map(track => {
+    const mapped: Track[] = list.map(track => {
+      const cleanTitle = cleanCanonicalTrackTitle(track.title);
       const offline = downloadedTracks.find((item: any) =>
         String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
-        (String(item.title ?? '').trim().toLowerCase() === String(track.title ?? '').trim().toLowerCase() &&
-         String(item.artist ?? '').trim().toLowerCase() === String(track.artist ?? '').trim().toLowerCase())
+        areSongsFuzzyDuplicates(String(item.title ?? item.name ?? ''), cleanTitle, String(item.artist ?? ''), track.artist || '', false)
       );
-      return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+      return {
+        ...track,
+        title: cleanTitle || track.title,
+        image: offline?.image || track.image || getStickyCoverUrl(track) || undefined,
+        offlineAvailable: Boolean(offline),
+      } as Track;
     });
-  }, [canonicalTracks, detail, downloadedTracks, page, playlists, query, splitArtists]);
+    return deduplicateTrackCollection(mapped, {
+      ignoreArtist: detail?.kind === 'artist',
+      cleanTitles: true,
+    });
+  }, [canonicalTracks, detail, downloadedTracks, page, playlists, query, splitArtists, tracks]);
 
-  const queueTracks = useMemo(() => {
+  const queueTracks = useMemo<Track[]>(() => {
     const canonicalById = new Map(canonicalTracks.map(track => [track.id, track]));
-    const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
-    const seen = new Set<string>();
-    return queue.map(id => {
+    const resolved: Track[] = queue.map(id => {
       const original = tracks.find(track => track.id === id);
       if (!original) return undefined;
-      const canonical = canonicalById.get(id) || canonicalTracks.find(track => normalize(track.title) === normalize(original.title) && normalize(track.artist) === normalize(original.artist));
-      return canonical;
-    }).filter((track): track is Track => {
-      if (!track) return false;
-      const key = `${normalize(track.title)}|${normalize(track.artist)}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      return (
+        canonicalById.get(id) ||
+        canonicalTracks.find(track => areSongsFuzzyDuplicates(track.title, original.title, track.artist, original.artist, false))
+      );
+    }).filter((track): track is Track => !!track);
+    return deduplicateTrackCollection(resolved, { ignoreArtist: false, cleanTitles: true });
   }, [canonicalTracks, queue, tracks]);
+
   const albumNames = useMemo(() => [...new Set(canonicalTracks.map(track => track.album))], [canonicalTracks]);
+
+  // Smart Artist Deduplication with Avatar-Priority Merging
   const artistNames = useMemo(() => {
-    const set = new Set<string>();
+    void artistAvatarTick;
+    const rawNames: string[] = [];
+    const countByArtist = new Map<string, number>();
     canonicalTracks.forEach(track => {
       const names = splitArtists(track.artist || '');
-      names.forEach(n => set.add(n));
+      names.forEach(n => {
+        rawNames.push(n);
+        const norm = normalizeArtistIdentityKey(n);
+        countByArtist.set(norm, (countByArtist.get(norm) ?? 0) + 1);
+      });
     });
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [canonicalTracks, splitArtists]);
-  const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', downloads: 'Downloads', settings: 'Settings' } as Record<Page, string>)[page];
+    const deduped = deduplicateArtistNames(
+      rawNames,
+      name => getCachedArtistPhoto(name),
+      name => countByArtist.get(normalizeArtistIdentityKey(name)) ?? 0
+    );
+    return deduped.sort((a, b) => a.localeCompare(b));
+  }, [artistAvatarTick, canonicalTracks, splitArtists]);
+
+  useEffect(() => {
+    artistNames.slice(0, 24).forEach(name => {
+      if (!getCachedArtistPhoto(name)) {
+        void fetchArtistPhoto(name);
+      }
+    });
+  }, [artistNames]);
+
+  const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', trending: 'Trending', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', downloads: 'Downloads', settings: 'Settings' } as Record<Page, string>)[page];
+
   const allSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
     if (!q) return [];
-    return canonicalTracks.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q)).slice(0, 7);
+    const matched = canonicalTracks.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
+    return deduplicateTrackCollection(matched, { ignoreArtist: false, cleanTitles: true }).slice(0, 7);
   }, [canonicalTracks, paletteQuery]);
+
+  const deduplicatedMusicResults = useMemo(() => {
+    const dedupedOnline = deduplicateTrackCollection(musicResults, { ignoreArtist: false, cleanTitles: true });
+    if (!allSearchResults.length) return dedupedOnline;
+    return dedupedOnline.filter(
+      onlineTrack =>
+        !allSearchResults.some(localTrack =>
+          areSongsFuzzyDuplicates(
+            String(onlineTrack.name || onlineTrack.title || ''),
+            localTrack.title,
+            String(onlineTrack.artist || ''),
+            localTrack.artist,
+            false
+          )
+        )
+    );
+  }, [allSearchResults, musicResults]);
+
   const albumSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
     return q ? albumNames.filter(name => name.toLowerCase().includes(q)).slice(0, 3) : [];
   }, [albumNames, paletteQuery]);
+
   const artistSearchResults = useMemo(() => {
-    const q = paletteQuery.toLowerCase().trim();
-    return q ? artistNames.filter(name => name.toLowerCase().includes(q)).slice(0, 3) : [];
-  }, [artistNames, paletteQuery]);
+    void artistAvatarTick;
+    const q = paletteQuery.trim();
+    if (!q) return [];
+
+    const combined: string[] = [];
+    const addArtist = (rawName: string, isTrustedOnline = false) => {
+      for (const solo of splitArtists(rawName)) {
+        const clean = solo.trim();
+        if (!clean || clean.length < 2 || isCompoundArtistString(clean)) continue;
+        if (/\b(?:dj|remix|club|radio|topic|official|channel|records)\b/i.test(clean)) continue;
+
+        const matchInfo = doesArtistMatchQuery(clean, q);
+        if (!isTrustedOnline && !matchInfo.matches) continue;
+
+        const singleWordIdx = combined.findIndex(existing => {
+          const exWords = existing.trim().split(/\s+/);
+          const newWords = clean.split(/\s+/);
+          return exWords.length === 1 && newWords.length >= 2 && newWords[0].toLowerCase() === exWords[0].toLowerCase();
+        });
+        if (singleWordIdx !== -1) {
+          combined[singleWordIdx] = clean;
+          continue;
+        }
+
+        const cleanWords = clean.split(/\s+/);
+        if (
+          cleanWords.length === 1 &&
+          combined.some(existing => {
+            const exWords = existing.trim().split(/\s+/);
+            return exWords.length >= 2 && exWords[0].toLowerCase() === cleanWords[0].toLowerCase();
+          })
+        ) {
+          continue;
+        }
+
+        const dupIdx = combined.findIndex(existing => areSameOrDuplicateArtist(existing, clean));
+        if (dupIdx !== -1) {
+          const exScore = scoreArtistAvatarUrl(getCachedArtistPhoto(combined[dupIdx]));
+          const candScore = scoreArtistAvatarUrl(getCachedArtistPhoto(clean));
+          if (candScore > exScore) {
+            combined[dupIdx] = clean;
+          } else if (candScore === exScore) {
+            combined[dupIdx] = pickCanonicalArtistDisplayName(combined[dupIdx], clean);
+          }
+          continue;
+        }
+        combined.push(clean);
+      }
+    };
+
+    // 1. Official canonical online artists first (Deezer + Apple Music/iTunes spell-corrected with valid HD avatars)
+    for (const name of onlineArtistResults) {
+      addArtist(name, true);
+    }
+    // 2. Local library artists matching the query
+    for (const name of artistNames) {
+      addArtist(name, false);
+    }
+    // 3. Solo artists from unified search results matching the query
+    for (const track of deduplicatedMusicResults) {
+      addArtist(String(track?.artist || ''), false);
+    }
+    return deduplicateArtistNames(combined, name => getCachedArtistPhoto(name)).slice(0, 6);
+  }, [artistAvatarTick, artistNames, deduplicatedMusicResults, onlineArtistResults, paletteQuery, splitArtists]);
   const playlistSearchResults = useMemo(() => {
     const q = paletteQuery.toLowerCase().trim();
     return q ? playlists.filter(playlist => `${playlist.name} ${playlist.description}`.toLowerCase().includes(q)).slice(0, 3) : [];
@@ -2986,18 +3960,140 @@ useEffect(() => {
     isDownloadSuccess: track => Boolean(latestActions.current!.isDownloadSuccess?.(track)),
   }), []);
 
+  const [viewHeroPhotoUrl, setViewHeroPhotoUrl] = useState<string | null>(null);
+  const [viewHeroAmbient, setViewHeroAmbient] = useState<Hue4 | null>(null);
+
+  const favoriteTracksList = useMemo(
+    () => canonicalTracks.filter(track => track.favorite),
+    [canonicalTracks]
+  );
+
+  const favoriteArtistNames = useMemo(() => {
+    void artistAvatarTick;
+    const names: string[] = [];
+    favoriteTracksList.forEach(t => {
+      splitArtists(t.artist || '').forEach(a => names.push(a));
+    });
+    return deduplicateArtistNames(names, name => getCachedArtistPhoto(name));
+  }, [artistAvatarTick, favoriteTracksList, splitArtists]);
+
+  useEffect(() => {
+    let alive = true;
+    if (detail?.kind === 'artist' && detail.name) {
+      const cached = getCachedArtistPhoto(detail.name);
+      const fallbackImg =
+        deduplicatedArtistTopTracks[0]?.image ||
+        filteredTracks[0]?.image ||
+        (filteredTracks[0] ? getStickyCoverUrl(filteredTracks[0]) : '') ||
+        null;
+      const seedAmbient = composeArt(`artist:${detail.name}`).ambient;
+      if (cached) {
+        setViewHeroPhotoUrl(cached);
+        sampleImageUrlAmbient(cached).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else {
+        setViewHeroPhotoUrl(fallbackImg);
+        setViewHeroAmbient(seedAmbient);
+        fetchArtistPhoto(detail.name).then(url => {
+          if (!alive) return;
+          const resolved = url || fallbackImg;
+          setViewHeroPhotoUrl(resolved);
+          if (resolved) {
+            sampleImageUrlAmbient(resolved).then(found => {
+              if (alive) setViewHeroAmbient(found ?? seedAmbient);
+            }).catch(() => {});
+          }
+        });
+      }
+      return () => { alive = false; };
+    }
+
+    if (page === 'favorites' && !detail) {
+      const defaultFavAmbient: Hue4 = [336, 348, 318, 90];
+      const topFavArtist = favoriteArtistNames[0];
+      const leadTrack = favoriteTracksList[0] || canonicalTracks[0];
+      const trackCover = leadTrack ? (leadTrack.image || getStickyCoverUrl(leadTrack) || null) : null;
+      if (topFavArtist) {
+        const cached = getCachedArtistPhoto(topFavArtist);
+        if (cached) {
+          setViewHeroPhotoUrl(cached);
+          sampleImageUrlAmbient(cached).then(found => {
+            if (alive) setViewHeroAmbient(found ?? defaultFavAmbient);
+          }).catch(() => {
+            if (alive) setViewHeroAmbient(defaultFavAmbient);
+          });
+        } else {
+          setViewHeroPhotoUrl(trackCover);
+          setViewHeroAmbient(defaultFavAmbient);
+          fetchArtistPhoto(topFavArtist).then(url => {
+            if (!alive) return;
+            const finalUrl = url || trackCover;
+            setViewHeroPhotoUrl(finalUrl);
+            if (finalUrl) {
+              sampleImageUrlAmbient(finalUrl).then(found => {
+                if (alive) setViewHeroAmbient(found ?? defaultFavAmbient);
+              }).catch(() => {});
+            }
+          });
+        }
+      } else {
+        setViewHeroPhotoUrl(trackCover);
+        if (trackCover) {
+          sampleImageUrlAmbient(trackCover).then(found => {
+            if (alive) setViewHeroAmbient(found ?? defaultFavAmbient);
+          }).catch(() => {
+            if (alive) setViewHeroAmbient(defaultFavAmbient);
+          });
+        } else {
+          setViewHeroAmbient(defaultFavAmbient);
+        }
+      }
+      return () => { alive = false; };
+    }
+
+    if ((detail?.kind === 'album' || detail?.kind === 'playlist') && detail.name) {
+      const lead = filteredTracks[0];
+      const coverUrl = lead ? (lead.image || getStickyCoverUrl(lead) || null) : null;
+      const seedAmbient = composeArt(`${detail.kind}:${detail.name}`).ambient;
+      setViewHeroPhotoUrl(coverUrl);
+      if (coverUrl) {
+        sampleImageUrlAmbient(coverUrl).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else if (lead?.artwork instanceof Blob) {
+        sampleArtworkAmbient(lead.artwork).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else {
+        setViewHeroAmbient(seedAmbient);
+      }
+      return () => { alive = false; };
+    }
+
+    setViewHeroPhotoUrl(null);
+    setViewHeroAmbient(null);
+    return () => { alive = false; };
+  }, [canonicalTracks, deduplicatedArtistTopTracks, detail?.kind, detail?.name, favoriteArtistNames, favoriteTracksList, filteredTracks, page]);
+
   const moodIndex = Math.floor(greetingHour / 2);
-  const atmosphere = atmos;
+  const atmosphere = atmos ?? viewHeroAmbient;
   // The row indicator and the equalizer borrow the colour the app already derives from the
   // playing artwork (sampled hue, or the seeded cover palette when a song has no artwork),
   // so the accent always belongs to the music instead of a fixed purple.
   const rowAccent = useMemo(() => {
-    const source = atmos ?? (activeTrack ? artFor(activeTrack).ambient : null);
+    const source = atmosphere ?? (activeTrack ? artFor(activeTrack).ambient : null);
     if (!source) return null;
     const hue = Math.round(source[0]);
     const saturation = Math.max(58, Math.min(92, Math.round(source[3])));
     return `hsl(${hue} ${saturation}% 64%)`;
-  }, [atmos, activeTrack]);
+  }, [atmosphere, activeTrack]);
   const changeVolume = (value: number) => {
     if (audio.current) audio.current.volume = value;
     if (ytAudioPlayerRef.current) {
@@ -3017,16 +4113,20 @@ useEffect(() => {
   };
 
   const pageDescription: Record<Page, string> = {
-    home: 'Your music, kept on this Mac.', songs: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your local library`,
+    home: 'Your music, kept on this Mac.', songs: `${canonicalTracks.length} ${canonicalTracks.length === 1 ? 'song' : 'songs'} in your local library`,
+    trending: 'Discover what is trending right now.',
     albums: `${albumNames.length} ${albumNames.length === 1 ? 'album' : 'albums'} found in your files`,
     artists: `${artistNames.length} ${artistNames.length === 1 ? 'artist' : 'artists'} found in your files`,
     playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, downloads: `${downloadedTracks.length} saved for offline listening on this device.`, settings: 'A few quiet preferences.',
   };
 
+  const artistChartCount = displayedArtistTopTracks.length;
+  const artistTotalChartCount = deduplicatedArtistTopTracks.length;
+
   const renderDeepGlass = () => <div className="void-app" data-ambient={libraryOpen && !detail ? 'library' : page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'} data-playing={isPlaying ? '' : undefined} data-library={libraryOpen && !detail ? '' : undefined}
     style={{ ...(atmosphere ? { '--h1': atmosphere[0], '--h2': atmosphere[1], '--h3': atmosphere[2], '--s': `${atmosphere[3]}%` } : null), ...(rowAccent ? { '--row-accent': rowAccent } : null) } as CSSProperties}>
     
-    <div className="ambient" aria-hidden="true" />
+    {page === 'home' && !detail && !libraryOpen && <div className="ambient" aria-hidden="true" />}
 
     {/* --- GLOBAL SPOTIFY CANVAS BACKGROUND VIDEO --- */}
     {canvasVideoId && canvasEnabled && canvasBootId && (
@@ -3063,7 +4163,26 @@ useEffect(() => {
       </aside>
       <main className="main-area">
         <header className="topbar">
-          <div className="top-left"><span className="eclipse mobile-eclipse" /><span className="brand-word mobile-brand">VOID</span><span className="crumb">{detail ? title : page === 'home' ? 'A quiet place for your music' : 'Your library'}</span></div>
+          <div className="top-left">
+            <span className="eclipse mobile-eclipse" />
+            <span className="brand-word mobile-brand">VOID</span>
+            {detail ? (
+              <button
+                type="button"
+                className="crumb topbar-crumb-back"
+                onClick={() => { setDetail(null); setQuery(''); }}
+                aria-label="Back"
+                data-testid="button-topbar-back"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+                <span>{title}</span>
+              </button>
+            ) : (
+              <span className="crumb">{page === 'home' ? 'A quiet place for your music' : 'Your library'}</span>
+            )}
+          </div>
           <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
 
@@ -3105,30 +4224,29 @@ useEffect(() => {
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
           {isReady && page === 'home' && !detail && !libraryOpen && <>
             <div className="welcome">
-              <div><h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1><DgReveal as="p" dir="up" index={1} className="welcome-copy">A quiet place for the music already yours.</DgReveal>{tracks.length ? <DgReveal as="p" dir="up" index={2} className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</DgReveal> : null}</div>
-              <DgReveal dir="up" index={3}>
-                <button className="button add-music" onClick={openImport} disabled={importing} data-testid="button-import-home"><Plus />{importing ? 'Adding files…' : 'Add music'}</button>
-              </DgReveal>
+              <div>
+                <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1>
+                <DgReveal as="p" dir="up" index={1} className="welcome-copy">A quiet place for the music already yours.</DgReveal>
+                {tracks.length ? <DgReveal as="p" dir="up" index={2} className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</DgReveal> : null}
+              </div>
             </div>
-            <DgReveal as="section" dir="depth" index={4} className="mood" aria-label={moodLabelFor(greetingHour)}>
-  <div className="mood-orb-stage" ref={orbRef} onPointerMove={moveOrb} onPointerLeave={resetOrb} aria-hidden="true" data-testid="mood-orb">
-    <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
-      <div className="vinyl-disc">
-        <div className="vinyl-label">
-          {activeTrack ? <Cover track={activeTrack} large /> : <span className="vinyl-label-blank" />}
-        </div>
-      </div>
-      <i className="vinyl-light" />
-    </div>
-  </div>
-  <div className="mood-copy">
-    <div className="mood-label">{moodLabelFor(greetingHour)}</div>
-    <h2 className="glass-ink">{moods[moodIndex]}</h2>
-    <button className="button glass" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something">
-      <Play />Play something for me
-    </button>
-  </div>
-</DgReveal>
+            <DgReveal as="section" dir="depth" index={2} className="mood" aria-label={moodLabelFor(greetingHour)} onPointerMove={moveOrb} onPointerLeave={resetOrb}>
+              <div className="mood-orb-stage" ref={orbRef} aria-hidden="true" data-testid="mood-orb">
+                <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
+                  <div className="vinyl-disc">
+                    <div className="vinyl-label">
+                      {activeTrack ? <Cover track={activeTrack} large /> : <span className="vinyl-label-blank" />}
+                    </div>
+                  </div>
+                  <i className="vinyl-light" />
+                </div>
+              </div>
+              <div className="mood-copy">
+                <div className="mood-label">{moodLabelFor(greetingHour)}</div>
+                <h2 className="glass-ink">{moods[moodIndex]}</h2>
+                <button className="button glass mood-play-btn" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something"><Play size={13} fill="currentColor" />Play something for me</button>
+              </div>
+            </DgReveal>
 
 {tracks.length ? <>
   <div className="home-section">
@@ -3180,11 +4298,11 @@ useEffect(() => {
             <div className="library-grid">
               {([
                 { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: countLabel(downloadedTracks.length, 'download') },
+                { id: 'favorites' as Page, label: 'Favorites', icon: Heart, count: countLabel(canonicalTracks.filter(track => track.favorite).length, 'song') },
                 { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(albumNames.length, 'album') },
                 { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(artistNames.length, 'artist') },
                 { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
                 { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(track => track.lastPlayedAt).length} played` },
-                { id: 'queue' as Page, label: 'Queue', icon: AudioLines, count: countLabel(queueTracks.length, 'song') },
               ]).map((entry, index) => {
                 const Icon = entry.icon;
                 return <DgReveal key={entry.id} dir="depth" index={index}>
@@ -3201,35 +4319,420 @@ useEffect(() => {
               })}
             </div>
           </div>}
-          {!libraryOpen && page !== 'home' && page !== 'settings' && <div className="dg-page" key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div className="eyebrow" style={{ marginBottom: 2 }}>{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
-            <div className="section-heading" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
-              <div><h1 className="page-title" style={{ margin: 0 }}>{title}</h1><p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{pageDescription[page]}</p></div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {page === 'playlists' && !detail && <button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
-                {page === 'queue' && queueTracks.length > 0 && <button className="button" onClick={clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
-                {(page === 'songs' || page === 'albums' || page === 'artists' || page === 'favorites' || page === 'recent' || page === 'playlists') && <input className="filter-input" aria-label={`Filter ${title}`} placeholder="Filter this view…" value={query} onChange={event => setQuery(event.target.value)} data-testid="input-filter-library" />}
+          {!libraryOpen && page === 'trending' && !detail && (
+            !activeTrendingLang ? (
+              <div className="dg-page library-hub" key="trending-hub">
+                <div className="eyebrow" style={{ marginBottom: 2 }}>Discover</div>
+                <div className="section-heading trending-page-hero-head" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
+                  <div>
+                    <h1 className="page-title" style={{ margin: 0 }}>Trending</h1>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>Top 200 trending songs across languages</p>
+                  </div>
+                  <div className="trending-lang-search-wrap" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      className="filter-input"
+                      aria-label="Search languages"
+                      placeholder="Search languages…"
+                      value={trendingQuery}
+                      onChange={event => setTrendingQuery(event.target.value)}
+                      data-testid="input-filter-trending-languages"
+                    />
+                  </div>
+                </div>
+                <div className="trending-lang-grid">
+                  {displayedTrendingLanguages.map((lang, index) => (
+                    <DgReveal key={lang.id} dir="depth" index={index}>
+                      <TrendingLanguageCard
+                        lang={lang}
+                        onSelect={openTrendingLanguage}
+                      />
+                    </DgReveal>
+                  ))}
+                </div>
               </div>
-            </div>
-            {detail?.kind === 'playlist' && <div className="track-toolbar"><button className="button primary" onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-playlist"><Play />Play playlist</button><div style={{ display: 'flex', gap: 7 }}><button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button><button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button></div></div>}
-            {detail?.kind === 'album' || detail?.kind === 'artist' ? <DgReveal as="div" dir="depth" className="detail-hero"><Cover track={filteredTracks[0]} large identity={`${detail.kind}:${detail.name}`} /><div><div className="eyebrow">{detail.kind}</div><h1>{detail.name}</h1><p>{filteredTracks.length} {filteredTracks.length === 1 ? 'song' : 'songs'} in this collection</p><button className="button primary" style={{ marginTop: 19 }} onClick={() => playList(filteredTracks)} disabled={!filteredTracks.length} data-testid="button-play-collection"><Play />Play</button></div></DgReveal> : null}
-            {['songs', 'playlists', 'favorites', 'queue', 'downloads'].includes(page) && (
-              <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            ) : (
+              <div className="dg-page" key={`trending:${activeTrendingLang.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div className="trending-chart-topbar">
+                  <button
+                    className="crumb trending-back-btn"
+                    style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }}
+                    onClick={() => openTrendingLanguage(null)}
+                    data-testid="button-back-trending"
+                  >
+                    ← Trending
+                  </button>
+                </div>
+                <div className="trending-chart-header">
+                  <div>
+                    <h1 className="page-title" style={{ margin: 0 }}>{activeTrendingLang.label}</h1>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{`Top 200 most trending songs · 40 Top ${activeTrendingLang.id === 'arabic' ? 'Arab' : activeTrendingLang.id === 'english' ? 'Global' : activeTrendingLang.label} Artists`}</p>
+                  </div>
+                  <input
+                    className="filter-input trending-chart-search"
+                    aria-label={`Search ${activeTrendingLang.label} trending`}
+                    placeholder="Search this chart…"
+                    value={trendingQuery}
+                    onChange={event => setTrendingQuery(event.target.value)}
+                    data-testid="input-filter-trending-tracks"
+                  />
+                </div>
+                {displayedTrendingTracks.length > 0 ? (
+                  <TrackRows
+                    items={displayedTrendingTracks as any}
+                    showIndex={true}
+                    activeId={activeId}
+                    isPlaying={isPlaying}
+                    page={page}
+                    actions={{
+                      ...rowActions,
+                      play: (track, list) => {
+                        setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
+                        rowActions.play(track, list);
+                      },
+                    }}
+                    downloadingIds={downloadingIds}
+                    recentlyDownloadedIds={recentlyDownloadedIds}
+                    downloadedCount={downloadedTracks.length}
+                  />
+                ) : trendingQuery.trim().length > 0 ? (
+                  <div className="empty-state">
+                    <strong>No matching songs</strong>
+                    <p>Try another search term in {activeTrendingLang.label}.</p>
+                  </div>
+                ) : null}
+              </div>
+            )
+          )}
+          {!libraryOpen && page !== 'home' && page !== 'settings' && page !== 'trending' && <div className={`dg-page${detail?.kind === 'artist' || page === 'favorites' || detail?.kind === 'album' || detail?.kind === 'playlist' ? ' dg-page--cinematic' : ''}${detail?.kind === 'artist' ? ' dg-page--artist-view' : ''}`} key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: detail?.kind === 'artist' ? 0 : 6 }}>
+            {detail?.kind === 'artist' ? (
+              <>
+                <DgReveal
+                  as="section"
+                  dir="depth"
+                  className="cinematic-hero-banner artist-hero-banner"
+                  style={
+                    viewHeroAmbient
+                      ? ({
+                          '--hero-h1': viewHeroAmbient[0],
+                          '--hero-h2': viewHeroAmbient[1],
+                          '--hero-h3': viewHeroAmbient[2],
+                          '--hero-s': `${viewHeroAmbient[3]}%`,
+                        } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  <div className="cinematic-hero-backdrop" aria-hidden="true">
+                    {viewHeroPhotoUrl ? (
+                      <>
+                        <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-blur" decoding="async" />
+                        <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                      </>
+                    ) : (
+                      <>
+                        <div className="cinematic-hero-bg-blur cinematic-hero-bg-fallback">
+                          <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} square />
+                        </div>
+                        <div className="cinematic-hero-bg-img cinematic-hero-bg-fallback">
+                          <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} square />
+                        </div>
+                      </>
+                    )}
+                    <div className="cinematic-hero-gradient" />
+                  </div>
+
+                  <div className="cinematic-hero-topbar">
+                    <button
+                      type="button"
+                      className="cinematic-back-btn cinematic-back-btn--chevron"
+                      onClick={() => { setDetail(null); setQuery(''); }}
+                      aria-label="Back to artists"
+                      title="Back to artists"
+                      data-testid="button-back-artists"
+                    >
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="15 18 9 12 15 6" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="cinematic-hero-body">
+                    <div className="cinematic-hero-portrait artist-hero-portrait" aria-hidden="true">
+                      <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} />
+                    </div>
+                    <div className="cinematic-hero-copy">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <div className="artist-verified-row">
+                        <VerifiedArtistBadge />
+                        <span className="artist-verified-label">Verified Artist</span>
+                      </div>
+                      <p className="cinematic-hero-subtitle artist-hero-subtitle">
+                        {artistViewTab === 'top100'
+                          ? artistTopLoading && !artistChartCount
+                            ? `Loading ${detail.name}’s top songs…`
+                            : `${artistChartCount} ${artistChartCount === 1 ? 'Top song' : 'Top songs'} ranked by global popularity`
+                          : `${filteredTracks.length} ${filteredTracks.length === 1 ? 'song' : 'songs'} saved in your library`}
+                      </p>
+                    </div>
+                  </div>
+                </DgReveal>
+
+                <div className="artist-view-tabs" role="tablist" aria-label="Artist songs view">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={artistViewTab === 'top100'}
+                    className={`artist-view-tab ${artistViewTab === 'top100' ? 'active' : ''}`}
+                    onClick={() => setArtistViewTab('top100')}
+                  >
+                    Top
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={artistViewTab === 'library'}
+                    className={`artist-view-tab ${artistViewTab === 'library' ? 'active' : ''}`}
+                    onClick={() => setArtistViewTab('library')}
+                  >
+                    Library
+                  </button>
+                </div>
+              </>
+            ) : page === 'favorites' && !detail ? (
+              <DgReveal
+                as="section"
+                dir="depth"
+                className="cinematic-hero-banner favorites-hero-banner"
+                style={
+                  viewHeroAmbient
+                    ? ({
+                        '--hero-h1': viewHeroAmbient[0],
+                        '--hero-h2': viewHeroAmbient[1],
+                        '--hero-h3': viewHeroAmbient[2],
+                        '--hero-s': `${viewHeroAmbient[3]}%`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              >
+                <div className="cinematic-hero-backdrop" aria-hidden="true">
+                  {viewHeroPhotoUrl ? (
+                    <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                  ) : null}
+                  <div className="cinematic-hero-gradient" />
+                </div>
+
+                <div className="cinematic-hero-topbar">
+                  <button
+                    type="button"
+                    className="cinematic-back-btn cinematic-back-btn--chevron"
+                    onClick={() => { setPageAndRoute('home'); setQuery(''); }}
+                    aria-label="Back to home"
+                    title="Back to home"
+                    data-testid="button-back-favorites"
+                  >
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="cinematic-hero-body">
+                  <div className="cinematic-hero-portrait favorites-hero-portrait" aria-hidden="true">
+                    {favoriteArtistNames[0] ? (
+                      <ArtistPhoto artistName={favoriteArtistNames[0]} fallbackTrack={filteredTracks[0]} />
+                    ) : filteredTracks[0] ? (
+                      <Cover track={filteredTracks[0]} large identity="favorites:lead" />
+                    ) : (
+                      <div className="favorites-heart-emblem">
+                        <Heart size={42} fill="currentColor" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="cinematic-hero-copy">
+                    <h1 className="cinematic-artist-title">Favorites</h1>
+                    <div className="artist-verified-row">
+                      <VerifiedArtistBadge label="Verified Collection" />
+                      <span className="artist-verified-label">Verified Collection</span>
+                    </div>
+                    <p className="cinematic-hero-subtitle artist-hero-subtitle">
+                      {filteredTracks.length > 0
+                        ? `${filteredTracks.length} ${filteredTracks.length === 1 ? 'Top song' : 'Top songs'} saved in your favorites`
+                        : 'The songs and artists you’ve kept close.'}
+                    </p>
+                  </div>
+                </div>
+              </DgReveal>
+            ) : detail?.kind === 'album' ? (
+              <DgReveal
+                as="section"
+                dir="depth"
+                className="cinematic-hero-banner album-hero-banner"
+                style={
+                  viewHeroAmbient
+                    ? ({
+                        '--hero-h1': viewHeroAmbient[0],
+                        '--hero-h2': viewHeroAmbient[1],
+                        '--hero-h3': viewHeroAmbient[2],
+                        '--hero-s': `${viewHeroAmbient[3]}%`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              >
+                <div className="cinematic-hero-backdrop" aria-hidden="true">
+                  {viewHeroPhotoUrl ? (
+                    <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                  ) : null}
+                  <div className="cinematic-hero-gradient" />
+                </div>
+                <div className="cinematic-hero-topbar">
+                  <button
+                    type="button"
+                    className="cinematic-back-btn"
+                    onClick={() => { setDetail(null); setQuery(''); }}
+                    data-testid="button-back-albums"
+                  >
+                    ← Albums
+                  </button>
+                  <input
+                    className="filter-input cinematic-filter-input"
+                    aria-label={`Filter ${detail.name}`}
+                    placeholder="Filter album…"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    data-testid="input-filter-library"
+                  />
+                </div>
+                <div className="cinematic-hero-body">
+                  <div className="cinematic-hero-portrait" aria-hidden="true">
+                    <Cover track={filteredTracks[0]} large identity={`album:${detail.name}`} />
+                  </div>
+                  <div className="cinematic-hero-copy">
+                    <div className="cinematic-eyebrow">
+                      <span className="cinematic-verified-pill">Album</span>
+                      <span className="cinematic-eyebrow-sep">·</span>
+                      <span>{countLabel(filteredTracks.length, 'song')}</span>
+                    </div>
+                    <div className="cinematic-title-row">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <VerifiedArtistBadge label="Verified Release" />
+                    </div>
+                    <p className="cinematic-hero-subtitle">
+                      {filteredTracks[0]?.artist ? `${filteredTracks[0].artist} · ` : ''}{countLabel(filteredTracks.length, 'song')} in this collection
+                    </p>
+                    <div className="cinematic-hero-actions">
+                      <button
+                        className="button primary cinematic-play-btn"
+                        onClick={() => playList(filteredTracks)}
+                        disabled={!filteredTracks.length}
+                        data-testid="button-play-collection"
+                      >
+                        <Play />
+                        {filteredTracks.length > 0 ? `Play All (${filteredTracks.length})` : 'Play'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </DgReveal>
+            ) : detail?.kind === 'playlist' ? (
+              <DgReveal
+                as="section"
+                dir="depth"
+                className="cinematic-hero-banner playlist-hero-banner"
+                style={
+                  viewHeroAmbient
+                    ? ({
+                        '--hero-h1': viewHeroAmbient[0],
+                        '--hero-h2': viewHeroAmbient[1],
+                        '--hero-h3': viewHeroAmbient[2],
+                        '--hero-s': `${viewHeroAmbient[3]}%`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              >
+                <div className="cinematic-hero-backdrop" aria-hidden="true">
+                  {viewHeroPhotoUrl ? (
+                    <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                  ) : null}
+                  <div className="cinematic-hero-gradient" />
+                </div>
+                <div className="cinematic-hero-topbar">
+                  <button
+                    type="button"
+                    className="cinematic-back-btn"
+                    onClick={() => { setDetail(null); setQuery(''); }}
+                    data-testid="button-back-playlists"
+                  >
+                    ← Playlists
+                  </button>
+                  <input
+                    className="filter-input cinematic-filter-input"
+                    aria-label={`Filter ${detail.name}`}
+                    placeholder="Filter playlist…"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    data-testid="input-filter-library"
+                  />
+                </div>
+                <div className="cinematic-hero-body">
+                  <div className="cinematic-hero-portrait" aria-hidden="true">
+                    <Cover track={filteredTracks[0]} large kind="list" identity={`playlist:${detail.name}`} />
+                  </div>
+                  <div className="cinematic-hero-copy">
+                    <div className="cinematic-eyebrow">
+                      <span className="cinematic-verified-pill">Playlist</span>
+                      <span className="cinematic-eyebrow-sep">·</span>
+                      <span>{countLabel(filteredTracks.length, 'song')}</span>
+                    </div>
+                    <div className="cinematic-title-row">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <VerifiedArtistBadge label="Curated Playlist" />
+                    </div>
+                    <p className="cinematic-hero-subtitle">
+                      {countLabel(filteredTracks.length, 'song')} curated in your collection
+                    </p>
+                    <div className="cinematic-hero-actions">
+                      <button
+                        className="button primary cinematic-play-btn"
+                        onClick={() => playList(filteredTracks)}
+                        disabled={!filteredTracks.length}
+                        data-testid="button-play-playlist"
+                      >
+                        <Play />
+                        {filteredTracks.length > 0 ? `Play Playlist (${filteredTracks.length})` : 'Play playlist'}
+                      </button>
+                      <button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button>
+                      <button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button>
+                    </div>
+                  </div>
+                </div>
+              </DgReveal>
+            ) : (
+              <div className="collection-header-bar">
+                <div className="collection-header-copy">
+                  <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
+                  <h1 className="page-title">{title}</h1>
+                  <p className="page-subtitle">{pageDescription[page]}</p>
+                </div>
+                <div className="collection-header-actions">
+                  {page === 'playlists' && !detail && <button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
+                  {page === 'queue' && queueTracks.length > 0 && <button className="button" onClick={clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
+                  {(page === 'songs' || page === 'albums' || page === 'artists' || page === 'recent' || page === 'playlists') && <input className="filter-input" aria-label={`Filter ${title}`} placeholder="Filter this view…" value={query} onChange={event => setQuery(event.target.value)} data-testid="input-filter-library" />}
+                </div>
+              </div>
+            )}
+            {selectionMode && ['songs', 'playlists', 'favorites', 'queue', 'downloads'].includes(page) && (
+              <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '6px 0 8px' }}>
                 <span className="crumb">
-                  {page === 'songs' ? 'Audio files imported into VOID' : page === 'playlists' ? `Playlist: ${detail?.name ?? ''}` : page === 'favorites' ? 'Your favorite songs' : page === 'downloads' ? 'Saved for offline listening' : 'Current playback queue'}
+                  {selectedSongIds.length} selected
                 </span>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {selectionMode && selectedSongIds.length > 0 && (
+                  {selectedSongIds.length > 0 && (
                     <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
                       <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
                     </button>
                   )}
-                  {selectionMode && (
-                    <button className="button" onClick={() => toggleSelectAllSongs(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks)} data-testid="button-select-all">
-                      {(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)) ? 'Deselect All' : 'Select All'}
-                    </button>
-                  )}
-                  {page === 'songs' && <button className="button" onClick={openImport} data-testid="button-add-songs"><Plus />Add music</button>}
+                  <button className="button" onClick={() => toggleSelectAllSongs(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks)} data-testid="button-select-all">
+                    {(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)) ? 'Deselect All' : 'Select All'}
+                  </button>
                 </div>
               </div>
             )}
@@ -3247,12 +4750,12 @@ useEffect(() => {
                 <div className="cover-grid">
                   {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map((name, i) => {
                     const representative = canonicalTracks.find(track => {
-                      const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
-                      return artists.includes(name.toLowerCase());
+                      const artists = splitArtists(track.artist || '');
+                      return artists.some(a => areSameOrDuplicateArtist(a, name));
                     });
                     const songCount = canonicalTracks.filter(track => {
-                      const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
-                      return artists.includes(name.toLowerCase());
+                      const artists = splitArtists(track.artist || '');
+                      return artists.some(a => areSameOrDuplicateArtist(a, name));
                     }).length;
                     return (
                       <DgReveal key={name} dir="depth" index={i}>
@@ -3277,25 +4780,58 @@ useEffect(() => {
               {playlists.map((playlist, i) => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <DgReveal key={playlist.id} dir="depth" index={i}><button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button></DgReveal>; })}
               {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
             </div>}
-            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || page === 'downloads' || detail) && ((page === 'downloads' ? downloadedTracks : filteredTracks).length ? (
-              <TrackRows 
-                items={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks : filteredTracks) as Track[]} 
-                showIndex={page === 'queue'} 
-                reorder={page === 'queue' || detail?.kind === 'playlist'} 
-                activeId={activeId} 
-                isPlaying={isPlaying}
-                page={page} 
-                actions={rowActions} 
-                selectedIds={selectedSongIds}
-                toggleSelect={toggleSelectSong}
-                toggleSelectAll={toggleSelectionMode}
-                isAllSelected={(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id))}
-                selectionMode={selectionMode}
-                deletingIds={deletingDownloadIds}
-                downloadingIds={downloadingIds}
-                recentlyDownloadedIds={recentlyDownloadedIds}
-                downloadedCount={downloadedTracks.length}
-              />
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || page === 'downloads' || detail) && ((
+              detail?.kind === 'artist' && artistViewTab === 'top100'
+                ? visibleArtistTopTracks
+                : page === 'downloads'
+                  ? downloadedTracks
+                  : filteredTracks
+            ).length ? (
+              <>
+                <TrackRows 
+                  items={(
+                    detail?.kind === 'artist' && artistViewTab === 'top100'
+                      ? visibleArtistTopTracks
+                      : page === 'queue'
+                        ? queueTracks
+                        : page === 'downloads'
+                          ? downloadedTracks
+                          : filteredTracks
+                  ) as Track[]} 
+                  showIndex={page === 'queue' || page === 'favorites' || (detail?.kind === 'artist' && artistViewTab === 'top100')} 
+                  reorder={page === 'queue' || detail?.kind === 'playlist'} 
+                  activeId={activeId} 
+                  isPlaying={isPlaying}
+                  page={page} 
+                  actions={rowActions} 
+                  selectedIds={detail?.kind === 'artist' ? [] : selectedSongIds}
+                  toggleSelect={detail?.kind === 'artist' ? undefined : toggleSelectSong}
+                  toggleSelectAll={detail?.kind === 'artist' ? undefined : toggleSelectionMode}
+                  isAllSelected={detail?.kind === 'artist' ? false : ((page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)))}
+                  selectionMode={detail?.kind === 'artist' ? false : selectionMode}
+                  deletingIds={deletingDownloadIds}
+                  downloadingIds={downloadingIds}
+                  recentlyDownloadedIds={recentlyDownloadedIds}
+                  downloadedCount={downloadedTracks.length}
+                />
+                {detail?.kind === 'artist' && artistViewTab === 'top100' && displayedArtistTopTracks.length > 5 && (
+                  <div className="artist-see-more-row">
+                    <button
+                      type="button"
+                      className="artist-see-more-btn"
+                      onClick={() => setArtistTopExpanded(v => !v)}
+                      data-testid="button-artist-see-more"
+                    >
+                      {artistTopExpanded ? 'See less' : 'See more'}
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : detail?.kind === 'artist' && artistViewTab === 'top100' && artistTopLoading ? (
+              <div className="empty-state">
+                <strong>Loading {detail.name}’s top songs…</strong>
+                <p>Fetching ranked discography and high-bitrate streams.</p>
+              </div>
             ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
@@ -3411,7 +4947,19 @@ useEffect(() => {
             <button
               key={item.id}
               className={`mobile-nav-item ${active ? 'active' : ''}`}
-              onClick={() => { if (item.id === 'library') { setDetail(null); setLibraryOpen(true); } else setPageAndRoute(item.id as Page); }}
+              onClick={() => {
+                if (item.id === 'library') {
+                  setDetail(null);
+                  setLibraryOpen(true);
+                  setSelectionMode(false);
+                  setSelectedSongIds([]);
+                  setArtistTopExpanded(false);
+                  setActiveTrendingLangId(null);
+                  setTrendingQuery('');
+                } else {
+                  setPageAndRoute(item.id as Page);
+                }
+              }}
               aria-label={item.label}
               aria-current={active ? 'page' : undefined}
             >
@@ -3497,14 +5045,37 @@ useEffect(() => {
           data-testid="input-search-palette"
         />
 
+        {paletteQuery.trim() && (
+          <div className="palette-tabs" role="tablist" aria-label="Search category">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={paletteTab === 'songs'}
+              className={`palette-tab ${paletteTab === 'songs' ? 'active' : ''}`}
+              onClick={() => setPaletteTab('songs')}
+            >
+              Songs
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={paletteTab === 'artists'}
+              className={`palette-tab ${paletteTab === 'artists' ? 'active' : ''}`}
+              onClick={() => setPaletteTab('artists')}
+            >
+              Artists
+            </button>
+          </div>
+        )}
+
         <div className="palette-results">
 
-          {allSearchResults.map(track => {
+          {paletteTab === 'songs' && allSearchResults.map(track => {
             const localQuality = getTrackQualityBadge(track);
             return (
               <button
                 key={track.id}
-                className="palette-result"
+                className="palette-result search-music-result"
                 onClick={() => {
                   handleSaveHistory(paletteQuery);
                   void playTrack(track);
@@ -3517,7 +5088,7 @@ useEffect(() => {
                   <span className="track-title">{track.title}</span>
                   <span className="track-sub">{track.artist} · {track.album}</span>
                 </span>
-                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span className="search-result-actions">
                   {localQuality && <QualityBadge tier={localQuality} track={track} compact />}
                   <Play size={13} />
                 </span>
@@ -3525,7 +5096,7 @@ useEffect(() => {
             );
           })}
 
-          {musicResults.map(track => {
+          {paletteTab === 'songs' && deduplicatedMusicResults.map(track => {
             const sourceLabel = formatProviderLabel(track.source, track) || 'Online';
             const qualityTier = getTrackQualityBadge(track);
             const isNonDownloadable =
@@ -3620,65 +5191,39 @@ useEffect(() => {
                     );
                   })()}
                   {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
-                  <span className="crumb search-source-label">{sourceLabel}</span>
                 </span>
               </div>
             );
           })}
 
-          {albumSearchResults.map(name => (
-            <button
-              key={`album-${name}`}
-              className="palette-result"
-              onClick={() => {
-                handleSaveHistory(paletteQuery);
-                setPaletteOpen(false);
-                openCollection('album', name);
-              }}
-              data-testid={`search-album-${name}`}
-            >
-              <Disc3 size={16} />
-              <span>{name}</span>
-              <span className="crumb" style={{ marginLeft: 'auto' }}>Album</span>
-            </button>
-          ))}
-
-          {artistSearchResults.map(name => (
-            <button
-              key={`artist-${name}`}
-              className="palette-result"
-              onClick={() => {
-                handleSaveHistory(paletteQuery);
-                setPaletteOpen(false);
-                openCollection('artist', name);
-              }}
-              data-testid={`search-artist-${name}`}
-            >
-              <Mic2 size={16} />
-              <span>{name}</span>
-              <span className="crumb" style={{ marginLeft: 'auto' }}>Artist</span>
-            </button>
-          ))}
-
-          {playlistSearchResults.map(playlist => (
-            <button
-              key={playlist.id}
-              className="palette-result"
-              onClick={() => {
-                handleSaveHistory(paletteQuery);
-                setPaletteOpen(false);
-                setPage('playlists');
-                setLocation('/playlists');
-                setDetail({ kind: 'playlist', name: playlist.name });
-                setQuery('');
-              }}
-              data-testid={`search-playlist-${playlist.id}`}
-            >
-              <ListMusic size={16} />
-              <span>{playlist.name}</span>
-              <span className="crumb" style={{ marginLeft: 'auto' }}>Playlist</span>
-            </button>
-          ))}
+          {paletteTab === 'artists' && paletteQuery.trim() && artistSearchResults.length > 0 && (
+            <div className="palette-artist-grid">
+              {artistSearchResults.map(name => {
+                const representative = canonicalTracks.find(track => {
+                  const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+                  return artists.includes(name.toLowerCase());
+                });
+                return (
+                  <button
+                    key={`artist-${name}`}
+                    type="button"
+                    className="palette-artist-card"
+                    onClick={() => {
+                      handleSaveHistory(paletteQuery);
+                      setPaletteOpen(false);
+                      openCollection('artist', name);
+                    }}
+                    data-testid={`search-artist-${name}`}
+                  >
+                    <div className="palette-artist-avatar">
+                      <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                    </div>
+                    <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {musicSearching && paletteQuery && (
             <div
@@ -3690,12 +5235,9 @@ useEffect(() => {
           )}
 
           {paletteQuery &&
-            !allSearchResults.length &&
-            !musicResults.length &&
             !musicSearching &&
-            !albumSearchResults.length &&
-            !artistSearchResults.length &&
-            !playlistSearchResults.length && (
+            ((paletteTab === 'songs' && !allSearchResults.length && !musicResults.length) ||
+              (paletteTab === 'artists' && !artistSearchResults.length)) && (
               <div
                 className="empty-state"
                 style={{ margin: 8, padding: 20 }}
@@ -3826,6 +5368,16 @@ useEffect(() => {
       <button className="palette-result desktop-context-only" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
       <button className="palette-result mobile-context-only" onClick={() => { if (activeId === contextTrack.id) { void togglePlay(); } else { void playTrack(contextTrack); } setContextTrack(null); }} data-testid="context-play-mobile">{activeId === contextTrack.id && isPlaying ? <><Pause size={15} />Pause</> : <><Play size={15} />Play</>}</button>
       <button className="palette-result mobile-context-only context-fav-btn" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite-mobile"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
+      {page !== 'downloads' && rowActions.canDownload?.(contextTrack) && (
+        <button
+          className="palette-result"
+          disabled={Boolean(rowActions.isDownloading?.(contextTrack) || rowActions.isDownloadSuccess?.(contextTrack))}
+          onClick={() => { void downloadSearchTrack(contextTrack); setContextTrack(null); }}
+          data-testid="context-download"
+        >
+          {rowActions.isDownloadSuccess?.(contextTrack) ? <><Check size={15} />Downloaded</> : <><Download size={15} />{rowActions.isDownloading?.(contextTrack) ? 'Saving offline…' : 'Download offline'}</>}
+        </button>
+      )}
       <button className="palette-result" onClick={() => { addToQueue(contextTrack); setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
        <button className="palette-result" onClick={() => { playNext(contextTrack); setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
       <button className="palette-result" onClick={() => { setModal('add-to-playlist'); }} data-testid="context-add-playlist"><ListMusic size={15} />Add to playlist</button>
@@ -3833,7 +5385,9 @@ useEffect(() => {
        <button className="palette-result" onClick={() => openCollection('artist', contextTrack.artist)} data-testid="context-go-artist"><Mic2 size={15} />Go to artist</button>
        <button className="palette-result" onClick={() => openCollection('album', contextTrack.album)} data-testid="context-go-album"><Disc3 size={15} />Go to album</button>
        <button className="palette-result" onClick={() => setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
-      <button className="palette-result" onClick={() => { void deleteTrack(contextTrack); setContextTrack(null); }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
+      {detail?.kind !== 'artist' && page !== 'trending' && (tracks.some(t => t.id === contextTrack.id) || downloadedTracks.some((d: any) => d.id === contextTrack.id || `download:${d.id}` === contextTrack.id)) && (
+        <button className="palette-result" onClick={() => { void deleteTrack(contextTrack); setContextTrack(null); }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
+      )}
       <div className="modal-actions"><button className="button" onClick={() => setContextTrack(null)} data-testid="button-close-track-menu">Close</button></div>
     </div></div>}
     {expanded && <div className="np-layer" data-closing={closing ? '' : undefined} data-testid="now-playing-expanded">
@@ -3992,7 +5546,7 @@ const core: VoidCore = {
   paletteQuery,
   setPaletteQuery,
   allSearchResults,
-  musicResults,
+  musicResults: deduplicatedMusicResults,
   musicSearching,
   albumSearchResults,
   artistSearchResults,
@@ -4017,6 +5571,17 @@ const core: VoidCore = {
   fetchArtistPhoto,
   downloadedTracks,
   downloadSearchTrack,
+  trendingLanguages: displayedTrendingLanguages,
+  activeTrendingLang,
+  openTrendingLanguage,
+  trendingTracks: displayedTrendingTracks,
+  trendingLoading,
+  trendingQuery,
+  setTrendingQuery,
+  artistTopTracks: displayedArtistTopTracks,
+  artistTopLoading,
+  artistViewTab,
+  setArtistViewTab,
 };
 return (
   <>
@@ -4028,9 +5593,22 @@ return (
         if (switchingTrackRef.current || ytActiveRef.current) return;
         setPosition(audio.current?.currentTime ?? 0);
       }}
-      onPlay={() => { if (!ytActiveRef.current) setIsPlaying(true); }}
-      onPlaying={() => { if (!ytActiveRef.current) setIsPlaying(true); }}
-      onPause={() => { if (!ytActiveRef.current) setIsPlaying(false); }}
+      onPlay={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
+      onPlaying={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
+      onPause={() => {
+        if (ytActiveRef.current) return;
+        if (!userPausedRef.current && !switchingTrackRef.current && audio.current && !audio.current.ended) {
+          void audio.current.play().then(() => setIsPlaying(true)).catch(() => {
+            window.setTimeout(() => {
+              if (!userPausedRef.current && !switchingTrackRef.current && audio.current && audio.current.paused && !audio.current.ended) {
+                void audio.current.play().then(() => setIsPlaying(true)).catch(() => {});
+              }
+            }, 120);
+          });
+          return;
+        }
+        setIsPlaying(false);
+      }}
       onDurationChange={() => {
         const value = audio.current?.duration ?? 0;
         if (Number.isFinite(value) && value > 0) setDuration(value);

@@ -352,12 +352,18 @@ button.crumb:hover { color: hsl(var(--foreground)); }
 .eyebrow { color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 500; letter-spacing: .01em; }
 .page-title { font-size: 36px; letter-spacing: -.03em; font-weight: 600; margin: 6px 0 0; line-height: 1.1; text-wrap: balance; }
 .page-subtitle { font-size: 13px; color: hsl(var(--muted-foreground)); margin: 8px 0 0; line-height: 1.5; }
-.welcome { padding: 14px 0 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
-.welcome .page-title { font-size: 48px; letter-spacing: -.035em; line-height: 1.12; margin: 0; overflow: visible; padding-bottom: 2px; }
-.welcome .page-title { transform: translateX(-3px); }
+.welcome { padding: 12px 0 30px; display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.welcome .page-title { display: inline-block; font-size: 36px; font-weight: 600; letter-spacing: -.03em; line-height: 1.12; margin: 0; padding: 0; transform: none; }
+@media (min-width: 769px) {
+  .welcome .page-title {
+    font-size: clamp(46px, 4vw, 54px);
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+}
 .greeting-title { animation: greeting-enter .5s var(--ease-out-soft) both; }
 @keyframes greeting-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.welcome-copy { color: hsl(var(--muted-foreground)); font-size: 14px; margin: 14px 0 0; }
+.welcome-copy { color: hsl(var(--muted-foreground)); font-size: 13.5px; margin: 10px 0 0; }
 .welcome-meta { color: hsl(var(--muted-foreground)); font-size: 12px; margin: 4px 0 0; opacity: .8; }
 
 .button {
@@ -1056,7 +1062,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .content { padding: 22px 28px 172px; }
   .topbar { padding: 0 28px; }
   .search-trigger { width: 220px; }
-  .welcome .page-title { font-size: 44px; }
+  .welcome .page-title { font-size: 34px; }
   .jump-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .player-bar { grid-template-columns: minmax(0, 1fr) minmax(220px, 340px) auto; column-gap: 12px; padding-left: 16px; padding-right: 16px; }
   .player-controls { gap: 4px; }
@@ -1088,7 +1094,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .search-trigger span, .search-trigger kbd { display: none; }
   .content { width: 100%; padding: 20px 18px 214px; }
   .welcome { display: block; padding: 8px 0 26px; }
-  .welcome .page-title { font-size: 38px; }
+  .welcome .page-title { font-size: 32px; }
   .welcome .button { margin-top: 20px; }
   
   /* Golden Hour Card minimized - Icon on left, text on right */
@@ -1202,18 +1208,24 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     .mobile-bottom-nav {
       display: flex;
       position: fixed;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      height: calc(64px + env(safe-area-inset-bottom));
-      background: rgba(15, 15, 15, 0.85);
-      backdrop-filter: blur(24px);
-      -webkit-backdrop-filter: blur(24px);
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      bottom: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      width: 100vw !important;
+      max-width: 100% !important;
+      margin: 0 !important;
+      border-radius: 0 !important;
+      border: none !important;
+      border-top: 1px solid rgba(255, 255, 255, 0.09) !important;
+      height: calc(58px + env(safe-area-inset-bottom, 0px)) !important;
+      padding: 0 8px env(safe-area-inset-bottom, 0px) 8px !important;
+      background: rgba(6, 6, 8, 0.82) !important;
+      backdrop-filter: blur(28px) saturate(1.8) !important;
+      -webkit-backdrop-filter: blur(28px) saturate(1.8) !important;
+      box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.04), 0 -12px 32px rgba(0, 0, 0, 0.5) !important;
       z-index: 50;
       justify-content: space-around;
       align-items: center;
-      padding-bottom: env(safe-area-inset-bottom);
     }
 
     /* Expanded player open: the mobile bar and the mini player leave the layout entirely.
@@ -1227,11 +1239,11 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
       align-items: center;
       justify-content: center;
       width: 100%;
-      height: 64px;
-      color: rgba(255, 255, 255, 0.4);
+      height: 58px;
+      color: rgba(255, 255, 255, 0.45);
       background: transparent;
       border: none;
-      transition: color 0.2s ease;
+      transition: color 0.2s ease, transform 0.2s ease;
       cursor: pointer;
     }
 
@@ -1239,18 +1251,18 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
       color: #ffffff;
     }
 
-    /* Mobile Mini Player - Positioned directly above navigation */
+    /* Mobile Mini Player - Positioned directly above full-width bottom navigation */
     .player-bar {
       position: fixed !important;
-      bottom: calc(64px + env(safe-area-inset-bottom) + 8px) !important;
+      bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 6px) !important;
       left: 8px !important;
       right: 8px !important;
       width: auto !important;
       height: 56px !important;
-      border-radius: 12px !important;
-      background: rgba(24, 24, 24, 0.85) !important;
-      backdrop-filter: blur(20px) !important;
-      -webkit-backdrop-filter: blur(20px) !important;
+      border-radius: 14px !important;
+      background: rgba(18, 18, 22, 0.88) !important;
+      backdrop-filter: blur(24px) saturate(1.6) !important;
+      -webkit-backdrop-filter: blur(24px) saturate(1.6) !important;
       border: 1px solid rgba(255, 255, 255, 0.1) !important;
       display: flex !important;
       align-items: center !important;
@@ -1369,7 +1381,6 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     .mobile-mini-play, 
     .mobile-font-trigger,
     .mobile-font-header,
-    .mobile-add-music,
     .font-dropdown-trigger,
     .mobile-context-only,
     .mini-title-mobile {
@@ -1570,50 +1581,52 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
    sections — travels through the IntersectionObserver reveal below, staggered on the
    shared --dg-i unit. Transform/opacity only, so nothing here can trigger layout
    work while it runs. */
-.dg-page { animation: dg-page-in .75s var(--ease-out-soft) both; }
+.dg-page { animation: dg-page-in .88s var(--ease-out-soft) both; }
 /* Home and every routed main page share the same soft blur + fade entrance. */
-.home-content { animation: dg-page-in .75s var(--ease-out-soft) both; }
-.content:not(.home-content) > .dg-page { animation: dg-page-in .75s var(--ease-out-soft) both; }
+.home-content { animation: dg-page-in .88s var(--ease-out-soft) both; }
+.content:not(.home-content) > .dg-page { animation: dg-page-in .88s var(--ease-out-soft) both; }
 @keyframes dg-page-in {
-  from { opacity: 0; transform: translate3d(0, 10px, 0); filter: blur(6px); }
+  from { opacity: 0; transform: translate3d(0, 14px, 0); filter: blur(10px); }
   to { opacity: 1; transform: none; filter: none; }
 }
 
 /* ───────────────────────── Deep Glass Reveal System ─────────────────────────
-   Single-pass IntersectionObserver reveals. Elements enter smoothly, settle with
-   the signature ease-out-soft curve, and release will-change on completion. */
+   Single-pass IntersectionObserver reveals. Elements enter one-by-one (1st -> 2nd -> 3rd -> 4th -> 5th)
+   with unhurried blur-to-clear smoothness and release will-change on completion. */
 [data-dg-r] {
   min-width: 0;
   width: 100%;
   opacity: 0;
-  will-change: transform, opacity;
-  transition: opacity .85s var(--ease-out-soft), transform 1.05s var(--ease-out-soft), filter .85s var(--ease-out-soft);
-  transition-delay: calc(var(--dg-i, 0) * 44ms);
+  will-change: transform, opacity, filter;
+  transition:
+    opacity .92s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 1.12s cubic-bezier(0.16, 1, 0.3, 1),
+    filter .92s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: calc(var(--dg-i, 0) * 68ms);
 }
-[data-dg-r='left'] { transform: translate3d(-36px, 0, 0); filter: blur(4px); }
-[data-dg-r='right'] { transform: translate3d(48px, 6px, 0) scale(.98); filter: blur(5px); }
-[data-dg-r='up'] { transform: translate3d(0, 24px, 0); filter: blur(4px); }
-[data-dg-r='depth'] { transform: translate3d(0, 26px, 0) scale(.95); filter: blur(5px); transform-origin: 50% 100%; }
-/* Song rows: a gentle slide, no blur and no layer hint — there can be hundreds of them.
-   Rows keep the original 32 ms stagger step (the driver caps --dg-i at 8 rungs). */
+[data-dg-r='left'] { transform: translate3d(-38px, 0, 0); filter: blur(8px); }
+[data-dg-r='right'] { transform: translate3d(44px, 8px, 0) scale(.975); filter: blur(9px); }
+[data-dg-r='up'] { transform: translate3d(0, 26px, 0); filter: blur(8px); }
+[data-dg-r='depth'] { transform: translate3d(0, 28px, 0) scale(.95); filter: blur(9px); transform-origin: 50% 100%; }
+/* Song rows: one-by-one cascade from top to bottom with soft motion blur and silky easing. */
 [data-dg-r='row'] {
-  /* Track rows reveal from the left as they enter the scroll viewport. */
-  transform: translate3d(-28px, 0, 0);
-  filter: blur(2px);
-  will-change: auto;
-  transition-duration: .62s, .78s, .62s;
-  transition-delay: calc(var(--dg-i, 0) * 32ms);
+  transform: translate3d(-30px, 8px, 0);
+  filter: blur(7px);
+  will-change: transform, opacity, filter;
+  transition-duration: .84s, 1.02s, .84s;
+  transition-delay: calc(var(--dg-i, 0) * 62ms);
 }
 .home-content .track-table tbody [data-dg-r='row'] {
-  transform: translate3d(-34px, 0, 0);
-  transition-duration: .7s, .88s, .7s;
+  transform: translate3d(-34px, 8px, 0);
+  filter: blur(7.5px);
+  transition-duration: .88s, 1.06s, .88s;
+  transition-delay: calc(var(--dg-i, 0) * 65ms);
 }
 
-/* Grid cards settle with the page beat: the full-depth drift is shortened so a card
-   grid finishes just as its page entrance does, and long cover walls don't drift in
-   unison after the stagger cap. */
+/* Grid cards cascade one-by-one smoothly with soft blur. */
 .library-grid [data-dg-r='depth'], .cover-grid [data-dg-r='depth'] {
-  transition-duration: .6s, .7s;
+  transition-duration: .86s, 1.04s, .86s;
+  transition-delay: calc(var(--dg-i, 0) * 65ms);
 }
 
 /* Reveals that live in a flex row keep their natural width (the welcome button). */
@@ -1761,38 +1774,74 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 /* ───────────────────────── Phones: the mobile bar ───────────────────────── */
 @media (max-width: 768px) {
   .mobile-bottom-nav {
-    position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom));
-    width: auto; height: var(--nav-h); padding: 0 6px; z-index: 50;
-    display: flex; align-items: center; justify-content: space-around;
-    border: 1px solid var(--glass-border); border-top: 1px solid var(--glass-border); border-radius: 20px;
-    background: var(--glass-bg);
-    box-shadow: inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
-    -webkit-backdrop-filter: blur(var(--blur)) saturate(1.6); backdrop-filter: blur(var(--blur)) saturate(1.6);
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    height: calc(58px + env(safe-area-inset-bottom, 0px)) !important;
+    padding: 0 8px env(safe-area-inset-bottom, 0px) 8px !important;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    border: 0 !important;
+    border-top: 1px solid hsl(var(--foreground) / .09) !important;
+    border-radius: 0 !important;
+    background: hsl(var(--background) / .78) !important;
+    box-shadow: 0 -1px 0 hsl(var(--foreground) / .04), 0 -10px 28px hsl(0 0% 0% / .25) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(1.8) !important;
+    backdrop-filter: blur(28px) saturate(1.8) !important;
     transition: opacity .3s var(--ease), transform .45s var(--ease-out-soft);
   }
-  .dark .mobile-bottom-nav { background: hsl(0 0% 5% / .74); }
+  .dark .mobile-bottom-nav {
+    background: rgba(5, 5, 7, 0.82) !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.09) !important;
+    box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03), 0 -12px 32px rgba(0, 0, 0, 0.55) !important;
+  }
 
   .mobile-nav-item {
-    position: relative; display: flex; align-items: center; justify-content: center;
-    flex: 1 1 0; min-width: 0; height: 44px; margin: 0 2px; padding: 0;
-    border: 0; border-radius: 14px; background: transparent; color: hsl(var(--muted-foreground));
-    transition: color .24s var(--ease), background-color .24s var(--ease), transform .34s var(--ease-out-soft);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 0;
+    min-width: 0;
+    height: 46px;
+    margin: 0 2px;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: hsl(var(--muted-foreground));
+    transition: color .22s var(--ease), background-color .22s var(--ease), transform .3s var(--ease-out-soft);
   }
-  .mobile-nav-item svg { width: 20px; height: 20px; stroke-width: 1.85; transition: transform .34s var(--ease-out-soft); }
+  .mobile-nav-item svg { width: 20px; height: 20px; stroke-width: 1.85; transition: transform .3s var(--ease-out-soft); }
+  .mobile-nav-item[aria-label="Trending"] svg { width: 23px; height: 23px; transform: translateY(2px); }
   .mobile-nav-item:active { transform: scale(.93); }
-  .mobile-nav-item.active { color: hsl(var(--foreground)); background: var(--active); }
-  .mobile-nav-item.active svg { stroke-width: 2.2; transform: translateY(-1px); }
+  .mobile-nav-item.active { color: hsl(var(--foreground)); background: transparent; }
+  .mobile-nav-item.active svg { stroke-width: 2.3; transform: translateY(-1px); }
+  .mobile-nav-item.active[aria-label="Trending"] svg { stroke-width: 2.3; transform: translateY(1px); }
   .mobile-nav-item.active::after {
-    content: ''; position: absolute; bottom: 5px; left: 50%; width: 14px; height: 2px; border-radius: 2px;
-    background: hsl(var(--foreground) / .5); transform: translateX(-50%);
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    width: 16px;
+    height: 2.5px;
+    border-radius: 99px;
+    background: hsl(var(--foreground));
+    transform: translateX(-50%);
   }
 
   /* The compact add action takes over from the hero button on phones. */
   .welcome .add-music { display: none; }
   .mobile-add-music { color: hsl(var(--foreground)); }
 
-  /* Room for the floating bar and the mini player above it. */
-  .content { padding-bottom: calc(142px + env(safe-area-inset-bottom)); }
+  /* Room for the anchored bottom bar and the mini player above it while content pushes all the way down. */
+  .content { padding-bottom: calc(136px + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* ───────────────────────── Phones: layout refinements ───────────────────────── */
@@ -1897,8 +1946,11 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .modal-backdrop {
     box-sizing: border-box;
     padding: 12px;
-    place-items: start center;
+    place-items: center;
     overflow: hidden;
+  }
+  .modal-backdrop:has(> .palette) {
+    place-items: start center;
   }
   .modal-backdrop > .palette {
     box-sizing: border-box;
@@ -1931,17 +1983,12 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     padding: 8px;
     font-size: 12px;
   }
-  .palette-result > span {
-    flex: 1 1 auto;
+  .palette-result > span:not(.search-result-actions) {
+    flex: 1 1 0%;
     min-width: 0;
     overflow: hidden;
   }
-  /* Keep search-result actions pinned to the right regardless of title length. */
-  .search-music-result > span:not(.search-result-actions) {
-    flex: 1 1 0%;
-    min-width: 0;
-  }
-  .search-music-result > .search-result-actions {
+  .palette-result > .search-result-actions {
     flex: 0 0 auto;
     width: auto;
     margin-left: auto;
@@ -2092,6 +2139,17 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .desktop-context-only {
     display: none !important;
   }
+  .modal-backdrop:has(> .modal),
+  .modal-backdrop:has(> .import-menu) {
+    place-items: center !important;
+    padding: 16px !important;
+  }
+  .modal-backdrop > .modal,
+  .modal-backdrop > .import-menu {
+    margin: auto !important;
+    width: 100% !important;
+    max-width: 460px !important;
+  }
   .player-track .mini-player-title-row {
     display: block !important;
     max-width: min(76%, 188px) !important;
@@ -2121,3 +2179,1145 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     animation: fav-pop .26s var(--ease);
   }
 }
+
+/* ── Search Palette: Songs | Artists Toggle & Flush-Right Actions ── */
+.palette-result > span:not(.search-result-actions) {
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+}
+.palette-result > .search-result-actions {
+  flex: 0 0 auto;
+  width: auto;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.palette-result .track-title {
+  font-size: 13.5px;
+  font-weight: 560;
+}
+.palette-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.palette-tab {
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--app-font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: background-color .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
+}
+.palette-tab:hover {
+  color: hsl(var(--foreground));
+  background: var(--hover);
+}
+.palette-tab.active {
+  color: hsl(var(--foreground));
+  background: var(--active);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+.palette-artist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 18px 14px;
+  padding: 16px 12px 12px;
+}
+.palette-artist-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+  transition: background-color .18s var(--ease), transform .28s var(--ease-out-soft);
+}
+.palette-artist-card:hover {
+  background: var(--hover);
+  transform: translateY(-2px);
+}
+.palette-artist-card:active {
+  transform: scale(.97);
+}
+.palette-artist-avatar {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: var(--cover-shadow);
+}
+
+/* ── Topbar Crumb Back Button (Desktop V-Chevron `< Amr Diab`) ── */
+.topbar-crumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--app-font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .16s var(--ease), transform .18s var(--ease-out-soft);
+}
+.topbar-crumb-back:hover {
+  color: hsl(var(--foreground));
+}
+.topbar-crumb-back:active {
+  transform: translateX(-2px);
+}
+.topbar-crumb-back svg {
+  flex: 0 0 auto;
+  display: block;
+}
+
+/* ── Luxury Cinematic Hero Banner (Artist Profile, Favorites, Albums & Playlists) ── */
+.dg-page--cinematic {
+  position: relative;
+}
+.cinematic-hero-banner {
+  --hero-h1: var(--h1, 215);
+  --hero-h2: var(--h2, 235);
+  --hero-h3: var(--h3, 200);
+  --hero-s: var(--s, 78%);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  min-height: 244px;
+  padding: 28px 34px;
+  margin: 0 0 14px;
+  border-radius: 26px;
+  border: 1px solid hsl(var(--foreground) / .10);
+  background:
+    radial-gradient(88% 130% at 15% 0%, hsl(var(--hero-h1) var(--hero-s) 42% / .42), transparent 68%),
+    radial-gradient(75% 110% at 88% 12%, hsl(var(--hero-h2) var(--hero-s) 36% / .32), transparent 66%),
+    linear-gradient(180deg, hsl(var(--hero-h1) calc(var(--hero-s) * .75) 16% / .62) 0%, hsl(var(--background) / .96) 100%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / .16),
+    0 24px 60px hsl(0 0% 0% / .45);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+}
+.dark .cinematic-hero-banner {
+  border-color: rgba(255, 255, 255, 0.1);
+  background:
+    radial-gradient(92% 135% at 12% -8%, hsl(var(--hero-h1) var(--hero-s) 38% / .54), transparent 66%),
+    radial-gradient(78% 115% at 88% 8%, hsl(var(--hero-h2) var(--hero-s) 30% / .40), transparent 64%),
+    linear-gradient(180deg, hsl(var(--hero-h1) calc(var(--hero-s) * .7) 14% / .70) 0%, rgba(5, 5, 7, 0.94) 86%, #000000 100%);
+}
+.cinematic-hero-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.cinematic-hero-bg-blur {
+  display: none;
+}
+.cinematic-hero-bg-img {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 74% 22%;
+  opacity: 0.36;
+  filter: saturate(1.15) contrast(1.04);
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 20%,
+    rgba(0, 0, 0, 0.28) 44%,
+    rgba(0, 0, 0, 0.85) 74%,
+    rgba(0, 0, 0, 0.42) 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 20%,
+    rgba(0, 0, 0, 0.28) 44%,
+    rgba(0, 0, 0, 0.85) 74%,
+    rgba(0, 0, 0, 0.42) 100%
+  );
+  transform: scale(1.02);
+  transition: opacity .45s ease, transform .8s var(--ease-out-soft);
+}
+.cinematic-hero-banner:hover .cinematic-hero-bg-img {
+  transform: scale(1.045);
+}
+.cinematic-hero-gradient {
+  display: block;
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, hsl(var(--background) / .92) 0%, hsl(var(--background) / .58) 48%, hsl(var(--background) / .24) 85%, hsl(var(--background) / .62) 100%),
+    linear-gradient(180deg, hsl(var(--background) / .24) 0%, hsl(var(--background) / .38) 62%, hsl(var(--background) / .94) 100%);
+}
+.dark .cinematic-hero-gradient {
+  background:
+    linear-gradient(90deg, rgba(5, 5, 8, 0.94) 0%, rgba(5, 5, 8, 0.58) 48%, rgba(5, 5, 8, 0.22) 84%, rgba(5, 5, 8, 0.65) 100%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.22) 0%, rgba(0, 0, 0, 0.44) 62%, rgba(0, 0, 0, 0.94) 100%);
+}
+
+/* Top bar inside the Cinematic Hero Banner */
+.cinematic-hero-topbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+/* On Desktop, the artist back chevron lives in the topbar left of the artist name (`< Amr Diab`),
+   so hide the topbar inside the artist banner to keep the circular photo and text vertically centered. */
+@media (min-width: 769px) {
+  .artist-hero-banner .cinematic-hero-topbar {
+    display: none !important;
+  }
+}
+
+.cinematic-back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .18s var(--ease), transform .22s var(--ease-out-soft);
+}
+.cinematic-back-btn--chevron {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin-left: -6px;
+  border: 0 !important;
+  border-radius: 50%;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  color: hsl(var(--foreground));
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.65));
+}
+.cinematic-back-btn:hover {
+  opacity: 0.85;
+  transform: translateX(-2px);
+}
+.cinematic-back-btn:active {
+  transform: scale(0.94);
+}
+.cinematic-filter-input {
+  background: hsl(var(--background) / .48) !important;
+  border-color: hsl(var(--foreground) / .14) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+}
+
+.cinematic-hero-body {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  width: 100%;
+  margin: auto 0;
+}
+.cinematic-hero-portrait {
+  width: 148px;
+  height: 148px;
+  flex: 0 0 148px;
+  border-radius: 22px;
+  overflow: hidden;
+  border: 1px solid hsl(0 0% 100% / .16);
+  box-shadow: 0 18px 42px hsl(0 0% 0% / .52);
+  background: hsl(var(--foreground) / .06);
+}
+/* Round avatar on Web/Desktop for Artist and Favorites */
+.artist-hero-portrait,
+.favorites-hero-portrait {
+  border-radius: 50% !important;
+}
+.cinematic-hero-portrait .cover-large {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+.favorites-heart-emblem {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, hsl(340 88% 56%), hsl(318 82% 38%));
+}
+.cinematic-hero-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+}
+.cinematic-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--foreground) / .78);
+  margin-bottom: 6px;
+}
+.cinematic-verified-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: hsl(var(--foreground) / .12);
+  border: 1px solid hsl(var(--foreground) / .14);
+  color: hsl(var(--foreground));
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.cinematic-eyebrow-sep {
+  opacity: 0.55;
+}
+.cinematic-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.cinematic-artist-title {
+  margin: 0;
+  font-family: var(--void-font);
+  font-size: clamp(34px, 4.8vw, 62px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.04;
+  color: hsl(var(--foreground));
+  text-shadow: 0 6px 24px hsl(0 0% 0% / .42);
+}
+/* Spotify-style Verified Artist row directly below the artist name: [Tick] Verified Artist */
+.artist-verified-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+.artist-verified-label {
+  font-family: var(--void-font);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground) / .94);
+}
+.verified-artist-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  color: #38bdf8;
+  filter: drop-shadow(0 3px 10px rgba(56, 189, 248, 0.35));
+}
+.verified-artist-icon {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.cinematic-hero-subtitle {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: hsl(var(--foreground) / .74);
+  line-height: 1.45;
+}
+.artist-hero-subtitle {
+  margin-top: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: hsl(var(--foreground) / .76);
+}
+.cinematic-hero-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.cinematic-play-btn {
+  height: 42px !important;
+  padding: 0 22px !important;
+  border-radius: 999px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / .45), 0 10px 26px hsl(0 0% 0% / .38) !important;
+}
+
+/* ── Full-Width 50% / 50% Split Underline Tabs (`Top` | `Library`) — Zero Right Gap ── */
+.artist-view-tabs {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 0 !important;
+  width: 100% !important;
+  padding: 0 !important;
+  margin: 8px 0 12px;
+  border: 0;
+  border-bottom: 1px solid hsl(var(--foreground) / .12);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.artist-view-tab {
+  position: relative;
+  width: 100% !important;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--void-font);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .18s var(--ease);
+}
+.artist-view-tab:hover {
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+.artist-view-tab.active {
+  color: hsl(var(--foreground));
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.artist-view-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  bottom: -1px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: hsl(var(--foreground));
+}
+
+/* ── Lightweight "See more" Button Below Artist Top 5 Songs ── */
+.artist-see-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 6px 14px 12px;
+}
+.artist-see-more-btn {
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-family: var(--void-font);
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color .16s var(--ease);
+}
+.artist-see-more-btn:hover {
+  color: hsl(var(--foreground));
+}
+
+/* ── Trending Chart Topbar & Dark-Themed Circular Play Button ── */
+.trending-chart-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.trending-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  transition: color .16s var(--ease);
+}
+.trending-back-btn:hover {
+  color: hsl(var(--foreground));
+}
+.trending-chart-search {
+  width: 220px;
+  max-width: 52vw;
+  height: 34px;
+}
+.trending-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 10px;
+}
+.trending-dark-play-btn {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 50%;
+  border: 1px solid hsl(var(--foreground) / .16);
+  background: #0b0c10;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 22px rgba(0, 0, 0, 0.48);
+  transition: transform .22s var(--ease-out-soft), border-color .18s var(--ease), background-color .18s var(--ease);
+}
+.trending-dark-play-btn svg {
+  transform: translateX(1px);
+}
+.trending-dark-play-btn:hover:not(:disabled) {
+  transform: scale(1.06);
+  background: #14161d;
+  border-color: hsl(var(--foreground) / .30);
+}
+.trending-dark-play-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* ── Structured Collection Header Alignment (Songs, Albums, Artists, Playlists, etc.) ── */
+.collection-header-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 10px;
+}
+.collection-header-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.collection-header-copy .eyebrow {
+  margin-bottom: 2px;
+}
+.collection-header-copy .page-title {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.032em;
+}
+.collection-header-copy .page-subtitle {
+  margin: 4px 0 0;
+}
+.collection-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Mood card "Play something for me" button: blends naturally with the mood card ── */
+.mood-copy .mood-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--orb-hi, hsl(var(--foreground) / .18)) 55%, hsl(var(--foreground) / .10));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--mood-tint, transparent) 55%, hsl(var(--foreground) / .08)),
+    color-mix(in srgb, var(--mood-tint, transparent) 30%, hsl(var(--foreground) / .04))
+  );
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / .14), 0 6px 18px hsl(0 0% 0% / .22);
+  color: hsl(var(--foreground) / .92);
+  font-size: 12px;
+  font-weight: 540;
+  letter-spacing: -0.01em;
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+  transition: background .22s var(--ease), border-color .22s var(--ease), transform .24s var(--ease-out-soft), color .18s var(--ease);
+}
+.mood-copy .mood-play-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--orb-hi, hsl(var(--foreground) / .28)) 75%, hsl(var(--foreground) / .18));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--mood-tint, transparent) 75%, hsl(var(--foreground) / .13)),
+    color-mix(in srgb, var(--mood-tint, transparent) 45%, hsl(var(--foreground) / .07))
+  );
+  color: hsl(var(--foreground));
+  transform: translateY(-1px);
+}
+.mood-copy .mood-play-btn svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.88;
+}
+@media (max-width: 620px) {
+  .mood-copy .mood-play-btn {
+    height: 32px;
+    padding: 0 14px 0 12px;
+    font-size: 11.5px;
+    gap: 7px;
+  }
+}
+
+/* ── Mobile Spotify-Style Full-Bleed Connected Artist Page (With Exact Photo Color Blur Fade) ── */
+@media (max-width: 768px) {
+  .void-app:has(.dg-page--artist-view) {
+    background: #000000 !important;
+  }
+  .void-app:has(.dg-page--artist-view) .ambient {
+    opacity: 0 !important;
+    display: none !important;
+  }
+  .void-app:has(.dg-page--artist-view) .main-area {
+    background: #000000 !important;
+  }
+  /* Make topbar transparent so the artist hero's top blurred photo color spreads all the way to the top edge */
+  .void-app:has(.dg-page--artist-view) .topbar {
+    position: relative !important;
+    z-index: 30 !important;
+    background: transparent !important;
+    border-bottom: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Remove top, left, and right content padding when viewing an Artist so the hero & songs fill edge-to-edge */
+  .content:has(.dg-page--artist-view) {
+    padding-top: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    background: #000000 !important;
+  }
+
+  .dg-page--artist-view {
+    gap: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    background: #000000 !important;
+  }
+
+  /* Pull artist hero banner up behind the topbar (-56px) */
+  .dg-page--artist-view .artist-hero-banner {
+    min-height: 424px !important;
+    margin: -56px 0 0 0 !important;
+    padding: 66px 20px 26px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    justify-content: space-between !important;
+    background: #000000 !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Real blurred copy of the artist's actual photo stretched into the top area so the fade color matches 100% */
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-bg-blur {
+    display: block !important;
+    position: absolute !important;
+    inset: -32px -24px 20% -24px !important;
+    width: calc(100% + 48px) !important;
+    height: 82% !important;
+    object-fit: cover !important;
+    object-position: center 6% !important;
+    filter: blur(30px) saturate(1.18) brightness(0.92) !important;
+    transform: scale(1.26) !important;
+    opacity: 0.98 !important;
+    z-index: 0 !important;
+    pointer-events: none !important;
+  }
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-bg-blur.cinematic-hero-bg-fallback > div {
+    border-radius: 0 !important;
+  }
+
+  /* Show full-bleed sharp artist photo with a smooth top fade into the blurred photo layer above */
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-bg-img {
+    display: block !important;
+    position: absolute !important;
+    inset: 38px 0 0 0 !important;
+    width: 100% !important;
+    height: calc(100% - 38px) !important;
+    object-fit: cover !important;
+    object-position: center 14% !important;
+    opacity: 1 !important;
+    transform: none !important;
+    -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.36) 10%, rgba(0, 0, 0, 0.84) 21%, #000 32%, #000 72%, transparent 100%) !important;
+    mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.36) 10%, rgba(0, 0, 0, 0.84) 21%, #000 32%, #000 72%, transparent 100%) !important;
+    filter: saturate(1.06) contrast(1.04) !important;
+    z-index: 1 !important;
+  }
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-bg-fallback > div {
+    border-radius: 0 !important;
+  }
+
+  /* Smooth dark bottom gradient blending the photo into the solid black surface below */
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-gradient {
+    display: block !important;
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 2 !important;
+    background:
+      linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.14) 0%,
+        transparent 28%,
+        rgba(0, 0, 0, 0.08) 54%,
+        rgba(0, 0, 0, 0.72) 82%,
+        #000000 100%
+      ) !important;
+  }
+
+  /* Hide the foreground small avatar on mobile — background photo is the hero */
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-portrait {
+    display: none !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-body {
+    align-items: flex-end !important;
+    gap: 0 !important;
+    margin: auto 0 0 !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .cinematic-artist-title {
+    font-size: clamp(28px, 7.6vw, 40px) !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.035em !important;
+    line-height: 1.08 !important;
+    color: #ffffff !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 100% !important;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.65) !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .artist-verified-row {
+    margin-top: 6px !important;
+    gap: 6px !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .verified-artist-badge {
+    width: 20px !important;
+    height: 20px !important;
+    flex: 0 0 20px !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .artist-verified-label {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    color: rgba(255, 255, 255, 0.96) !important;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6) !important;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .artist-hero-subtitle {
+    margin-top: 6px !important;
+    font-size: 12.5px !important;
+    font-weight: 500 !important;
+    color: rgba(255, 255, 255, 0.78) !important;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6) !important;
+  }
+
+  /* Full-width 50% / 50% underline tabs (`Top` | `Library`) with zero side gaps */
+  .dg-page--artist-view .artist-view-tabs {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0 !important;
+    width: 100% !important;
+    margin: 4px 0 6px !important;
+    padding: 4px 0 0 !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+    background: #000000 !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Hide empty table header on mobile artist view so Song #1 sits right at the very top */
+  .dg-page--artist-view .track-table thead {
+    display: none !important;
+  }
+
+  /* Remove glass box & side margins from the song list on mobile so songs connect directly edge-to-edge */
+  .dg-page--artist-view .table-wrap {
+    margin: 0 !important;
+    padding: 2px 8px 6px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #000000 !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    width: 100% !important;
+  }
+
+  .dg-page--artist-view .artist-see-more-row {
+    padding: 4px 20px 14px !important;
+    background: #000000 !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   TRENDING PAGE — DYNAMIC LANGUAGE-BASED ARTIST + REGIONAL CARDS
+   ════════════════════════════════════════════════════════════════════ */
+.trending-lang-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 22px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.trending-lang-grid > * {
+  min-width: 0;
+  width: 100%;
+}
+
+.trending-lang-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: var(--card-accent-bg, linear-gradient(145deg, #101420 0%, #07090e 100%));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 14px 34px rgba(0, 0, 0, 0.46);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  isolation: isolate;
+  transition:
+    transform 0.34s var(--ease-out-soft),
+    border-color 0.24s var(--ease),
+    box-shadow 0.34s var(--ease-out-soft);
+}
+
+.trending-lang-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 20px 44px rgba(0, 0, 0, 0.62);
+}
+
+.trending-lang-card:active {
+  transform: scale(0.98);
+}
+
+/* Layer 1: Country / regional cultural landscape background photograph */
+.trending-lang-card-bg-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.trending-lang-card-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 36%;
+  opacity: 0;
+  filter: brightness(0.84) contrast(1.06) saturate(1.12);
+  transform: scale(1.01);
+  transition:
+    opacity 0.44s var(--ease-out-soft),
+    transform 0.58s var(--ease-out-soft),
+    filter 0.44s ease;
+}
+
+.trending-lang-card-bg.is-loaded {
+  opacity: 0.94;
+}
+
+.trending-lang-card:hover .trending-lang-card-bg.is-loaded {
+  transform: scale(1.06);
+  filter: brightness(0.42) contrast(1.08) saturate(1.1);
+}
+
+/* Soft atmospheric color integration for the regional landmark photograph */
+.trending-lang-card-atmosphere {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(95% 85% at 22% 18%, rgba(255, 255, 255, 0.06) 0%, transparent 62%),
+    linear-gradient(165deg, rgba(6, 8, 12, 0.04) 0%, rgba(6, 8, 12, 0.24) 62%, rgba(4, 5, 8, 0.68) 100%);
+  pointer-events: none;
+}
+
+/* Layer 2: High-resolution artist portrait revealed ONLY when hovering over the specific card */
+.trending-lang-card-artist-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(1.045);
+  transition:
+    opacity 0.42s var(--ease-out-soft),
+    transform 0.54s var(--ease-out-soft);
+}
+
+.trending-lang-card:hover .trending-lang-card-artist-wrap,
+.trending-lang-card:focus-visible .trending-lang-card-artist-wrap {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.trending-lang-card-artist-wrap .pg-artist-photo {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: transparent;
+}
+
+.trending-lang-card-artist,
+.trending-lang-card-artist-wrap .pg-artist-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 16%;
+  opacity: 0;
+  filter: contrast(1.04) saturate(1.04);
+  transform: scale(1.01);
+  transition:
+    opacity 0.36s ease,
+    transform 0.54s var(--ease-out-soft);
+}
+
+.trending-lang-card-artist.is-loaded,
+.trending-lang-card-artist-wrap .pg-artist-photo img.is-loaded {
+  opacity: 1;
+}
+
+.trending-lang-card:hover .trending-lang-card-artist.is-loaded,
+.trending-lang-card:hover .trending-lang-card-artist-wrap .pg-artist-photo img.is-loaded {
+  transform: scale(1.04);
+}
+
+/* Layer 3: Subtle dark bottom gradient for crisp text readability */
+.trending-lang-card-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(4, 5, 8, 0.02) 0%,
+    rgba(4, 5, 8, 0.08) 46%,
+    rgba(4, 5, 8, 0.68) 75%,
+    rgba(4, 5, 8, 0.94) 100%
+  );
+}
+
+/* Layer 4: Minimal, readable language title + category subtitle */
+.trending-lang-card-copy {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 4;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.trending-lang-card-title {
+  display: block;
+  max-width: 100%;
+  font-family: var(--void-font);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: #ffffff;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trending-lang-card-subtitle {
+  display: block;
+  max-width: 100%;
+  font-family: var(--void-font);
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.74);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 1120px) {
+  .trending-lang-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+}
+
+/* Mobile: Strictly TWO square cards per row without horizontal overflow & official header layout */
+@media (max-width: 768px) {
+  .trending-lang-search-wrap,
+  [data-testid="input-filter-trending-languages"] {
+    display: none !important;
+  }
+
+  .section-heading.trending-page-hero-head,
+  .section-heading.trending-page-hero-head[style] {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+    text-align: left !important;
+    margin-bottom: 14px !important;
+    padding-bottom: 10px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .section-heading.trending-page-hero-head > div {
+    width: 100% !important;
+    text-align: left !important;
+  }
+
+  .trending-page-hero-head .page-title {
+    font-size: 28px !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.03em !important;
+    line-height: 1.1 !important;
+  }
+
+  .trending-page-hero-head .page-subtitle {
+    font-size: 13px !important;
+    color: rgba(255, 255, 255, 0.62) !important;
+  }
+
+  .trending-chart-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .trending-chart-search {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .trending-lang-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+    margin-top: 10px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .trending-lang-card {
+    border-radius: 15px;
+    aspect-ratio: 1 / 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .trending-lang-card-copy {
+    padding: 12px 13px;
+    gap: 2px;
+  }
+
+  .trending-lang-card-title {
+    font-size: 16.5px;
+  }
+
+  .trending-lang-card-subtitle {
+    font-size: 11.5px;
+  }
+}
+
+@media (max-width: 390px) {
+  .trending-lang-grid {
+    gap: 10px !important;
+  }
+
+  .trending-lang-card {
+    border-radius: 14px;
+  }
+
+  .trending-lang-card-copy {
+    padding: 10px 11px;
+  }
+
+  .trending-lang-card-title {
+    font-size: 15px;
+  }
+
+  .trending-lang-card-subtitle {
+    font-size: 10.5px;
+  }
+}
+

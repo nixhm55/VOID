@@ -440,6 +440,34 @@ async function queryLocalLosslessAggregator(
  * Built-in Public FLAC / WAV Lossless Gateway (queries verified lossless FLAC/WAV masters
  * from the Open Archive lossless audio index).
  */
+const NON_MUSIC_LOSSLESS_JUNK_REGEX =
+  /\b(session|studio\s*session|interview|death\s*tape|jonestown|rigveda|rig\s*veda|veda|sermon|lecture|podcast|audiobook|spoken\s*word|speech|broadcast|radio\s*show|field\s*recording|test\s*tone|sound\s*effect|sample\s*pack|prelinger|librivox|fbi\s*no|tape\s*\d+)\b/i;
+
+async function resolveLosslessOfficialArtwork(title: string, artist: string, fallbackQuery: string): Promise<string> {
+  const searchQ = `${title} ${artist !== "Unknown Artist" ? artist : ""}`.trim() || fallbackQuery;
+  if (!searchQ) return "";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2400);
+  try {
+    const res = await fetch(
+      `/__void_api/itunes-search?term=${encodeURIComponent(searchQ)}&entity=song&limit=4`,
+      { signal: ctrl.signal }
+    );
+    if (res.ok) {
+      const json: any = await res.json();
+      const match = Array.isArray(json?.results) ? json.results.find((r: any) => r?.artworkUrl100) : null;
+      if (match?.artworkUrl100) {
+        return String(match.artworkUrl100).replace("100x100bb", "600x600bb");
+      }
+    }
+  } catch {
+    /* ignore */
+  } finally {
+    clearTimeout(timer);
+  }
+  return "";
+}
+
 async function queryBuiltInLosslessFlacCatalog(
   query: string,
   externalSignal?: AbortSignal
@@ -450,18 +478,21 @@ async function queryBuiltInLosslessFlacCatalog(
   externalSignal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    const cleanWords = query
+    const rawWords = query
       .replace(/[^\p{L}\p{N}\s]+/gu, " ")
       .trim()
       .split(/\s+/)
-      .filter(Boolean)
-      .map((w) => {
-        if (w.toLowerCase() === "sadeness") return "(sadeness OR sadness)";
-        if (w.toLowerCase() === "sadness") return "(sadness OR sadeness)";
-        return w;
-      });
+      .filter(Boolean);
+    const sigTokens = rawWords
+      .map((w) => w.toLowerCase())
+      .filter((w) => w.length >= 2 && w !== "the" && w !== "and");
+    const cleanWords = rawWords.map((w) => {
+      if (w.toLowerCase() === "sadeness") return "(sadeness OR sadness)";
+      if (w.toLowerCase() === "sadness") return "(sadness OR sadeness)";
+      return w;
+    });
     if (cleanWords.length === 0) return [];
-    const lucene = `mediatype:(audio) AND format:(Flac OR "24bit Flac" OR WAVE) AND (${cleanWords.join(" AND ")}) AND NOT collection:(librivoxaudio)`;
+    const lucene = `mediatype:(audio) AND format:(Flac OR "24bit Flac" OR WAVE) AND (${cleanWords.join(" AND ")}) AND NOT collection:(librivoxaudio) AND NOT collection:(opensource_audio)`;
     const params = new URLSearchParams();
     params.set("q", lucene);
     params.append("fl[]", "identifier");
@@ -484,6 +515,12 @@ async function queryBuiltInLosslessFlacCatalog(
       docs.slice(0, 4).map(async (doc: any): Promise<SearchResult | null> => {
         const identifier = String(doc?.identifier || "").trim();
         if (!identifier) return null;
+        const docTitle = Array.isArray(doc.title) ? doc.title[0] : doc.title;
+        const docCreator = Array.isArray(doc.creator) ? doc.creator[0] : doc.creator;
+        if (NON_MUSIC_LOSSLESS_JUNK_REGEX.test(`${identifier} ${docTitle || ""} ${docCreator || ""}`)) {
+          return null;
+        }
+
         const metaRes = await fetch(
           `https://archive.org/metadata/${encodeURIComponent(identifier)}`,
           { signal: controller.signal }
@@ -507,6 +544,38 @@ async function queryBuiltInLosslessFlacCatalog(
         );
         if (!flacFile || !flacFile.name) return null;
 
+        const title =
+          String(flacFile.title || "").trim() ||
+          docTitle ||
+          identifier;
+        const artist =
+          String(flacFile.artist || flacFile.creator || "").trim() ||
+          docCreator ||
+          "Unknown Artist";
+        const album = String(flacFile.album || title || "Lossless Audio").trim();
+
+        if (NON_MUSIC_LOSSLESS_JUNK_REGEX.test(`${title} ${artist} ${album}`)) {
+          return null;
+        }
+
+        const combinedLower = `${title} ${artist} ${album}`.toLowerCase();
+        const matchesQuery = sigTokens.some((tok) => {
+          if (tok === "sadeness" || tok === "sadness") {
+            return combinedLower.includes("sadeness") || combinedLower.includes("sadness");
+          }
+          return combinedLower.includes(tok);
+        });
+        if (!matchesQuery) return null;
+
+        const rawLen = String(flacFile.length || "").trim();
+        let duration = 0;
+        if (/^\d+(\.\d+)?$/.test(rawLen)) duration = Math.round(Number.parseFloat(rawLen));
+        else if (rawLen.includes(":")) {
+          const parts = rawLen.split(":").map(Number);
+          if (parts.length === 2) duration = Math.round(parts[0] * 60 + parts[1]);
+        }
+        if (duration > 0 && (duration < 60 || duration > 960)) return null;
+
         const mp3Fallback = meta.files.find(
           (f: any) => f && f.private !== "true" && /\.mp3$/i.test(String(f.name || ""))
         );
@@ -520,29 +589,14 @@ async function queryBuiltInLosslessFlacCatalog(
         const flacUrl = buildUrl(String(flacFile.name));
         const fallbackUrls = mp3Fallback?.name ? [buildUrl(String(mp3Fallback.name))] : undefined;
 
-        const rawLen = String(flacFile.length || "").trim();
-        let duration = 0;
-        if (/^\d+(\.\d+)?$/.test(rawLen)) duration = Math.round(Number.parseFloat(rawLen));
-        else if (rawLen.includes(":")) {
-          const parts = rawLen.split(":").map(Number);
-          if (parts.length === 2) duration = Math.round(parts[0] * 60 + parts[1]);
-        }
-
-        const title =
-          String(flacFile.title || "").trim() ||
-          (Array.isArray(doc.title) ? doc.title[0] : doc.title) ||
-          identifier;
-        const artist =
-          String(flacFile.artist || flacFile.creator || "").trim() ||
-          (Array.isArray(doc.creator) ? doc.creator[0] : doc.creator) ||
-          "Unknown Artist";
+        const officialCover = await resolveLosslessOfficialArtwork(String(title).trim(), String(artist).trim(), query);
 
         return {
           id: `lossless:flac-${identifier}`,
           name: String(title).trim(),
-          album: String(flacFile.album || title || "Lossless Audio").trim(),
+          album,
           artist: String(artist).trim(),
-          image: `https://archive.org/services/img/${encodeURIComponent(identifier)}`,
+          image: officialCover,
           downloadUrl: flacUrl,
           duration,
           source: "Lossless Source",

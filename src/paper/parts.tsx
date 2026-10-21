@@ -4,6 +4,7 @@ import type { Page, RowActions } from '../core/voidCore';
 import { Reveal } from './motion';
 import { QualityBadge } from '../components/QualityBadge';
 import { formatProviderLabel, getTrackQualityBadge } from '../api/quality';
+import { computeAutoFitCoverScale, getCachedCoverScale, getStickyCoverUrl, isCoverUrlLoaded, markCoverUrlLoaded, rememberStickyCover } from '../api/arabicTrendingCatalog';
 
 /* ───────────── formatting helpers (presentation only) ───────────── */
 export const fmt = (seconds: number) => {
@@ -32,32 +33,57 @@ export const PgPlayIcon = ({ playing }: { playing: boolean }) => (playing ? <Pau
 
 /* ───────────── cover art ───────────── */
 export const PgCover = memo(function PgCover({ track, fill = false, kind = 'disc' }: { track?: any; fill?: boolean; kind?: 'disc' | 'list' }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const stickyRemoteUrl = track ? getStickyCoverUrl(track) : '';
+  const [blobSrc, setBlobSrc] = useState<string | null>(null);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const finalSrc = stickyRemoteUrl || blobSrc;
+  const [fitScale, setFitScale] = useState<number>(() => getCachedCoverScale(finalSrc, track));
 
   useEffect(() => {
-    let active = true;
-    setLoaded(false); setFailed(false);
-    if (!track) { setSrc(null); return; }
-    if (track.image) { setSrc(track.image); return; }
-    if (!track.artwork || !(track.artwork instanceof Blob)) { setSrc(null); return; }
-    const url = URL.createObjectURL(track.artwork);
-    if (active) setSrc(url);
-    return () => { active = false; URL.revokeObjectURL(url); };
-  }, [track?.artwork, track?.image, track?.id]);
+    setFitScale(getCachedCoverScale(finalSrc, track));
+  }, [finalSrc, track]);
 
+  useEffect(() => {
+    if (!track) { setBlobSrc(null); return; }
+    if (stickyRemoteUrl) {
+      rememberStickyCover(track, stickyRemoteUrl);
+      setBlobSrc(null);
+      return;
+    }
+    if (!track.artwork || !(track.artwork instanceof Blob)) { setBlobSrc(null); return; }
+    let active = true;
+    const url = URL.createObjectURL(track.artwork);
+    if (active) setBlobSrc(url);
+    return () => { active = false; URL.revokeObjectURL(url); };
+  }, [track, stickyRemoteUrl, track?.artwork, track?.id]);
+
+  const failed = Boolean(finalSrc && failedUrl === finalSrc);
   const Glyph = kind === 'list' ? ListMusic : Disc3;
   return (
     <div className={fill ? 'pg-cover pg-cover--fill' : 'pg-cover'} style={{ '--ch': hueOf(String(track?.id ?? 'void')) } as CSSProperties}
       data-testid={fill ? 'cover-artwork' : 'cover-thumbnail'}>
-      {src && !failed
-        ? <img src={src} alt={`${track?.album ?? 'Album'} artwork`} className={loaded ? 'is-loaded' : ''} decoding="async" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
+      {finalSrc && !failed
+        ? <img
+            src={finalSrc}
+            alt={`${track?.album ?? 'Album'} artwork`}
+            className="is-loaded"
+            style={{ opacity: 1, transform: fitScale > 1.005 ? `scale(${fitScale})` : undefined }}
+            decoding="async"
+            onLoad={(e) => {
+              markCoverUrlLoaded(finalSrc);
+              void isCoverUrlLoaded(finalSrc);
+              const computed = computeAutoFitCoverScale(e.currentTarget, finalSrc, track, (asyncScale) => {
+                setFitScale(prev => (Math.abs(asyncScale - prev) > 0.01 ? asyncScale : prev));
+              });
+              if (Math.abs(computed - fitScale) > 0.01) setFitScale(computed);
+            }}
+            onError={() => setFailedUrl(finalSrc)}
+          />
         : <Glyph aria-hidden="true" />}
     </div>
   );
 }, (a, b) => a.fill === b.fill && a.kind === b.kind && a.track?.artwork === b.track?.artwork && a.track?.image === b.track?.image
-  && a.track?.id === b.track?.id && a.track?.album === b.track?.album);
+  && a.track?.id === b.track?.id && a.track?.album === b.track?.album && a.track?.source === b.track?.source);
 
 /* ───────────── artist photo (uses the original app's fetcher + cache) ───────────── */
 export const PgArtistPhoto = memo(function PgArtistPhoto({ name, fetchPhoto }: { name: string; fetchPhoto: (n: string) => Promise<string | null> }) {

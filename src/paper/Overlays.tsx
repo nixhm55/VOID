@@ -214,7 +214,7 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
     if (!term.trim()) return;
     setSearchHistory(prev => {
       const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())];
-      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
       return updated;
     });
   };
@@ -223,7 +223,7 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
     e.stopPropagation();
     setSearchHistory(prev => {
       const updated = prev.filter(t => t !== term);
-      localStorage.setItem('void-search-history', JSON.stringify(updated));
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
       if (updated.length <= 4) setHistoryExpanded(false);
       return updated;
     });
@@ -310,7 +310,6 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
                   <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                     <PgDownloadBtn track={track} core={c} />
                     {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
-                    <span className="pg-tag search-source-label" style={{ marginLeft: 0 }}>{sourceLabel}</span>
                   </span>
                 </div>
               );
@@ -451,44 +450,46 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
           <button className="pg-result" onClick={() => c.openCollection('album', contextTrack.album)} data-testid="context-go-album"><Disc3 size={15} />Go to album</button>
           <button className="pg-result" onClick={() => c.setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
           
-          <button className="pg-result" onClick={() => { 
-            // Intercept window.confirm to execute IndexedDB delete silently AFTER the main app's confirm
-            const originalConfirm = window.confirm;
-            let confirmed = false;
-            window.confirm = (msg) => {
-              confirmed = originalConfirm(msg);
-              return confirmed;
-            };
-            
-            const finishDeletion = () => {
-              window.confirm = originalConfirm;
-              if (confirmed) {
-                const realId = String(contextTrack.id).replace(/^download:/, '').replace(/^api-/, '');
-                if ('indexedDB' in window) {
-                  const req = indexedDB.open('void-offline-downloads', 1);
-                  req.onsuccess = () => {
-                    const db = req.result;
-                    if (db.objectStoreNames.contains('tracks')) {
-                      const tx = db.transaction('tracks', 'readwrite');
-                      tx.objectStore('tracks').delete(realId);
-                      tx.oncomplete = () => {
-                        db.close();
-                        setTimeout(() => window.location.reload(), 100);
-                      };
-                    } else db.close();
-                  };
+          {c.detail?.kind !== 'artist' && c.page !== 'trending' && (c.tracks.some(t => t.id === contextTrack.id) || ((c as any).downloadedTracks ?? []).some((d: any) => d.id === contextTrack.id || `download:${d.id}` === contextTrack.id)) && (
+            <button className="pg-result" onClick={() => { 
+              // Intercept window.confirm to execute IndexedDB delete silently AFTER the main app's confirm
+              const originalConfirm = window.confirm;
+              let confirmed = false;
+              window.confirm = (msg) => {
+                confirmed = originalConfirm(msg);
+                return confirmed;
+              };
+              
+              const finishDeletion = () => {
+                window.confirm = originalConfirm;
+                if (confirmed) {
+                  const realId = String(contextTrack.id).replace(/^download:/, '').replace(/^api-/, '');
+                  if ('indexedDB' in window) {
+                    const req = indexedDB.open('void-offline-downloads', 1);
+                    req.onsuccess = () => {
+                      const db = req.result;
+                      if (db.objectStoreNames.contains('tracks')) {
+                        const tx = db.transaction('tracks', 'readwrite');
+                        tx.objectStore('tracks').delete(realId);
+                        tx.oncomplete = () => {
+                          db.close();
+                          setTimeout(() => window.location.reload(), 100);
+                        };
+                      } else db.close();
+                    };
+                  }
                 }
+              };
+              
+              const res = c.deleteTrack(contextTrack);
+              if (res instanceof Promise) {
+                res.finally(finishDeletion);
+              } else {
+                finishDeletion();
               }
-            };
-            
-            const res = c.deleteTrack(contextTrack);
-            if (res instanceof Promise) {
-              res.finally(finishDeletion);
-            } else {
-              finishDeletion();
-            }
-            c.setContextTrack(null); 
-          }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
+              c.setContextTrack(null); 
+            }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
+          )}
           
           <div className="pg-sheet-foot"><button className="pg-btn" onClick={() => c.setContextTrack(null)} data-testid="button-close-track-menu">Close</button></div>
         </div>
