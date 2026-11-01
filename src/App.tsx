@@ -3311,7 +3311,12 @@ useEffect(() => {
     if (direction === 'open') {
       art.animate([compact, full], { duration: 480, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
     } else {
-      const anim = art.animate([full, compact], { duration: 280, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
+      const currentStyle = getComputedStyle(art);
+      const currentFrame = {
+        transform: currentStyle.transform,
+        borderRadius: currentStyle.borderRadius,
+      };
+      const anim = art.animate([currentFrame, compact], { duration: 280, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
       anim.onfinish = () => { art.style.opacity = '0'; };
     }
   }, []);
