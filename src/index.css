@@ -2764,6 +2764,23 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   gap: 8px;
   flex-shrink: 0;
 }
+@media (max-width: 768px) {
+  .collection-header-bar {
+    flex-wrap: wrap;
+    row-gap: 12px;
+  }
+  .collection-header-copy {
+    flex: 1 1 auto;
+    min-width: max-content;
+  }
+  .collection-header-copy .eyebrow,
+  .collection-header-copy .page-subtitle {
+    white-space: nowrap;
+  }
+  .collection-header-actions {
+    margin-left: auto;
+  }
+}
 
 /* ── Mood card "Play something for me" button: blends naturally with the mood card ── */
 .mood-copy .mood-play-btn {
