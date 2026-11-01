@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import { DESIGN_OPTIONS, type DesignId, type Page, type VoidCore } from '../core/voidCore';
+import { useLenisScroll } from '../hooks/useLenisScroll';
 import { Reveal, useScrollVar } from './motion';
 import {
   HandCircle, PgArtistPhoto, PgCover, PgEmpty, PgPlayIcon, PgTrackList, PgVolume,
@@ -39,6 +40,8 @@ const FONT_PREVIEW = 'A quiet place for your music';
 export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const { tracks, playlists, page, detail, prefs, activeTrack, isPlaying } = c;
   const mainRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
+  const lenisRef = useLenisScroll(mainRef, scrollContentRef);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const homeRef = useRef<HTMLDivElement>(null);
   const discRef = useRef<HTMLDivElement>(null);
@@ -47,7 +50,10 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
   const isHome = page === 'home' && !detail;
 
   useScrollVar(mainRef, homeRef, [isHome, c.isReady]);
-  useEffect(() => { mainRef.current?.scrollTo({ top: 0 }); }, [page, detail?.kind, detail?.name]);
+  useEffect(() => {
+    if (lenisRef.current) lenisRef.current.scrollTo(0, { immediate: true });
+    else mainRef.current?.scrollTo({ top: 0 });
+  }, [page, detail?.kind, detail?.name, lenisRef]);
   useEffect(() => () => window.cancelAnimationFrame(discFrame.current), []);
 
   const pgBackRef = useRef({ libraryOpen, fontPanelOpen });
@@ -520,6 +526,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
       </aside>
 
       <div className="pg-main" ref={mainRef}>
+        <div className="pg-main-scroll-content" ref={scrollContentRef}>
         <header className={`pg-top ${c.page !== 'home' ? 'is-scrolled' : ''}`}>
           <div className="pg-top-left"><span className="pg-eclipse pg-eclipse--mobile" /><span className="pg-brand-word pg-brand-word--mobile">VOID</span><span className="pg-crumb">{detail ? c.title : page === 'home' ? 'A quiet place for your music' : 'Your library'}</span></div>
           <div className="pg-top-actions">
@@ -682,6 +689,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
 
           {c.isReady && !libraryOpen && page !== 'trending' && (page === 'home' && !detail ? home : page === 'settings' ? settings : library)}
         </main>
+        </div>
       </div>
 
       <nav className="pg-mobile-nav" aria-label="Mobile navigation" data-hidden={c.expanded ? '' : undefined}>

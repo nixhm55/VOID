@@ -20,6 +20,7 @@ import {
 } from '@/lib/library';
 import { type DesignId, type VoidCore, readDesign, writeDesign } from './core/voidCore';
 import { DgReveal } from './motion';
+import { useLenisScroll } from './hooks/useLenisScroll';
 const PaperGlassApp = lazy(() => import('./paper/PaperGlassApp'));
 
 type Page = 'home' | 'songs' | 'trending' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'downloads' | 'settings';
@@ -1639,6 +1640,9 @@ useEffect(() => {
   const fontFaces = useRef(new Map<string, FontFace>());
   const orbRef = useRef<HTMLDivElement>(null);
   const orbFrame = useRef(0);
+  const mainScrollRef = useRef<HTMLElement>(null);
+  const mainScrollContentRef = useRef<HTMLDivElement>(null);
+  useLenisScroll(mainScrollRef, mainScrollContentRef, design === 'deep');
   const contentRef = useRef<HTMLElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const ytAudioHostRef = useRef<HTMLDivElement>(null);
@@ -4295,7 +4299,8 @@ useEffect(() => {
           <div className="library-note">{tracks.length ? `${tracks.length} local ${tracks.length === 1 ? 'file' : 'files'} · ${compactBytes(tracks.reduce((sum, track) => sum + track.fileSize, 0))} on this device` : 'Your files stay on this device.'}</div>
         </div>
       </aside>
-      <main className="main-area">
+      <main className="main-area" ref={mainScrollRef}>
+        <div className="main-area-scroll-content" ref={mainScrollContentRef}>
         <header className="topbar">
           <div className="top-left">
             <span className="eclipse mobile-eclipse" />
@@ -4999,6 +5004,7 @@ useEffect(() => {
             </div>
           </div>}
         </section>
+        </div>
       </main>
 
       {/* Visibility follows the app state (data-hidden), so opening the expanded player takes the

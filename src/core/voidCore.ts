@@ -121,7 +121,7 @@ export interface VoidCore {
   importFiles: (files: FileList | File[], note?: string) => Promise<void>;
   autoImport: (files: FileList) => Promise<void>;
   rescanLibrary: () => Promise<void> | void;
-  clearLibrary: () => Promise<boolean> | boolean;
+  clearLibrary: () => Promise<boolean>;
   fileInput: InputRef;
   folderInput: InputRef;
   fontInput: InputRef;
