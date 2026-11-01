@@ -451,42 +451,8 @@ export function PgOverlays({ core: c }: { core: VoidCore }) {
           <button className="pg-result" onClick={() => c.setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
           
           {c.detail?.kind !== 'artist' && c.page !== 'trending' && (c.tracks.some(t => t.id === contextTrack.id) || ((c as any).downloadedTracks ?? []).some((d: any) => d.id === contextTrack.id || `download:${d.id}` === contextTrack.id)) && (
-            <button className="pg-result" onClick={() => { 
-              // Intercept window.confirm to execute IndexedDB delete silently AFTER the main app's confirm
-              const originalConfirm = window.confirm;
-              let confirmed = false;
-              window.confirm = (msg) => {
-                confirmed = originalConfirm(msg);
-                return confirmed;
-              };
-              
-              const finishDeletion = () => {
-                window.confirm = originalConfirm;
-                if (confirmed) {
-                  const realId = String(contextTrack.id).replace(/^download:/, '').replace(/^api-/, '');
-                  if ('indexedDB' in window) {
-                    const req = indexedDB.open('void-offline-downloads', 1);
-                    req.onsuccess = () => {
-                      const db = req.result;
-                      if (db.objectStoreNames.contains('tracks')) {
-                        const tx = db.transaction('tracks', 'readwrite');
-                        tx.objectStore('tracks').delete(realId);
-                        tx.oncomplete = () => {
-                          db.close();
-                          setTimeout(() => window.location.reload(), 100);
-                        };
-                      } else db.close();
-                    };
-                  }
-                }
-              };
-              
-              const res = c.deleteTrack(contextTrack);
-              if (res instanceof Promise) {
-                res.finally(finishDeletion);
-              } else {
-                finishDeletion();
-              }
+            <button className="pg-result" onClick={() => {
+              void c.deleteTrack(contextTrack);
               c.setContextTrack(null); 
             }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
           )}

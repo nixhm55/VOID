@@ -313,44 +313,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         <div className="pg-toolbar">
           <span className="pg-sub">{c.selectedSongIds.length} selected</span>
           <div className="pg-toolbar-end">
-            <button className="pg-btn pg-btn--danger" onClick={() => {
-              const originalConfirm = window.confirm;
-              let confirmed = false;
-              window.confirm = (msg) => {
-                confirmed = originalConfirm(msg);
-                return confirmed;
-              };
-              
-              const finishDeletion = () => {
-                window.confirm = originalConfirm;
-                if (confirmed) {
-                  if (window.indexedDB) {
-                    const req = window.indexedDB.open('void-offline-downloads', 1);
-                    req.onsuccess = () => {
-                      const db = req.result;
-                      if (db.objectStoreNames.contains('tracks')) {
-                        const tx = db.transaction('tracks', 'readwrite');
-                        const store = tx.objectStore('tracks');
-                        c.selectedSongIds.forEach(id => {
-                          const realId = String(id).replace(/^download:/, '').replace(/^api-/, '');
-                          store.delete(realId);
-                        });
-                        tx.oncomplete = () => {
-                          db.close();
-                          setTimeout(() => window.location.reload(), 100);
-                        };
-                      } else {
-                        db.close();
-                      }
-                    };
-                  }
-                }
-              };
-              
-              const res = c.deleteSelectedSongs();
-              if (res instanceof Promise) res.finally(finishDeletion);
-              else finishDeletion();
-            }} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>
+            <button className="pg-btn pg-btn--danger" onClick={() => { void c.deleteSelectedSongs(); }} data-testid="button-delete-selected"><Trash2 />Delete selected ({c.selectedSongIds.length})</button>
           </div>
         </div>
       )}
@@ -492,41 +455,28 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
         
         <div className="pg-setting"><div><strong>Clear library</strong><p>Remove VOID’s local copies and playlists. Original Mac files are untouched.</p></div>
           <button className="pg-btn pg-btn--danger" onClick={() => {
-            const originalConfirm = window.confirm;
-            let confirmed = false;
-            window.confirm = (msg) => {
-              confirmed = originalConfirm(msg);
-              return confirmed;
-            };
-            
-            const finishClear = () => {
-              window.confirm = originalConfirm;
-              if (confirmed) {
-                if (window.indexedDB) {
-                  const req = window.indexedDB.open('void-offline-downloads', 1);
-                  req.onsuccess = () => {
-                    const db = req.result;
-                    if (db.objectStoreNames.contains('tracks')) {
-                      const tx = db.transaction('tracks', 'readwrite');
-                      tx.objectStore('tracks').clear();
-                      tx.oncomplete = () => {
-                        db.close();
-                        window.location.reload();
-                      };
-                    } else {
+            void c.clearLibrary().then(cleared => {
+              if (!cleared) return;
+              if (window.indexedDB) {
+                const req = window.indexedDB.open('void-offline-downloads', 1);
+                req.onsuccess = () => {
+                  const db = req.result;
+                  if (db.objectStoreNames.contains('tracks')) {
+                    const tx = db.transaction('tracks', 'readwrite');
+                    tx.objectStore('tracks').clear();
+                    tx.oncomplete = () => {
                       db.close();
                       window.location.reload();
-                    }
-                  };
-                } else {
-                  window.location.reload();
-                }
+                    };
+                  } else {
+                    db.close();
+                    window.location.reload();
+                  }
+                };
+              } else {
+                window.location.reload();
               }
-            };
-            
-            const res = c.clearLibrary();
-            if (res instanceof Promise) res.finally(finishClear);
-            else finishClear();
+            });
           }} disabled={!tracks.length && !playlists.length && !(c as any).downloadedTracks?.length} data-testid="button-clear-library">Clear library</button>
         </div>
 

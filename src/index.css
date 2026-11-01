@@ -791,6 +791,10 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 .modal h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; margin: 0 0 6px; }
 .modal p { font-size: 13px; color: hsl(var(--muted-foreground)); line-height: 1.55; margin: 0 0 20px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin: 0; margin-top: 22px; }
+.confirm-backdrop { z-index: 60; }
+.confirm-modal { text-align: center; }
+.confirm-modal .modal-actions { justify-content: center; }
+.confirm-modal .button { min-width: 92px; }
 .properties-list { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px 16px; margin: 0; font-size: 12px; }
 .properties-list dt { color: hsl(var(--muted-foreground)); }
 .properties-list dd { margin: 0; overflow-wrap: anywhere; }

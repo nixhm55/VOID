@@ -1386,6 +1386,19 @@ async function removeVoidDownload(id: string): Promise<void> {
 
 function App() {
   const [location, setLocation] = useLocation();
+  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
+  const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const requestConfirmation = (message: string) => new Promise<boolean>(resolve => {
+    confirmationResolver.current?.(false);
+    confirmationResolver.current = resolve;
+    setConfirmationMessage(message);
+  });
+  const resolveConfirmation = (confirmed: boolean) => {
+    const resolve = confirmationResolver.current;
+    confirmationResolver.current = null;
+    setConfirmationMessage(null);
+    resolve?.(confirmed);
+  };
   const [tracks, setTracks] = useState<Track[]>([]);
   const [downloadedTracks, setDownloadedTracks] = useState<any[]>([]);
   // IMPORTANT / PROTECTED: Download removal must update both IndexedDB and React state.
@@ -1459,7 +1472,7 @@ useEffect(() => {
 
   const deleteSelectedSongs = async () => {
     if (!selectedSongIds.length) return;
-    if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
+    if (!await requestConfirmation(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
     try {
       if (page === 'downloads') {
         const downloadIds = selectedSongIds.map(id => id.startsWith('download:') ? id.slice('download:'.length) : id);
@@ -2442,7 +2455,7 @@ useEffect(() => {
   };
 
   const deleteFont = async (font: StoredFont) => {
-    if (!window.confirm(`Remove “${font.name}” from VOID? Your original font file is not deleted.`)) return;
+    if (!await requestConfirmation(`Remove “${font.name}” from VOID? Your original font file is not deleted.`)) return;
     try {
       await deleteStoredFont(font.id);
       const face = fontFaces.current.get(font.id);
@@ -3155,7 +3168,7 @@ useEffect(() => {
   };
 
   const deleteTrack = async (track: Track) => {
-    if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
+    if (!await requestConfirmation(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
 
     // IMPORTANT / PROTECTED DOWNLOAD DELETION FLOW:
     // Download rows use UI IDs like "download:<database-id>" and are stored in IndexedDB,
@@ -3250,7 +3263,7 @@ useEffect(() => {
   };
 
   const deletePlaylistById = async (playlist: Playlist) => {
-    if (!window.confirm(`Delete the playlist “${playlist.name}”? Your audio files will stay in your library.`)) return;
+    if (!await requestConfirmation(`Delete the playlist “${playlist.name}”? Your audio files will stay in your library.`)) return;
     try { await removePlaylist(playlist.id); setDetail(null); await reload(); notify('Playlist deleted.'); }
     catch { notify('Could not delete this playlist.'); }
   };
@@ -3273,8 +3286,8 @@ useEffect(() => {
     } catch { notify('Could not finish scanning this library.'); }
   };
 
-  const clearLibrary = async () => {
-    if (!window.confirm('Clear the local VOID library and playlists? The original files on your Mac will not be deleted.')) return;
+  const clearLibrary = async (): Promise<boolean> => {
+    if (!await requestConfirmation('Clear the local VOID library and playlists? The original files on your Mac will not be deleted.')) return false;
     try {
       await Promise.all([...tracks.map(track => removeTrack(track.id)), ...playlists.map(playlist => removePlaylist(playlist.id))]);
       if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
@@ -3283,7 +3296,8 @@ useEffect(() => {
       if (objectUrl.current) { URL.revokeObjectURL(objectUrl.current); objectUrl.current = null; }
       setTracks([]); setPlaylists([]); setQueue([]);
       notify('Local library and playlists cleared.');
-    } catch { notify('Could not clear the local library.'); }
+      return true;
+    } catch { notify('Could not clear the local library.'); return false; }
   };
 
   const openCollection = (kind: 'album' | 'artist', name: string) => {
@@ -5419,6 +5433,25 @@ useEffect(() => {
         <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-playlist">Cancel</button><button className="button primary" disabled={!modalValue.trim()} onClick={() => modal === 'playlist' ? void createPlaylist() : void renamePlaylist()} data-testid="button-save-playlist">{modal === 'playlist' ? 'Create playlist' : 'Save name'}</button></div>
       </>}
     </div></div>}
+    {confirmationMessage && <div
+      className="modal-backdrop confirm-backdrop"
+      onMouseDown={event => { if (event.target === event.currentTarget) resolveConfirmation(false); }}
+      onKeyDown={event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          resolveConfirmation(false);
+        }
+      }}
+    >
+      <div className="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" data-testid="delete-confirmation">
+        <h2 id="confirm-title">Are you sure?</h2>
+        <p id="confirm-message">{confirmationMessage}</p>
+        <div className="modal-actions">
+          <button autoFocus className="button" onClick={() => resolveConfirmation(false)} data-testid="button-cancel-delete">Cancel</button>
+          <button className="button danger" onClick={() => resolveConfirmation(true)} data-testid="button-confirm-delete">Delete</button>
+        </div>
+      </div>
+    </div>}
     {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && modal !== 'playlist' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
       <h2>{contextTrack.title}</h2><p>{contextTrack.artist}</p>
       <button className="palette-result desktop-context-only" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
