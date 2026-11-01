@@ -1,0 +1,1 @@
+- [Safari audio MIME handling](safari-audio-mime.md) — Canonicalize generic local-file MIME types by audio extension so valid Safari imports remain playable.

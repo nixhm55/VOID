@@ -1,0 +1,5674 @@
+import { fetchArtist } from './api/musicApi';
+import { extractCleanYouTubeId, extractYouTubeIdFromTrack, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
+import { searchAllProviders } from './api/unifiedSearch';
+import { fetchTrendingTop100, getInitialTrendingTracks, getOrderedTrendingLanguages, prewarmArabicTopStreams, promoteTrendingLanguage, resolveTrendingTrackStream, warmUpTrendingCatalog, type TrendingLanguage, type TrendingTrackItem } from './api/trendingApi';
+import { computeAutoFitCoverScale, getCachedCoverScale, getInstantArabicTop200, getStickyCoverUrl, isCoverUrlLoaded, isValidCoverUrl, markCoverUrlLoaded, rememberStickyCover, resolveAndLockTrackCover, resolveArabicYouTubeFallback, stickyCoverListeners } from './api/arabicTrendingCatalog';
+import { resolveUniversalTrackLyrics } from './api/lyricsApi';
+import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery, fetchArtistTop100, getInitialArtistTop100, isCompoundArtistString, isValidArtistAvatarUrl, normalizeArtistIdentityKey, pickCanonicalArtistDisplayName, scoreArtistAvatarUrl, searchCanonicalArtists } from './api/artistCatalogApi';
+import { areSongsFuzzyDuplicates, cleanCanonicalTrackTitle, deduplicateTrackCollection, detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
+import { QualityBadge } from './components/QualityBadge';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import{
+  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
+  Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
+  Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TrendingUp, Volume1, Volume2, VolumeX, X,
+} from 'lucide-react';
+import { useLocation } from 'wouter';
+import {
+  type Playlist, type Preferences, type Track, getPlaylists, getPreferences, getTracks,
+  removePlaylist, removeTrack, resolveAudioMimeType, savePlaylist, savePreferences, saveTrack, trackFromFile,
+} from '@/lib/library';
+import { type DesignId, type VoidCore, readDesign, writeDesign } from './core/voidCore';
+import { DgReveal } from './motion';
+const PaperGlassApp = lazy(() => import('./paper/PaperGlassApp'));
+
+type Page = 'home' | 'songs' | 'trending' | 'albums' | 'artists' | 'playlists' | 'favorites' | 'recent' | 'queue' | 'downloads' | 'settings';
+const defaults: Preferences = { theme: 'system', autoplay: false, volume: 0.72, muted: false, shuffle: false, repeat: 'off' };
+const greetings = [
+  'Still awake?',
+  'The night is quiet.',
+  'Before the world wakes.',
+  'Good morning.',
+  'A good morning starts here.',
+  'Good to have you here.',
+  'Good afternoon.',
+  'Settle into the afternoon.',
+  'A little room to listen.',
+  'Evening, take your time.',
+  'Let the day soften.',
+  'The evening is yours.',
+];
+// `compact` marks the pages that stay visible when the sidebar is collapsed to icons.
+const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'collection'; compact: boolean }[] = [
+  { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
+  { id: 'trending', label: 'Trending', icon: TrendingUp, group: 'listen', compact: true },
+  { id: 'recent', label: 'Recently played', icon: Clock3, group: 'listen', compact: true },
+  { id: 'songs', label: 'Songs', icon: Music2, group: 'collection', compact: true },
+  { id: 'albums', label: 'Albums', icon: Disc3, group: 'collection', compact: false },
+  { id: 'artists', label: 'Artists', icon: Mic2, group: 'collection', compact: false },
+  { id: 'playlists', label: 'Playlists', icon: ListMusic, group: 'collection', compact: true },
+  { id: 'favorites', label: 'Favorites', icon: Heart, group: 'collection', compact: true },
+  { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection', compact: false },
+  { id: 'downloads', label: 'Downloads', icon: Download, group: 'collection', compact: true },
+];
+// Mobile bottom bar: five primary destinations. Library is the one hub for the collection views
+// (albums, artists, playlists, recently played, queue) that stay individually routable.
+const mobileNavItems: { id: Page | 'library'; label: string; icon: typeof Home }[] = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'songs', label: 'Music', icon: Music2 },
+  { id: 'trending', label: 'Trending', icon: TrendingUp },
+  { id: 'library', label: 'Library', icon: LibraryIcon },
+  { id: 'settings', label: 'Settings', icon: Settings },
+];
+// Pages that the Library hub owns, so its tab stays lit while browsing inside the collection.
+const LIBRARY_PAGES: Page[] = ['downloads', 'favorites', 'albums', 'artists', 'playlists', 'recent', 'queue'];
+
+const pathFor = (page: Page) => page === 'home' ? '/' : `/${page}`;
+const formatTime = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—:—';
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+};
+// Elapsed time reads 0:00 at the start of a song instead of a dash.
+const formatElapsed = (seconds: number) => (!Number.isFinite(seconds) || seconds <= 0) ? '0:00' : formatTime(seconds);
+const compactBytes = (bytes: number) => bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+
+const countLabel = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
+const rangeStyle = (fraction: number) => ({ '--p': `${Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0)) * 100}%` }) as CSSProperties;
+const hueOf = (seed: string) => { let hash = 0; for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 360; return hash; };
+// Presentation only: a calm mood line for each two-hour block, matching the greetings above.
+const moods = [
+  'Late hours, low volume', 'Quiet, close, nocturnal', 'Soft light before sunrise', 'Slow start, warm cup',
+  'Bright, easy, unhurried', 'Clear head, open window', 'Midday, easy and warm', 'Slow afternoon light',
+  'Golden hour, low glare', 'Warm, slow, low light', 'Dim lamps, deep listening', 'Last light, long songs',
+];
+const moodLabelFor = (hour: number) => hour < 5 || hour >= 18 ? 'Tonight’s mood' : hour < 12 ? 'This morning’s mood' : 'This afternoon’s mood';
+
+type Hue4 = readonly [number, number, number, number];
+type ArtResult = { background: string; ambient: Hue4; grain: number };
+type ArtFamily = { from: number; to: number; weight: number };
+
+const ART_FAMILIES: readonly ArtFamily[] = [
+  { from: 346, to: 368, weight: 26 },
+  { from: 8, to: 26, weight: 18 },
+  { from: 30, to: 52, weight: 20 },
+  { from: 316, to: 344, weight: 12 },
+  { from: 268, to: 312, weight: 9 },
+  { from: 214, to: 262, weight: 6 },
+  { from: 176, to: 206, weight: 4 },
+  { from: 128, to: 168, weight: 3 },
+];
+
+const ART_LAYOUTS = [
+  'orb',
+  'duo',
+  'corner',
+  'horizon',
+  'trio',
+  'sun',
+  'edge',
+  'wash',
+] as const;
+
+const seedWords = (seed: string): [number, number, number, number] => {
+  let h1 = 1779033703;
+  let h2 = 3144134277;
+  let h3 = 1013904242;
+  let h4 = 2773480762;
+
+  for (let i = 0; i < seed.length; i += 1) {
+    const k = seed.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+
+  return [
+    (h1 ^ h2 ^ h3 ^ h4) >>> 0,
+    (h2 ^ h1) >>> 0,
+    (h3 ^ h1) >>> 0,
+    (h4 ^ h1) >>> 0,
+  ];
+};
+
+const sfc32 = (a: number, b: number, c: number, d: number) => () => {
+  a >>>= 0;
+  b >>>= 0;
+  c >>>= 0;
+  d >>>= 0;
+
+  const t = (a + b) | 0;
+  a = b ^ (b >>> 9);
+  b = (c + (c << 3)) | 0;
+  c = (c << 21) | (c >>> 11);
+  d = (d + 1) | 0;
+
+  const r = (t + d) | 0;
+  c = (c + r) | 0;
+
+  return (r >>> 0) / 4294967296;
+};
+
+const num = (value: number, digits = 0) => value.toFixed(digits);
+
+const hsla = (
+  h: number,
+  s: number,
+  l: number,
+  a?: number,
+) =>
+  a === undefined
+    ? `hsl(${num(h, 1)} ${num(s)}% ${num(l, 1)}%)`
+    : `hsl(${num(h, 1)} ${num(s)}% ${num(l, 1)}% / ${num(a, 2)})`;
+
+function composeArt(seed: string): ArtResult {
+  const rnd = sfc32(...seedWords(seed));
+  for (let i = 0; i < 12; i += 1) rnd();
+  const range = (a: number, b: number) => a + rnd() * (b - a);
+  const chance = (p: number) => rnd() < p;
+  const sign = () => (rnd() < 0.5 ? -1 : 1);
+  const wrap = (h: number) => ((h % 360) + 360) % 360;
+
+  const pickFamily = (list: readonly ArtFamily[]) => {
+    const total = list.reduce((sum, item) => sum + item.weight, 0);
+    let roll = rnd() * total;
+    for (const item of list) {
+      roll -= item.weight;
+      if (roll <= 0) return item;
+    }
+    return list[list.length - 1];
+  };
+
+  const hueIn = (family: ArtFamily) => wrap(range(family.from, family.to));
+  const family = pickFamily(ART_FAMILIES);
+  const warmFamilies = ART_FAMILIES.slice(0, 4);
+  const h1 = hueIn(family);
+  const roll = rnd();
+  const h2 =
+    roll < 0.5
+      ? hueIn(pickFamily(warmFamilies.filter((item) => item !== family)))
+      : roll < 0.86
+        ? wrap(h1 + sign() * range(14, 46))
+        : wrap(h1 + sign() * range(70, 130));
+
+  const h3 = chance(0.5) ? hueIn(ART_FAMILIES[2]) : wrap(h2 + sign() * range(12, 44));
+  const lush = chance(0.24);
+  const s1 = range(74, 98);
+  const s2 = range(66, 96);
+  const s3 = range(62, 94);
+  const lit = range(46, 60);
+  const size = lush ? 1.26 : 1;
+  const alpha = (lo: number, hi: number) => Math.min(1, range(lo, hi) * (lush ? 1.2 : 1));
+
+  const glow = (
+    x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end = 100,
+  ) =>
+    `radial-gradient(ellipse ${num(rx)}% ${num(ry)}% at ${num(x, 1)}% ${num(y, 1)}%, ${hsla(
+      h, s, Math.min(94, l + 6), a,
+    )} 0, ${hsla(h, s, l, a * 0.64)} ${num(end * 0.26)}%, ${hsla(
+      h, s, Math.max(6, l - 8), a * 0.32,
+    )} ${num(end * 0.56)}%, ${hsla(
+      h, s, Math.max(4, l - 16), a * 0.11,
+    )} ${num(end * 0.8)}%, transparent ${num(end)}%)`;
+
+  const lights: string[] = [];
+  const add = (x: number, y: number, rx: number, ry: number, h: number, s: number, l: number, a: number, end?: number) => {
+    lights.push(glow(x, y, rx, ry, h, s, l, a, end));
+  };
+  let focus: [number, number] = [50, 50];
+
+  switch (ART_LAYOUTS[Math.floor(rnd() * ART_LAYOUTS.length)]) {
+    case 'orb': {
+      const x = range(24, 76);
+      const y = range(32, 84);
+      const r = range(34, 62) * size;
+      add(x, y, r, r * range(0.86, 1.14), h1, s1, lit, alpha(0.7, 0.95), range(80, 100));
+      add(100 - x + range(-14, 14), 100 - y + range(-14, 14), range(40, 86), range(36, 80), h2, s2, lit - 6, alpha(0.34, 0.6));
+      focus = [x, y];
+      break;
+    }
+    case 'duo': {
+      const flip = chance(0.5);
+      const xa = range(10, 40);
+      const xb = range(60, 90);
+      const ya = range(18, 78);
+      const yb = range(18, 78);
+      add(flip ? xb : xa, ya, range(30, 56) * size, range(30, 56) * size, h1, s1, lit, alpha(0.62, 0.9), 96);
+      add(flip ? xa : xb, yb, range(28, 54) * size, range(28, 54) * size, h2, s2, lit - 4, alpha(0.55, 0.85), 96);
+      focus = [flip ? xb : xa, ya];
+      break;
+    }
+    case 'corner': {
+      const left = chance(0.5);
+      const top = chance(0.5);
+      const x = left ? range(-6, 18) : range(82, 106);
+      const y = top ? range(-6, 20) : range(80, 106);
+      add(x, y, range(70, 118) * size, range(62, 110) * size, h1, s1, lit, alpha(0.66, 0.95));
+      add(100 - x + range(-10, 10), 100 - y + range(-10, 10), range(44, 82), range(40, 78), h2, s2, lit - 4, alpha(0.5, 0.82));
+      focus = [x, y];
+      break;
+    }
+    case 'horizon': {
+      const low = chance(0.5);
+      const y = low ? range(80, 106) : range(-6, 20);
+      add(range(24, 76), y, range(84, 130) * size, range(26, 46) * size, h1, s1, lit, alpha(0.7, 0.95));
+      add(range(10, 90), low ? range(-8, 16) : range(84, 108), range(36, 72), range(30, 60), h2, s2, lit - 6, alpha(0.3, 0.56));
+      focus = [50, y];
+      break;
+    }
+    case 'trio': {
+      const base = range(0, Math.PI * 2);
+      const radius = range(22, 38);
+      const hues = [h1, h2, h3];
+      const sats = [s1, s2, s3];
+      hues.forEach((h, i) => {
+        const angle = base + i * 2.0944 + range(-0.5, 0.5);
+        add(
+          50 + Math.cos(angle) * radius + range(-6, 6),
+          50 + Math.sin(angle) * radius + range(-6, 6),
+          range(30, 52) * size,
+          range(30, 52) * size,
+          h, sats[i], lit - i * 2, alpha(0.5, 0.82), 98,
+        );
+      });
+      break;
+    }
+    case 'sun': {
+      const x = range(28, 72);
+      const y = range(28, 72);
+      const r = range(7, 15);
+      add(x, y, r, r, h3, Math.min(100, s3 + 6), 84, alpha(0.6, 0.9), 60);
+      add(x, y, r * 4.6, r * 4.6, h1, s1, lit, alpha(0.5, 0.8));
+      add(range(-10, 110), range(-10, 110), range(60, 110), range(54, 100), h2, s2, lit - 8, alpha(0.3, 0.56));
+      focus = [x, y];
+      break;
+    }
+    case 'edge': {
+      const left = chance(0.5);
+      const x = left ? range(-12, 6) : range(94, 112);
+      const y = range(18, 82);
+      add(x, y, range(52, 90) * size, range(46, 84) * size, h1, s1, lit, alpha(0.7, 0.95));
+      add(left ? range(70, 100) : range(0, 30), range(10, 90), range(34, 66), range(32, 64), h2, s2, lit - 4, alpha(0.4, 0.7), 96);
+      focus = [x, y];
+      break;
+    }
+    default: {
+      lights.push(
+        `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, s1, lit - 8, alpha(0.5, 0.8))}, transparent ${num(range(48, 70))}%, ${hsla(h2, s2, lit - 10, alpha(0.45, 0.75))})`,
+      );
+      const x = range(20, 80);
+      const y = range(20, 80);
+      add(x, y, range(28, 52) * size, range(28, 52) * size, h3, s3, lit, alpha(0.5, 0.8), 96);
+      focus = [x, y];
+    }
+  }
+
+  const extras: string[] = [];
+  if (chance(0.45)) {
+    extras.push(
+      glow(range(10, 90), range(10, 90), range(70, 120), range(40, 84), h3, s3, 64, alpha(0.14, 0.3)),
+      glow(range(10, 90), range(10, 90), range(60, 110), range(52, 104), h2, s2, 58, alpha(0.12, 0.26)),
+    );
+  }
+  if (chance(0.5)) {
+    const left = chance(0.5);
+    const top = chance(0.5);
+    extras.push(glow(left ? range(-10, 8) : range(92, 110), top ? range(-10, 10) : range(90, 110), range(40, 80), range(36, 74), h3, s3, lit, alpha(0.28, 0.55)));
+  }
+
+  const clamp = (value: number) => Math.max(20, Math.min(80, value));
+  const strength = range(0.3, 0.62) * (lush ? 0.7 : 1);
+  const vignette = `radial-gradient(ellipse ${num(range(78, 110))}% ${num(range(78, 110))}% at ${num(clamp(focus[0]), 1)}% ${num(clamp(focus[1]), 1)}%, transparent 0, transparent 34%, ${hsla(h1, 50, 3, strength * 0.45)} 70%, ${hsla(h1, 50, 2, strength)} 100%)`;
+  const shade = `linear-gradient(${num(range(0, 360))}deg, hsl(0 0% 100% / ${num(range(0.02, 0.07), 2)}), transparent ${num(range(30, 48))}%, hsl(0 0% 0% / ${num(range(0.12, 0.34), 2)}))`;
+  const baseL = lush ? range(10, 18) : range(4, 9);
+  const base = `linear-gradient(${num(range(0, 360))}deg, ${hsla(h1, range(34, 60), baseL + range(0, 3))}, ${hsla(h2, range(30, 56), Math.max(2, baseL - range(1, 4)))})`;
+
+  return {
+    background: [vignette, shade, ...extras, ...lights, base].join(', '),
+    ambient: [Math.round(h1), Math.round(h2), Math.round(h3), Math.round(Math.min(94, s1))],
+    grain: range(0.1, 0.26),
+  };
+}
+
+const artCache = new Map<string, ArtResult>();
+const artForSeed = (seed: string) => {
+  let art = artCache.get(seed);
+  if (!art) { art = composeArt(seed); artCache.set(seed, art); }
+  return art;
+};
+const artFor = (track: Track, identity?: string) => artForSeed(identity ?? `${track.id}|${track.fileName}|${track.fileSize}`);
+
+// Sample artwork ambient from local blob
+async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const size = 20;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    const bins = new Array<number>(24).fill(0);
+    let satSum = 0, weightSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      if (d < .08) continue;
+      const l = (max + min) / 2;
+      const mid = 1 - Math.abs(2 * l - 1);
+      const s = d / (mid || 1);
+      let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+      const weight = d * mid;
+      bins[Math.floor(h / 15) % 24] += weight;
+      satSum += s * weight; weightSum += weight;
+    }
+    if (weightSum < 4) return [215, 215, 215, 6];
+    const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
+    let best = 0;
+    for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
+    let second = -1;
+    for (let i = 0; i < 24; i += 1) {
+      const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
+      if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
+    }
+    const h1 = best * 15 + 7.5;
+    const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
+    const h3 = (h1 + 338) % 360;
+    const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
+    return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
+  } catch { return null; }
+  finally { URL.revokeObjectURL(url); }
+}
+
+// Sample ambient from remote image URL (JioSaavn / streaming cover)
+async function sampleImageUrlAmbient(url: string): Promise<Hue4 | null> {
+  if (!url || /archive\.org|ytimg\.com|fbcdn\.net/i.test(url)) return null;
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = url;
+    await img.decode();
+    const size = 20;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    const bins = new Array<number>(24).fill(0);
+    let satSum = 0, weightSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+      if (d < .08) continue;
+      const l = (max + min) / 2;
+      const mid = 1 - Math.abs(2 * l - 1);
+      const s = d / (mid || 1);
+      let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+      const weight = d * mid;
+      bins[Math.floor(h / 15) % 24] += weight;
+      satSum += s * weight; weightSum += weight;
+    }
+    if (weightSum < 4) return [215, 215, 215, 6];
+    const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
+    let best = 0;
+    for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
+    let second = -1;
+    for (let i = 0; i < 24; i += 1) {
+      const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
+      if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
+    }
+    const h1 = best * 15 + 7.5;
+    const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
+    const h3 = (h1 + 338) % 360;
+    const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
+    return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
+  } catch { return null; }
+}
+
+const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+};
+
+const AUTO_IMPORT_EXTENSIONS = new Set(['mp3', 'm4a', 'm4b', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'aif', 'aiff']);
+
+type StoredFont = { id: string; name: string; fileName: string; format: string; size: number; addedAt: number; data: Blob };
+const FONT_EXTENSIONS = ['ttf', 'otf', 'woff', 'woff2'];
+const FONT_MIME: Record<string, string> = { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' };
+const FONT_MAX_BYTES = 12 * 1024 * 1024;
+const FONT_ROW_PREFIX = 'font:';
+const SAVAGE_FAMILY = 'Savage Roses';
+const BUILTIN_FONTS = [
+  { id: 'dm-serif-display', name: 'DM Serif Display Italic', family: 'DM Serif Display', tag: 'Built in' },
+  { id: 'delamoore', name: 'Delamoore', family: 'Delamoore', tag: 'Built in' },
+  { id: 'savage-roses', name: SAVAGE_FAMILY, family: SAVAGE_FAMILY, tag: 'Built in' },
+  { id: 'wasted-vindey', name: 'Wasted Vindey', family: 'Wasted Vindey', tag: 'Built in' },
+] as const;
+const FONT_PREVIEW = 'A quiet place for your music';
+const fontFamilyFor = (id: string) => `VOID Font ${id.slice(0, 8)}`;
+const cleanFontName = (fileName: string) => fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim() || 'Custom font';
+
+const artistPhotoCache = new Map<string, string | null>();
+const artistPhotoListeners = new Set<() => void>();
+
+function getCachedArtistPhoto(artistName: string): string | null {
+  if (!artistName) return null;
+  const direct = artistPhotoCache.get(artistName);
+  if (direct && isValidArtistAvatarUrl(direct)) return direct;
+  const normKey = normalizeArtistIdentityKey(artistName);
+  const byNorm = artistPhotoCache.get(normKey);
+  if (byNorm && isValidArtistAvatarUrl(byNorm)) return byNorm;
+  return null;
+}
+
+function rememberArtistPhoto(artistName: string, imageUrl: string | null): void {
+  const clean = artistName.trim();
+  const normKey = normalizeArtistIdentityKey(clean);
+  const validUrl = imageUrl && isValidArtistAvatarUrl(imageUrl) ? imageUrl.trim() : null;
+  if (validUrl) {
+    const existing = getCachedArtistPhoto(clean);
+    if (!existing || scoreArtistAvatarUrl(validUrl) >= scoreArtistAvatarUrl(existing)) {
+      artistPhotoCache.set(clean, validUrl);
+      if (normKey) artistPhotoCache.set(normKey, validUrl);
+      artistPhotoListeners.forEach(fn => fn());
+    }
+  } else if (!artistPhotoCache.has(clean)) {
+    artistPhotoCache.set(clean, null);
+    if (normKey && !artistPhotoCache.has(normKey)) artistPhotoCache.set(normKey, null);
+  }
+}
+
+function fetchArtistPhoto(artistName: string): Promise<string | null> {
+  if (!artistName || artistName === 'Unknown Artist') return Promise.resolve(null);
+  const existing = getCachedArtistPhoto(artistName);
+  if (existing) return Promise.resolve(existing);
+  const cleanName = artistName.trim();
+  const normTarget = normalizeArtistIdentityKey(cleanName);
+  if (artistPhotoCache.has(normTarget) && artistPhotoCache.get(normTarget) === null) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const callbackName = 'dz_cb_' + Math.round(1000000 * Math.random());
+    let resolved = false;
+    (window as any)[callbackName] = (data: any) => {
+      resolved = true;
+      delete (window as any)[callbackName];
+      const scriptEl = document.getElementById(callbackName);
+      if (scriptEl) document.body.removeChild(scriptEl);
+      if (data && Array.isArray(data.data) && data.data.length > 0) {
+        // Avatar-Priority sorting: valid high-res picture_xl/picture_big first, then exact/duplicate name match, then fan count
+        const candidates = data.data
+          .map((a: any) => {
+            const pic = String(a?.picture_xl || a?.picture_big || a?.picture_medium || '').trim();
+            const avScore = scoreArtistAvatarUrl(pic);
+            const nameMatch = areSameOrDuplicateArtist(String(a?.name || ''), cleanName) ? 1 : 0;
+            return { artist: a, pic, avScore, nameMatch, fans: Number(a?.nb_fan) || 0 };
+          })
+          .filter((c: any) => c.avScore > 0)
+          .sort((a: any, b: any) => b.nameMatch - a.nameMatch || b.avScore - a.avScore || b.fans - a.fans);
+
+        const best = candidates[0];
+        if (best && best.pic) {
+          rememberArtistPhoto(artistName, best.pic);
+          resolve(best.pic);
+          return;
+        }
+      }
+      fallbackWiki();
+    };
+    const script = document.createElement('script');
+    script.id = callbackName;
+    script.src = `https://api.deezer.com/search/artist?q=${encodeURIComponent(cleanName)}&output=jsonp&callback=${callbackName}`;
+    document.body.appendChild(script);
+
+    const fallbackWiki = async () => {
+      try {
+        const apiRes = await fetch(`/__void_api/artist-search?q=${encodeURIComponent(cleanName)}`);
+        if (apiRes.ok) {
+          const profiles = await apiRes.json();
+          if (Array.isArray(profiles) && profiles.length > 0) {
+            const valid = profiles.find((p: any) => isValidArtistAvatarUrl(p?.image));
+            if (valid?.image) {
+              rememberArtistPhoto(artistName, valid.image);
+              resolve(valid.image);
+              return;
+            }
+          }
+        }
+      } catch {}
+      try {
+        const wikiRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(cleanName + ' musician')}&gsrlimit=1&prop=pageimages&pithumbsize=1000&format=json&origin=*`);
+        if (wikiRes.ok) {
+          const wikiData = await wikiRes.json();
+          if (wikiData.query && wikiData.query.pages) {
+            const pages = Object.values(wikiData.query.pages) as any[];
+            if (pages.length > 0 && isValidArtistAvatarUrl(pages[0].thumbnail?.source)) {
+              const imgUrl = pages[0].thumbnail.source;
+              rememberArtistPhoto(artistName, imgUrl);
+              resolve(imgUrl);
+              return;
+            }
+          }
+        }
+      } catch (e) {}
+      rememberArtistPhoto(artistName, null);
+      resolve(null);
+    };
+
+    setTimeout(() => {
+      if (!resolved) {
+        delete (window as any)[callbackName];
+        const scriptEl = document.getElementById(callbackName);
+        if (scriptEl) document.body.removeChild(scriptEl);
+        fallbackWiki();
+      }
+    }, 4000);
+  });
+}
+
+const VerifiedArtistBadge = memo(function VerifiedArtistBadge({ label = 'Verified Artist' }: { label?: string }) {
+  return (
+    <span className="verified-artist-badge" title={label} aria-label={label}>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="verified-artist-icon">
+        <path
+          d="M12 2.25L14.62 4.39L17.96 3.96L19.06 7.16L22.25 8.26L21.82 11.6L23.96 14.22L21.82 16.84L22.25 20.18L19.06 21.28L17.96 24.48L14.62 24.05L12 26.19L9.38 24.05L6.04 24.48L4.94 21.28L1.75 20.18L2.18 16.84L0.04 14.22L2.18 11.6L1.75 8.26L4.94 7.16L6.04 3.96L9.38 4.39L12 2.25Z"
+          transform="scale(0.84) translate(2.2, 0.8)"
+          fill="currentColor"
+        />
+        <path
+          d="M8.6 12.4L10.85 14.65L15.6 9.75"
+          stroke="#06080c"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+});
+
+const ArtistPhoto = memo(function ArtistPhoto({ artistName, fallbackTrack, square = false }: { artistName: string; fallbackTrack?: Track; square?: boolean }) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(() => getCachedArtistPhoto(artistName));
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setLoaded(false);
+    const cached = getCachedArtistPhoto(artistName);
+    if (cached) { setPhotoUrl(cached); return () => { active = false; }; }
+    setPhotoUrl(null);
+    fetchArtistPhoto(artistName).then(url => { if (active && url) setPhotoUrl(url); });
+    return () => { active = false; };
+  }, [artistName]);
+  const fallbackImg = !photoUrl && fallbackTrack ? (fallbackTrack.image || getStickyCoverUrl(fallbackTrack)) : '';
+  const finalUrl = photoUrl || fallbackImg || null;
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', borderRadius: square ? 'inherit' : '50%', overflow: 'hidden', background: 'hsl(var(--foreground) / .06)' }}>
+      {!finalUrl && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'hsl(var(--muted-foreground) / .45)' }}><Mic2 size={28} strokeWidth={1.2} /></div>}
+      {finalUrl && <img src={finalUrl} alt={artistName} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .28s ease' }} onLoad={() => setLoaded(true)} />}
+    </div>
+  );
+});
+
+const TRENDING_CARD_ARTIST_STORAGE_KEY = 'void-trending-card-artist-hd-v13:';
+const TRENDING_CARD_BG_STORAGE_KEY = 'void-trending-card-bg-v9:';
+const trendingCardArtistMemCache = new Map<string, string>();
+const trendingCardBgMemCache = new Map<string, string>();
+
+function getCachedTrendingCardArtistPhoto(lang: TrendingLanguage): string | null {
+  const mem = trendingCardArtistMemCache.get(lang.id);
+  if (mem && isValidArtistAvatarUrl(mem)) return mem;
+  try {
+    const stored = localStorage.getItem(`${TRENDING_CARD_ARTIST_STORAGE_KEY}${lang.id}`);
+    if (stored && isValidArtistAvatarUrl(stored)) {
+      trendingCardArtistMemCache.set(lang.id, stored);
+      return stored;
+    }
+  } catch {}
+  if (lang.preferWikiArtistPortrait && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+    return lang.artistPortraitUrl;
+  }
+  return null;
+}
+
+function saveTrendingCardArtistPhoto(lang: TrendingLanguage, url: string): void {
+  if (!url || !isValidArtistAvatarUrl(url)) return;
+  const clean = url.trim();
+  trendingCardArtistMemCache.set(lang.id, clean);
+  rememberArtistPhoto(lang.artistName, clean);
+  try {
+    localStorage.setItem(`${TRENDING_CARD_ARTIST_STORAGE_KEY}${lang.id}`, clean);
+  } catch {}
+}
+
+async function resolveTrendingCardArtistPhoto(lang: TrendingLanguage, skipStaticUrl = false): Promise<string | null> {
+  if (!skipStaticUrl) {
+    const existing = getCachedTrendingCardArtistPhoto(lang);
+    if (existing) return existing;
+    if (lang.preferWikiArtistPortrait && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+      saveTrendingCardArtistPhoto(lang, lang.artistPortraitUrl);
+      return lang.artistPortraitUrl;
+    }
+  }
+
+  if (lang.id === 'arabic') {
+    try {
+      const res = await fetch(`/__void_api/itunes-search?term=${encodeURIComponent('بسمتك يا زين تسوى الف بسمه ميحد حمد')}&country=ae&entity=song&limit=5`);
+      if (res.ok) {
+        const data = await res.json();
+        const items: any[] = Array.isArray(data?.results) ? data.results : [];
+        for (const item of items) {
+          const rawArt = String(item?.artworkUrl100 || '').trim();
+          if (rawArt) {
+            const hiRes = rawArt.replace('100x100bb', '1000x1000bb');
+            if (isValidArtistAvatarUrl(hiRes)) {
+              saveTrendingCardArtistPhoto(lang, hiRes);
+              return hiRes;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // When preferWikiArtistPortrait is false (e.g. K. J. Yesudas, Michael Jackson, Diljit Dosanjh, Shreya Ghoshal),
+  // prioritize the official 1000x1000 HD artist portrait from Deezer/Apple Music first!
+  if (!lang.preferWikiArtistPortrait) {
+    for (const candidateName of [lang.artistName, ...(lang.artistAliases || [])]) {
+      const primary = await fetchArtistPhoto(candidateName);
+      if (primary && isValidArtistAvatarUrl(primary)) {
+        saveTrendingCardArtistPhoto(lang, primary);
+        return primary;
+      }
+    }
+    if (!skipStaticUrl && lang.artistPortraitUrl && isValidArtistAvatarUrl(lang.artistPortraitUrl)) {
+      saveTrendingCardArtistPhoto(lang, lang.artistPortraitUrl);
+      return lang.artistPortraitUrl;
+    }
+  }
+
+  const wikiLangs = lang.wikiArtistLang ? [lang.wikiArtistLang, 'en'] : ['en'];
+  const wikiTitles = Array.from(new Set([lang.wikiArtistTitle, lang.artistName, ...(lang.artistAliases || [])].filter(Boolean)));
+  for (const wLang of wikiLangs) {
+    for (const title of wikiTitles) {
+      try {
+        const wikiRes = await fetch(
+          `https://${wLang}.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&redirects=1&prop=pageimages&pithumbsize=960&format=json&origin=*`
+        );
+        if (wikiRes.ok) {
+          const wikiData = await wikiRes.json();
+          const pages = wikiData?.query?.pages ? (Object.values(wikiData.query.pages) as any[]) : [];
+          for (const page of pages) {
+            const src = String(page?.thumbnail?.source || '').trim();
+            if (isValidArtistAvatarUrl(src) && !/stamp_of_india|postage|flag_of|commons-logo/i.test(src)) {
+              saveTrendingCardArtistPhoto(lang, src);
+              return src;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  for (const candidateName of [lang.artistName, ...(lang.artistAliases || [])]) {
+    const primary = await fetchArtistPhoto(candidateName);
+    if (primary && isValidArtistAvatarUrl(primary)) {
+      saveTrendingCardArtistPhoto(lang, primary);
+      return primary;
+    }
+  }
+
+  return null;
+}
+
+async function resolveTrendingCardWikiBg(lang: TrendingLanguage): Promise<string | null> {
+  const mem = trendingCardBgMemCache.get(lang.id);
+  if (mem) return mem;
+  try {
+    const stored = localStorage.getItem(`${TRENDING_CARD_BG_STORAGE_KEY}${lang.id}`);
+    if (stored && /^https?:\/\//i.test(stored)) {
+      trendingCardBgMemCache.set(lang.id, stored);
+      return stored;
+    }
+  } catch {}
+  if (!lang.bgWikiTitle) return null;
+  try {
+    const res = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(lang.bgWikiTitle)}&redirects=1&prop=pageimages&pithumbsize=1200&format=json&origin=*`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const pages = data?.query?.pages ? (Object.values(data.query.pages) as any[]) : [];
+      for (const page of pages) {
+        const src = String(page?.thumbnail?.source || '').trim();
+        if (/^https?:\/\//i.test(src)) {
+          trendingCardBgMemCache.set(lang.id, src);
+          try {
+            localStorage.setItem(`${TRENDING_CARD_BG_STORAGE_KEY}${lang.id}`, src);
+          } catch {}
+          return src;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+const TrendingLanguageCard = memo(function TrendingLanguageCard({
+  lang,
+  onSelect,
+}: {
+  lang: TrendingLanguage;
+  onSelect: (langId: string) => void;
+}) {
+  const [artistUrl, setArtistUrl] = useState<string | null>(() => getCachedTrendingCardArtistPhoto(lang));
+  const [artistLoaded, setArtistLoaded] = useState(false);
+  const [artistRetried, setArtistRetried] = useState(false);
+  const [bgIndex, setBgIndex] = useState(0);
+  const [wikiBgUrl, setWikiBgUrl] = useState<string | null>(() => trendingCardBgMemCache.get(lang.id) || null);
+  const [bgLoaded, setBgLoaded] = useState(false);
+
+  const bgCandidates = useMemo(() => {
+    const list = [...(lang.bgFallbackUrls || [])];
+    if (wikiBgUrl && !list.includes(wikiBgUrl)) list.push(wikiBgUrl);
+    return list;
+  }, [lang.bgFallbackUrls, wikiBgUrl]);
+
+  const currentBgUrl = bgCandidates[bgIndex] || null;
+
+  useEffect(() => {
+    let active = true;
+    setArtistRetried(false);
+    const cached = getCachedTrendingCardArtistPhoto(lang);
+    if (cached) {
+      setArtistUrl(cached);
+    } else {
+      setArtistLoaded(false);
+      resolveTrendingCardArtistPhoto(lang).then(url => {
+        if (active && url) setArtistUrl(url);
+      });
+    }
+    resolveTrendingCardWikiBg(lang).then(url => {
+      if (active && url) setWikiBgUrl(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [lang]);
+
+  return (
+    <button
+      type="button"
+      className="trending-lang-card"
+      onClick={() => onSelect(lang.id)}
+      style={{ '--card-accent-bg': lang.accentGradient } as CSSProperties}
+      aria-label={`${lang.label} — ${lang.subtitle}`}
+      data-testid={`trending-lang-${lang.id}`}
+    >
+      <div className="trending-lang-card-bg-wrap" aria-hidden="true">
+        {currentBgUrl && (
+          <img
+            src={currentBgUrl}
+            alt=""
+            className={`trending-lang-card-bg ${bgLoaded ? 'is-loaded' : ''}`}
+            loading="eager"
+            decoding="async"
+            onLoad={() => setBgLoaded(true)}
+            onError={() => {
+              setBgLoaded(false);
+              setBgIndex(i => i + 1);
+            }}
+          />
+        )}
+        <div className="trending-lang-card-atmosphere" />
+      </div>
+
+      {artistUrl && (
+        <div className="trending-lang-card-artist-wrap" aria-hidden="true">
+          <img
+            src={artistUrl}
+            alt={lang.artistName}
+            className={`trending-lang-card-artist ${artistLoaded ? 'is-loaded' : ''}`}
+            loading="eager"
+            decoding="async"
+            onLoad={() => setArtistLoaded(true)}
+            onError={() => {
+              setArtistLoaded(false);
+              if (!artistRetried) {
+                setArtistRetried(true);
+                resolveTrendingCardArtistPhoto(lang, true).then(fallbackUrl => {
+                  if (fallbackUrl && fallbackUrl !== artistUrl) {
+                    setArtistUrl(fallbackUrl);
+                  } else {
+                    setArtistUrl(null);
+                  }
+                });
+              } else {
+                setArtistUrl(null);
+              }
+            }}
+          />
+        </div>
+      )}
+
+      <div className="trending-lang-card-scrim" aria-hidden="true" />
+
+      <div className="trending-lang-card-copy">
+        <strong className="trending-lang-card-title">{lang.label}</strong>
+        <span className="trending-lang-card-subtitle">{lang.subtitle}</span>
+      </div>
+    </button>
+  );
+});
+
+async function materializeAudioFile(track: Track): Promise<{ file: File; mimeType: string }> {
+  const mimeType = resolveAudioMimeType(track.fileName, track.mimeType || track.file.type);
+  const buffer = await track.file.arrayBuffer();
+  const file = new File([buffer], track.fileName, { type: mimeType, lastModified: Number.isFinite(track.importedAt) ? track.importedAt : Date.now() });
+  return { file, mimeType };
+}
+
+function fontStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>) {
+  return new Promise<T>((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB is not available.')); return; }
+    const open = indexedDB.open('void-local-library');
+    open.onupgradeneeded = () => open.transaction?.abort();
+    open.onerror = () => reject(open.error ?? new Error('Could not open library storage.'));
+    open.onsuccess = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains('preferences')) { db.close(); reject(new Error('Library storage is not ready.')); return; }
+      let result: T | undefined;
+      const transaction = db.transaction('preferences', mode);
+      const request = action(transaction.objectStore('preferences'));
+      request.onsuccess = () => { result = request.result; };
+      transaction.oncomplete = () => { db.close(); resolve(result as T); };
+      transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error('Font storage was interrupted.')); };
+    };
+  });
+}
+const listStoredFonts = async () => {
+  const rows = await fontStore<{ id: string; value?: StoredFont }[]>('readonly', store => store.getAll());
+  return rows.filter(row => typeof row.id === 'string' && row.id.startsWith(FONT_ROW_PREFIX) && row.value?.data).map(row => row.value as StoredFont).sort((a, b) => a.addedAt - b.addedAt);
+};
+const putStoredFont = (font: StoredFont) => fontStore<IDBValidKey>('readwrite', store => store.put({ id: FONT_ROW_PREFIX + font.id, value: font }));
+const deleteStoredFont = (id: string) => fontStore<undefined>('readwrite', store => store.delete(FONT_ROW_PREFIX + id));
+
+async function loadFontFace(id: string, data: ArrayBuffer) {
+  const face = new FontFace(fontFamilyFor(id), data);
+  await face.load();
+  document.fonts.add(face);
+  return face;
+}
+
+async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
+  try {
+    const view = new DataView(buffer);
+    const signature = view.getUint32(0);
+    let table: DataView | null = null;
+    if (signature === 0x774f4646) {
+      const count = view.getUint16(12);
+      for (let i = 0; i < count; i += 1) {
+        const entry = 44 + i * 20;
+        if (view.getUint32(entry) !== 0x6e616d65) continue;
+        const offset = view.getUint32(entry + 4), packed = view.getUint32(entry + 8), original = view.getUint32(entry + 12);
+        const raw = buffer.slice(offset, offset + packed);
+        if (packed === original) table = new DataView(raw);
+        else if ('DecompressionStream' in window) {
+          const stream = new Blob([raw]).stream().pipeThrough(new (window as any).DecompressionStream('deflate'));
+          table = new DataView(await new Response(stream).arrayBuffer());
+        }
+        break;
+      }
+    } else if (signature === 0x00010000 || signature === 0x4f54544f || signature === 0x74727565) {
+      const count = view.getUint16(4);
+      for (let i = 0; i < count; i += 1) {
+        const entry = 12 + i * 16;
+        if (view.getUint32(entry) !== 0x6e616d65) continue;
+        table = new DataView(buffer, view.getUint32(entry + 8), view.getUint32(entry + 12));
+        break;
+      }
+    }
+    if (!table) return null;
+    const records = table.getUint16(2), strings = table.getUint16(4);
+    let family: string | null = null, legacy: string | null = null;
+    for (let i = 0; i < records; i += 1) {
+      const record = 6 + i * 12;
+      const platform = table.getUint16(record), nameId = table.getUint16(record + 6);
+      if (nameId !== 1 && nameId !== 16) continue;
+      const length = table.getUint16(record + 8), offset = strings + table.getUint16(record + 10);
+      const bytes = new Uint8Array(table.buffer, table.byteOffset + offset, length);
+      const text = new TextDecoder(platform === 3 || platform === 0 ? 'utf-16be' : 'windows-1252').decode(bytes).trim();
+      if (!text) continue;
+      if (nameId === 16 && !family) family = text;
+      else if (nameId === 1 && !legacy) legacy = text;
+    }
+    return family ?? legacy;
+  } catch { return null; }
+}
+
+const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
+  const [, setCoverTick] = useState(0);
+  useEffect(() => {
+    const onCoverLock = () => setCoverTick(t => t + 1);
+    stickyCoverListeners.add(onCoverLock);
+    return () => { stickyCoverListeners.delete(onCoverLock); };
+  }, []);
+
+  const stickyRemoteUrl = track ? getStickyCoverUrl(track) : '';
+  const [resolvedRemoteUrl, setResolvedRemoteUrl] = useState<string>('');
+  const [blobSrc, setBlobSrc] = useState<string | null>(null);
+  const [failedUrls, setFailedUrls] = useState<string[]>([]);
+
+  useEffect(() => {
+    setFailedUrls([]);
+    setResolvedRemoteUrl('');
+  }, [track?.id, track?.title, track?.artist]);
+
+  useEffect(() => {
+    if (!track) { setBlobSrc(null); return; }
+    const rawBlob =
+      track.artwork instanceof Blob && track.artwork.size >= 512
+        ? track.artwork
+        : track.coverBlob instanceof Blob && track.coverBlob.size >= 512 && /^image\//i.test(track.coverBlob.type || '')
+          ? track.coverBlob
+          : null;
+    if (!rawBlob) { setBlobSrc(null); return; }
+    let active = true;
+    const url = URL.createObjectURL(rawBlob);
+    if (active) setBlobSrc(url);
+    return () => { active = false; URL.revokeObjectURL(url); };
+  }, [track, track?.artwork, track?.coverBlob, track?.id]);
+
+  const directValidImg = track && isValidCoverUrl(track.image) ? String(track.image).trim() : '';
+  const candidates = [stickyRemoteUrl, directValidImg, resolvedRemoteUrl, blobSrc].filter(
+    (u): u is string => typeof u === 'string' && u.length > 0 && !failedUrls.includes(u)
+  );
+  const finalSrc = candidates[0] || null;
+  const [fitScale, setFitScale] = useState<number>(() => getCachedCoverScale(finalSrc, track));
+
+  useEffect(() => {
+    setFitScale(getCachedCoverScale(finalSrc, track));
+  }, [finalSrc, track]);
+
+  useEffect(() => {
+    if (!track) return;
+    if (stickyRemoteUrl && !failedUrls.includes(stickyRemoteUrl)) {
+      rememberStickyCover(track, stickyRemoteUrl);
+      return;
+    }
+    if (finalSrc) return;
+    let active = true;
+    void resolveAndLockTrackCover(track).then(url => {
+      if (active && url) {
+        setResolvedRemoteUrl(url);
+      }
+    });
+    return () => { active = false; };
+  }, [track, stickyRemoteUrl, finalSrc, failedUrls]);
+
+  const Glyph = kind === 'list' ? ListMusic : Disc3;
+
+  return (
+    <div className={large ? 'cover-large' : 'cover-mini'} data-testid={large ? 'cover-artwork' : 'cover-thumbnail'}>
+      {finalSrc ? (
+        <img
+          src={finalSrc}
+          alt={`${track?.album ?? 'Album'} artwork`}
+          className="loaded"
+          style={{ opacity: 1, transform: fitScale > 1.005 ? `scale(${fitScale})` : undefined }}
+          decoding="async"
+          onLoad={(e) => {
+            if (isValidCoverUrl(finalSrc)) {
+              rememberStickyCover(track, finalSrc);
+            }
+            markCoverUrlLoaded(finalSrc);
+            void isCoverUrlLoaded(finalSrc);
+            const computed = computeAutoFitCoverScale(e.currentTarget, finalSrc, track, (asyncScale) => {
+              setFitScale(prev => (Math.abs(asyncScale - prev) > 0.01 ? asyncScale : prev));
+            });
+            if (Math.abs(computed - fitScale) > 0.01) setFitScale(computed);
+          }}
+          onError={() => {
+            setFailedUrls(prev => (prev.includes(finalSrc) ? prev : [...prev, finalSrc]));
+            if (track) {
+              void resolveAndLockTrackCover(track).then(url => {
+                if (url && url !== finalSrc) {
+                  setResolvedRemoteUrl(url);
+                }
+              });
+            }
+          }}
+        />
+      ) : (
+        <Glyph aria-hidden="true" />
+      )}
+    </div>
+  );
+}, (a, b) => (
+  a.large === b.large &&
+  a.kind === b.kind &&
+  a.identity === b.identity &&
+  a.track?.artwork === b.track?.artwork &&
+  a.track?.coverBlob === b.track?.coverBlob &&
+  a.track?.image === b.track?.image &&
+  a.track?.id === b.track?.id &&
+  a.track?.album === b.track?.album &&
+  a.track?.artist === b.track?.artist &&
+  a.track?.source === b.track?.source
+));
+
+type RowActions = {
+  play: (track: Track, list: string[]) => void;
+  openAlbum: (name: string) => void;
+  move: (track: Track, index: number, step: number) => void;
+  removeFromList: (id: string) => void;
+  favorite: (track: Track) => void;
+  menu: (track: Track) => void;
+  download?: (track: any) => void;
+  canDownload?: (track: any) => boolean;
+  isDownloading?: (track: any) => boolean;
+  isDownloadSuccess?: (track: any) => boolean;
+  selectedIds?: string[];
+  toggleSelect?: (id: string) => void;
+  toggleSelectAll?: () => void;
+  isAllSelected?: boolean;
+};
+
+const SelectionEmblem = ({ selected }: { selected: boolean }) => (
+  <span
+    aria-hidden="true"
+    data-selection-emblem="true"
+    data-selected={selected ? 'true' : 'false'}
+    style={{
+      boxSizing: 'border-box',
+      width: 18,
+      height: 18,
+      minWidth: 18,
+      minHeight: 18,
+      borderRadius: '50%',
+      border: selected ? '1px solid #22c55e' : '1.5px solid hsl(var(--muted-foreground) / 0.4)',
+      backgroundColor: selected ? '#22c55e' : 'transparent',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flex: '0 0 18px',
+      overflow: 'visible',
+      transition: 'border-color 0.2s ease, background-color 0.2s ease',
+      pointerEvents: 'none',
+    }}
+  >
+    {selected && (
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        focusable="false"
+        style={{ display: 'block', width: 12, height: 12, minWidth: 12, minHeight: 12, opacity: 1, visibility: 'visible', overflow: 'visible' }}
+      >
+        <path d="M2.2 6.2 4.8 8.5 9.8 3.5" stroke="#ffffff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )}
+  </span>
+);
+
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [], downloadingIds = [], recentlyDownloadedIds = [], downloadedCount = 0 }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number;
+}) {
+  void downloadingIds; void recentlyDownloadedIds; void downloadedCount;
+  const isSelectionSupported = ['songs', 'playlists', 'favorites', 'recent', 'queue', 'downloads'].includes(page) && Boolean(toggleSelectAll);
+  const isSelectionMode = selectionMode;
+  return <div className={`table-wrap${className ? ` ${className}` : ""}`}>
+    <table className="track-table">
+      <thead>
+        <tr>
+          <th>{showIndex ? ' ' : 'Title'}</th>
+          <th>Album</th>
+          <th>Time</th>
+          <th className="track-col-quality">Quality</th>
+          <th aria-label="Actions">
+            {isSelectionSupported && toggleSelectAll && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingRight: 8 }}>
+                <button
+                  style={{ background: 'transparent', border: 0, padding: 0, cursor: 'pointer', display: 'flex' }}
+                  onClick={toggleSelectAll}
+                  aria-label={selectionMode ? 'Exit selection mode' : 'Show selection options'}
+                  title={selectionMode ? 'Exit selection mode' : 'Selection options'}
+                >
+                  <SelectionEmblem selected={!!selectionMode || !!isAllSelected} />
+                </button>
+              </div>
+            )}
+          </th>
+        </tr>
+      </thead>
+      <tbody>{items.map((track, index) => {
+        const isSelected = selectedIds.includes(track.id);
+        // The playing row is the only one that animates: the equalizer is tied to the audio element's
+        // real play state, not to the last row that was clicked.
+        const current = activeId === track.id;
+        const providerLabel = formatProviderLabel(track.source, track);
+        const qualityBadge = getTrackQualityBadge(track);
+        // Each row owns its play action: the row's card area (artwork + title) passes THIS track
+        // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
+        const playRowTrack = () => actions.play(track, items.map(item => item.id));
+        return (
+          <DgReveal
+            as="tr"
+            dir="row"
+            index={index}
+            key={track.id}
+            className={`dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}${deletingIds.includes(track.id) ? ' download-removing' : ''}`}
+            aria-current={current ? 'true' : undefined}
+            data-testid={`row-track-${track.id}`}
+            onClick={playRowTrack}
+            style={{ cursor: 'pointer' }}
+          >
+            <td>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                {isSelectionSupported && toggleSelect && (
+                  <div className="track-selection-gutter" style={{
+                    width: isSelectionMode ? 32 : 0,
+                    opacity: isSelectionMode ? 1 : 0,
+                    overflow: 'hidden',
+                    pointerEvents: isSelectionMode ? 'auto' : 'none',
+                    transition: 'width .34s var(--ease-out-soft), opacity .24s var(--ease-out-soft)',
+                    flex: `0 0 ${isSelectionMode ? 32 : 0}px`
+                  }}>
+                    <button
+                      style={{ background: 'transparent', border: 0, padding: 0, cursor: isSelectionMode ? 'pointer' : 'default', display: 'flex' }}
+                      onClick={event => { event.stopPropagation(); if (isSelectionMode) toggleSelect(track.id); }}
+                      aria-label={`Select ${track.title}`}
+                      tabIndex={isSelectionMode ? 0 : -1}
+                    >
+                      <SelectionEmblem selected={isSelected} />
+                    </button>
+                  </div>
+                )}
+                <div className="track-main">
+                  {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
+                  <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} /></div>
+                  <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
+                    <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}>
+                      <span className="track-title" title={track.title}>{track.title}</span>
+                      <span className="track-sub" title={track.artist}>{track.artist}</span>
+                    </span>
+                  </div>
+                  {current && isPlaying ? <span className="dg-eq" aria-hidden="true"><i /><i /><i /></span> : null}
+                </div>
+              </div>
+            </td>
+            <td><button className="crumb" style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }} onClick={event => { event.stopPropagation(); actions.openAlbum(track.album); }} data-testid={`link-album-${track.id}`}>{track.album}</button></td>
+            <td>{track.isLive ? 'LIVE' : formatTime(track.duration)}</td>
+            <td className="track-col-quality"><div className="track-quality-cell">{qualityBadge ? <QualityBadge tier={qualityBadge} track={track} compact /> : null}</div></td>
+            <td><div className="row-actions">
+              {reorder && <><button className="icon-button" aria-label={`Move ${track.title} up`} onClick={event => { event.stopPropagation(); actions.move(track, index, -1); }} data-testid={`button-order-up-${track.id}`}><ArrowUp /></button><button className="icon-button" aria-label={`Move ${track.title} down`} onClick={event => { event.stopPropagation(); actions.move(track, index, 1); }} data-testid={`button-order-down-${track.id}`}><ArrowDown /></button><button className="icon-button" aria-label={`Remove ${track.title} from ${page === 'queue' ? 'queue' : 'playlist'}`} onClick={event => { event.stopPropagation(); actions.removeFromList(track.id); }} data-testid={`button-remove-from-list-${track.id}`}><X /></button></>}
+              {page !== 'downloads' && actions.canDownload?.(track) && (
+                <button
+                  className={`download-icon-button row-download-button${actions.isDownloading?.(track) ? ' is-downloading' : ''}${actions.isDownloadSuccess?.(track) ? ' is-download-success' : ''}`}
+                  aria-label={actions.isDownloadSuccess?.(track) ? `Downloaded ${track.title}` : `Download ${track.title}`}
+                  title={actions.isDownloadSuccess?.(track) ? 'Downloaded' : actions.isDownloading?.(track) ? 'Saving offline…' : `Save ${track.title} for offline listening`}
+                  disabled={Boolean(actions.isDownloading?.(track) || actions.isDownloadSuccess?.(track))}
+                  onClick={event => { event.stopPropagation(); actions.download?.(track); }}
+                  data-testid={`button-download-${track.id}`}
+                >
+                  <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                    {actions.isDownloadSuccess?.(track) ? (
+                      <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    ) : (
+                      <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                    )}
+                  </svg>
+                </button>
+              )}
+              <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={event => { event.stopPropagation(); actions.favorite(track); }} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
+              <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={event => { event.stopPropagation(); actions.menu(track); }} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
+            </div></td>
+          </DgReveal>
+        );
+      })}</tbody>
+    </table>
+  </div>;
+});
+
+function VoidGlyph({ playing }: { playing: boolean }) {
+  return <svg className="void-glyph" viewBox="0 0 24 24" aria-hidden="true" data-playing={playing}>
+    <circle className="g-ring" cx="12" cy="12" r="10" transform="rotate(-19 12 12)" />
+    <path className="g-play" d="M10 8.4 L16.4 12 L10 15.6 Z" />
+    <g className="g-pause"><rect x="9" y="8.6" width="2.1" height="6.8" rx=".8" /><rect x="12.9" y="8.6" width="2.1" height="6.8" rx=".8" /></g>
+  </svg>;
+}
+
+function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, inputTestId }: {
+  volume: number; muted: boolean; onVolume: (value: number) => void; onToggleMute: () => void; buttonTestId: string; inputTestId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const dragging = useRef(false);
+  const silent = muted || volume <= 0;
+  const Icon = silent ? VolumeX : volume < .4 ? Volume1 : Volume2;
+  const clearTimer = () => window.clearTimeout(timer.current);
+  const armClose = () => {
+    clearTimer();
+    timer.current = window.setTimeout(() => { if (!dragging.current) setOpen(false); }, 1800);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const label = open ? (silent ? 'Unmute' : 'Mute') : 'Volume';
+  return <div ref={root} className="vol" data-open={open ? '' : undefined} data-silent={silent ? '' : undefined}
+    onPointerEnter={clearTimer} onPointerLeave={() => { if (open) armClose(); }}
+    onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpen(false); } }}
+    onBlur={event => { if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) armClose(); }}>
+    <div className="vol-pop">
+      <input className="vol-slider" style={rangeStyle(silent ? 0 : volume)} type="range" min="0" max="1" step=".01" value={silent ? 0 : volume}
+        aria-label="Volume" tabIndex={open ? 0 : -1}
+        onChange={event => onVolume(Number(event.target.value))}
+        onPointerDown={() => {
+          dragging.current = true; clearTimer();
+          window.addEventListener('pointerup', () => { dragging.current = false; }, { once: true });
+        }}
+        data-testid={inputTestId} />
+    </div>
+    <button className="icon-button vol-button" aria-label={label} aria-expanded={open} title={label}
+      onClick={() => { if (open) onToggleMute(); else setOpen(true); }} data-testid={buttonTestId}>
+      <Icon key={silent ? 'silent' : 'sound'} />
+    </button>
+  </div>;
+}
+
+// Loads YouTube's IFrame Player API script once and resolves with the global YT object.
+let ytApiPromise: Promise<any> | null = null;
+function loadYouTubeIframeApi(): Promise<any> {
+  const w = window as any;
+  if (w.YT?.Player) return Promise.resolve(w.YT);
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve, reject) => {
+    const previous = w.onYouTubeIframeAPIReady;
+    w.onYouTubeIframeAPIReady = () => { previous?.(); resolve(w.YT); };
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.onerror = () => { ytApiPromise = null; reject(new Error('YouTube API failed to load')); };
+    document.head.appendChild(tag);
+  });
+  return ytApiPromise;
+}
+
+type VoidDownloadRecord = { id: string; title: string; artist: string; album: string; image?: string; coverBlob?: Blob; duration?: number; mimeType: string; source?: string; qualityBadge?: string; bitrate?: number; codec?: string; format?: string; qualityVerified?: boolean; exactYtBlob?: boolean; favorite?: boolean; blob: Blob; downloadedAt: number };
+const VOID_DOWNLOAD_DB = 'void-offline-downloads';
+function createYtContainerBlob(): Blob {
+  const buffer = new ArrayBuffer(88);
+  const view = new DataView(buffer);
+  const writeAscii = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i += 1) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 80, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 16000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  view.setUint32(40, 44, true);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+function openVoidDownloadDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('Offline storage is unavailable in this browser.')); return; }
+    const request = indexedDB.open(VOID_DOWNLOAD_DB, 1);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('tracks')) request.result.createObjectStore('tracks', { keyPath: 'id' }); };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Could not open offline storage.'));
+  });
+}
+async function putVoidDownload(record: VoidDownloadRecord): Promise<void> {
+  const db = await openVoidDownloadDb();
+  const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('tracks', 'readwrite');
+      const store = tx.objectStore('tracks');
+      // Track IDs are the storage identity. Never remove a different download just
+      // because its title/artist text matches; providers can return distinct tracks
+      // with identical metadata.
+     const request = store.put(record);
+request.onerror = () => {
+  try {
+    tx.abort();
+  } catch {}
+};
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Could not save download.'));
+      tx.onabort = () => reject(tx.error || new Error('Download save was cancelled.'));
+    });
+  } finally { db.close(); }
+}
+async function getVoidDownloads(): Promise<VoidDownloadRecord[]> {
+  const db = await openVoidDownloadDb();
+  try { return await new Promise<VoidDownloadRecord[]>((resolve, reject) => { const request = db.transaction('tracks', 'readonly').objectStore('tracks').getAll(); request.onsuccess = () => resolve(request.result as VoidDownloadRecord[]); request.onerror = () => reject(request.error || new Error('Could not read downloads.')); }); } finally { db.close(); }
+}
+async function removeVoidDownload(id: string): Promise<void> {
+  const db = await openVoidDownloadDb();
+  try { await new Promise<void>((resolve, reject) => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').delete(id); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error || new Error('Could not remove download.')); }); } finally { db.close(); }
+}
+
+function App() {
+  const [location, setLocation] = useLocation();
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [downloadedTracks, setDownloadedTracks] = useState<any[]>([]);
+  // IMPORTANT / PROTECTED: Download removal must update both IndexedDB and React state.
+  // Do not replace this flow with removeTrack(); offline downloads live in their own database.
+  const [deletingDownloadIds, setDeletingDownloadIds] = useState<string[]>([]);
+  const [downloadingIds, setDownloadingIds] = useState<string[]>([]);
+  const [recentlyDownloadedIds, setRecentlyDownloadedIds] = useState<string[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [prefs, setPrefs] = useState<Preferences>(() => {
+    try {
+      const storedTheme = localStorage.getItem('void-theme') as Preferences['theme'] | null;
+      const theme = storedTheme || defaults.theme;
+      if (theme === 'system') {
+        const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } else {
+        const dark = theme === 'dark';
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      }
+      return { ...defaults, theme };
+    } catch {
+      return defaults;
+    }
+  });
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [streamingTrack, setStreamingTrack] = useState<any>(null);
+  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [canvasEnabled, setCanvasEnabled] = useState(true);
+  const [trendingLanguages, setTrendingLanguages] = useState<TrendingLanguage[]>(() => getOrderedTrendingLanguages());
+  const [activeTrendingLangId, setActiveTrendingLangId] = useState<string | null>(() => {
+    try { return sessionStorage.getItem('void-active-trending-lang') || null; } catch { return null; }
+  });
+  const [trendingTracks, setTrendingTracks] = useState<TrendingTrackItem[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('void-active-trending-lang');
+      return saved ? getInitialTrendingTracks(saved) : [];
+    } catch { return []; }
+  });
+  const [trendingLoading, setTrendingLoading] = useState(false);
+  const [trendingQuery, setTrendingQuery] = useState('');
+
+  const [design, setDesign] = useState<DesignId>(readDesign);
+
+useEffect(() => {
+  writeDesign(design);
+  document.documentElement.dataset.design = design;
+}, [design]);
+
+  const toggleSelectSong = (id: string) => {
+    setSelectedSongIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAllSongs = (items: Track[]) => {
+    const itemIds = items.map(track => track.id);
+    const allSelected = itemIds.length > 0 && itemIds.every(id => selectedSongIds.includes(id));
+    setSelectedSongIds(previous => allSelected
+      ? previous.filter(id => !itemIds.includes(id))
+      : [...new Set([...previous, ...itemIds])]);
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode(previous => {
+      if (previous) setSelectedSongIds([]);
+      return !previous;
+    });
+  };
+
+  const deleteSelectedSongs = async () => {
+    if (!selectedSongIds.length) return;
+    if (!window.confirm(`Remove ${selectedSongIds.length} selected songs from VOID?`)) return;
+    try {
+      if (page === 'downloads') {
+        const downloadIds = selectedSongIds.map(id => id.startsWith('download:') ? id.slice('download:'.length) : id);
+        // IMPORTANT / PROTECTED: selected download IDs are UI-prefixed but IndexedDB keys are not.
+        for (const id of downloadIds) await removeVoidDownload(id);
+        setDownloadedTracks(items => items.filter(item => !selectedSongIds.includes(item.id)));
+        setDeletingDownloadIds(ids => ids.filter(id => !selectedSongIds.includes(id)));
+      } else {
+        for (const id of selectedSongIds) await removeTrack(id);
+        setTracks(items => {
+          const updated = items.filter(item => !selectedSongIds.includes(item.id));
+          try {
+            const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+            localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+          } catch {}
+          return updated;
+        });
+        setQueue(items => items.filter(id => !selectedSongIds.includes(id)));
+      }
+      setSelectedSongIds([]);
+      notify(page === 'downloads' ? 'Selected downloads removed.' : 'Selected songs removed.');
+    } catch {
+      notify(page === 'downloads' ? 'Could not remove selected downloads.' : 'Could not remove selected songs.');
+    }
+  };
+  const [queue, setQueue] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('void-queue') || '[]') as string[]; } catch { return []; }
+  });
+  const [page, setPage] = useState<Page>(() => {
+    const initialPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
+    return ['home', 'songs', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(initialPath) ? initialPath : 'home';
+  });
+  const [greetingHour, setGreetingHour] = useState(() => new Date().getHours());
+  const [query, setQuery] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [paletteTab, setPaletteTab] = useState<'songs' | 'artists'>('songs');
+  const [onlineArtistResults, setOnlineArtistResults] = useState<string[]>([]);
+  const [artistTopTracks, setArtistTopTracks] = useState<TrendingTrackItem[]>([]);
+  const [artistTopLoading, setArtistTopLoading] = useState(false);
+  const [artistViewTab, setArtistViewTab] = useState<'top100' | 'library'>('top100');
+  const [musicResults, setMusicResults] = useState<any[]>([]);
+  const [musicSearching, setMusicSearching] = useState(false);
+
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
+  });
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  const handleSaveHistory = (term: string) => {
+    if (!term.trim()) return;
+    setSearchHistory(prev => {
+      const updated = [term.trim(), ...prev.filter(t => t.toLowerCase() !== term.trim().toLowerCase())];
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  };
+
+  const handleRemoveHistory = (term: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSearchHistory(prev => {
+      const updated = prev.filter(t => t !== term);
+      try { localStorage.setItem('void-search-history', JSON.stringify(updated)); } catch {}
+      if (updated.length <= 4) setHistoryExpanded(false);
+      return updated;
+    });
+  };
+  
+  useEffect(() => {
+    if (paletteOpen) {
+      warmUpYouTubeBackend();
+    } else {
+      setHistoryExpanded(false);
+      setPaletteTab('songs');
+    }
+  }, [paletteOpen]);
+
+  useEffect(() => {
+    const q = paletteQuery.trim();
+    if (!q) {
+      setMusicResults([]);
+      setOnlineArtistResults([]);
+      setMusicSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const search = async () => {
+      setMusicSearching(true);
+      setMusicResults([]);
+
+      // Concurrently query canonical artist database (Deezer + Apple Music/iTunes spell-corrected artist lookup)
+      void searchCanonicalArtists(q, controller.signal, (name, img) => {
+        rememberArtistPhoto(name, img);
+      }).then(profiles => {
+        if (!cancelled && !controller.signal.aborted) {
+          setOnlineArtistResults(profiles.map(p => p.name));
+        }
+      }).catch(() => {});
+
+      try {
+        const { results } = await searchAllProviders(q, {
+          signal: controller.signal,
+          onPartialResults: (partial) => {
+            if (!cancelled && !controller.signal.aborted) {
+              setMusicResults(deduplicateTrackCollection(partial, { ignoreArtist: false, cleanTitles: true }));
+            }
+          },
+        });
+        if (!cancelled && !controller.signal.aborted) {
+          setMusicResults(deduplicateTrackCollection(results, { ignoreArtist: false, cleanTitles: true }));
+        }
+      } catch {
+        // Handled silently to keep console clean
+      } finally {
+        if (!cancelled && !controller.signal.aborted) {
+          setMusicSearching(false);
+        }
+      }
+    };
+
+    const timer = window.setTimeout(search, 240);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [paletteQuery]);
+
+  const [modal, setModal] = useState<'playlist' | 'rename' | 'add-to-playlist' | 'properties' | null>(null);
+  const [modalValue, setModalValue] = useState('');
+  const [contextTrack, setContextTrack] = useState<Track | null>(null);
+  const [detail, setDetail] = useState<{ kind: 'album' | 'artist' | 'playlist'; name: string } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [closing, setClosing] = useState(false);
+  // Deep Glass hub for the mobile Library tab (the underlying albums / artists / playlists
+  // pages and routes are untouched — this only decides which screen the shell shows).
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [toast, setToast] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importMenu, setImportMenu] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('void-sidebar') === 'collapsed'; } catch { return false; }
+  });
+  const [fontId, setFontId] = useState<string>(() => {
+    try { return localStorage.getItem('void-font') || 'default'; } catch { return 'default'; }
+  });
+  const [customFonts, setCustomFonts] = useState<StoredFont[]>([]);
+  const [fontsStatus, setFontsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [savageState, setSavageState] = useState<'checking' | 'ready' | 'missing'>('checking');
+  const [fontBusy, setFontBusy] = useState(false);
+  const [mobileFontOpen, setMobileFontOpen] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [position, setPosition] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [atmos, setAtmos] = useState<Hue4 | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement | null>(null);
+  const fontInput = useRef<HTMLInputElement>(null);
+  const fontFaces = useRef(new Map<string, FontFace>());
+  const orbRef = useRef<HTMLDivElement>(null);
+  const orbFrame = useRef(0);
+  const contentRef = useRef<HTMLElement>(null);
+  const audio = useRef<HTMLAudioElement>(null);
+  const ytAudioHostRef = useRef<HTMLDivElement>(null);
+  const ytAudioPlayerRef = useRef<any>(null);
+  const ytActiveRef = useRef(false);
+  const ytVideoIdRef = useRef<string | null>(null);
+  const prefsRef = useRef<Preferences>(prefs);
+  prefsRef.current = prefs;
+  const playRelativeRef = useRef<(direction: number) => void>(() => {});
+  const switchingTrackRef = useRef(false);
+  const userPausedRef = useRef(false);
+  const lastVisibilityHideRef = useRef(0);
+  const objectUrl = useRef<string | null>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
+  const npArt = useRef<HTMLDivElement>(null);
+  const expandedRef = useRef(false);
+  const closingRef = useRef(false);
+  const closeTimer = useRef<number | undefined>(undefined);
+  const themeTint = useRef<[number, number, number] | null>(null);
+  expandedRef.current = expanded;
+  closingRef.current = closing;
+  const activeTrack = streamingTrack?.id === activeId ? streamingTrack : (tracks.find(track => track.id === activeId) ?? null);
+
+   // --- SYNCED LYRICS STATE & LOGIC ---
+  const [syncedLyrics, setSyncedLyrics] = useState<{time: number, text: string}[] | null>(null);
+  const [lyricsManualScroll, setLyricsManualScroll] = useState(false);
+  const sideLyricsRef = useRef<HTMLDivElement>(null);
+  
+  const activeLyricIndex = useMemo(() => {
+    if (!syncedLyrics || syncedLyrics.length === 0) return -1;
+    // Always show the first line from time 0 so it sits waiting in position
+    if (position < syncedLyrics[0].time) return 0;
+    for (let i = 0; i < syncedLyrics.length; i++) {
+      const nextTime = syncedLyrics[i + 1]?.time ?? Infinity;
+      if (position >= syncedLyrics[i].time && position < nextTime) {
+        return i;
+      }
+    }
+    return syncedLyrics.length - 1;
+  }, [syncedLyrics, position]);
+
+  useEffect(() => {
+    if (!activeTrack) { setSyncedLyrics(null); setLyricsManualScroll(false); return; }
+    let alive = true;
+    setLyricsManualScroll(false);
+    resolveUniversalTrackLyrics(activeTrack)
+      .then((lines) => {
+        if (alive) {
+          setSyncedLyrics(lines && lines.length > 0 ? lines : null);
+        }
+      })
+      .catch(() => {
+        if (alive) setSyncedLyrics(null);
+      });
+    return () => { alive = false; };
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.duration]);
+
+  useEffect(() => {
+    if (lyricsManualScroll || activeLyricIndex < 0 || !sideLyricsRef.current) return;
+    const container = sideLyricsRef.current;
+    const activeEl = container.children[activeLyricIndex] as HTMLElement;
+    if (activeEl) {
+      container.scrollTo({
+        top: activeEl.offsetTop - container.clientHeight * 0.18 + activeEl.clientHeight / 2,
+        behavior: 'smooth'
+      });
+    }
+  }, [activeLyricIndex, lyricsManualScroll]);
+
+  const handleLyricsScroll = () => { if (!lyricsManualScroll) setLyricsManualScroll(true); };
+
+  // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
+  const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+  const isEnding = duration > 10 && (duration - position) <= 9;
+
+  // Persistent player: the iframe is created once per mount and then reused for every track.
+  const [canvasBootId, setCanvasBootId] = useState<string | null>(null); // video id baked into the iframe src (never changes while mounted)
+  const canvasFrame = useRef<HTMLIFrameElement>(null);
+  const canvasPlayer = useRef<any>(null);
+  const canvasLoadedId = useRef<string | null>(null); // id currently loaded in the player
+  const canvasWantedId = useRef<string | null>(null); // latest id requested by the track effect
+
+  useEffect(() => {
+    const resumeIfBackgroundPaused = () => {
+      if (userPausedRef.current || switchingTrackRef.current) return;
+      if (ytActiveRef.current && ytAudioPlayerRef.current) {
+        try {
+          const st = ytAudioPlayerRef.current.getPlayerState?.();
+          if (st === 2 || st === 5 || st === -1) {
+            ytAudioPlayerRef.current.playVideo?.();
+            setIsPlaying(true);
+          }
+        } catch {}
+      } else if (
+        audio.current &&
+        audio.current.src &&
+        audio.current.paused &&
+        !audio.current.ended &&
+        audio.current.currentTime > 0
+      ) {
+        void audio.current.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
+    };
+    const handleVisibility = () => {
+      lastVisibilityHideRef.current = Date.now();
+      if (document.visibilityState === 'hidden') {
+        setCanvasReady(false);
+        window.setTimeout(resumeIfBackgroundPaused, 40);
+        window.setTimeout(resumeIfBackgroundPaused, 180);
+        window.setTimeout(resumeIfBackgroundPaused, 450);
+      } else {
+        window.setTimeout(resumeIfBackgroundPaused, 40);
+        window.setTimeout(resumeIfBackgroundPaused, 200);
+        if (canvasPlayer.current && typeof canvasPlayer.current.playVideo === 'function') {
+          canvasPlayer.current.playVideo();
+        }
+        setTimeout(() => setCanvasReady(true), 2000);
+      }
+    };
+    const handleWindowBlurOrResize = () => {
+      lastVisibilityHideRef.current = Date.now();
+      window.setTimeout(resumeIfBackgroundPaused, 40);
+      window.setTimeout(resumeIfBackgroundPaused, 180);
+      window.setTimeout(resumeIfBackgroundPaused, 450);
+    };
+    const watchdog = window.setInterval(resumeIfBackgroundPaused, 400);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleWindowBlurOrResize);
+    window.addEventListener('focus', handleWindowBlurOrResize);
+    window.addEventListener('resize', handleWindowBlurOrResize);
+    return () => {
+      window.clearInterval(watchdog);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('blur', handleWindowBlurOrResize);
+      window.removeEventListener('focus', handleWindowBlurOrResize);
+      window.removeEventListener('resize', handleWindowBlurOrResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!activeTrack || !canvasEnabled || activeTrack.isLive) {
+      setCanvasVideoId(null);
+      setCanvasReady(false);
+      return;
+    }
+    setCanvasReady(false);
+    const rawTrackId = String(activeTrack.id || '').replace(/^api-/, '').replace(/^download:/, '');
+    if (/^[\w-]{11}$/.test(rawTrackId)) {
+      setCanvasVideoId(rawTrackId);
+      return () => { active = false; };
+    }
+    const controller = new AbortController();
+    const query = `${activeTrack.title} ${activeTrack.artist} official music video`;
+    searchYouTube(query, controller.signal).then(results => {
+      if (active && results && results.length > 0) {
+        const vidId = results[0].id || (results[0] as any).videoId;
+        setCanvasVideoId(vidId);
+      } else if (active) {
+        setCanvasVideoId(null);
+      }
+    }).catch(() => {
+      if (active) setCanvasVideoId(null);
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.isLive, canvasEnabled]);
+
+  // Freeze the iframe's initial video id so React never changes its src (which would reload the iframe).
+  useEffect(() => {
+    if (!canvasEnabled || !canvasVideoId) setCanvasBootId(null);
+    else setCanvasBootId(canvasVideoId);
+  }, [canvasEnabled, canvasVideoId]);
+
+  const notify = useCallback((message: string) => {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(''), 3400);
+  }, []);
+
+  const downloadSearchTrack = async (track: any) => {
+    const id =
+      extractCleanYouTubeId(track?.id ?? '') ||
+      extractYouTubeIdFromTrack(track) ||
+      String(track?.title || track?.name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gi, '-');
+    if (!id || downloadingIds.includes(id)) return;
+    if (track.isLive || track.qualityBadge === 'Live Radio' || track.qualityBadge === 'FLAC Live') {
+      notify('Live radio streams cannot be downloaded for offline playback.');
+      return;
+    }
+    setDownloadingIds(previous => [...previous, id]);
+    try {
+      let workingTrack = { ...track };
+      let url = workingTrack.downloadUrl || workingTrack.audioUrl || workingTrack.src;
+      if (!url || String(url || '').startsWith('trending-resolve://')) {
+        const resolved = await resolveTrendingTrackStream(workingTrack);
+        if (resolved?.url) {
+          url = resolved.url;
+          workingTrack = {
+            ...workingTrack,
+            audioUrl: resolved.url,
+            downloadUrl: resolved.url,
+            src: resolved.url,
+            source: resolved.source || workingTrack.source,
+            fallbackUrls: resolved.fallbackUrls,
+            image: resolved.image || workingTrack.image,
+            duration: resolved.duration || workingTrack.duration,
+          };
+        }
+      }
+      const resolvedYtId = extractYouTubeIdFromTrack({ ...workingTrack, audioUrl: url, downloadUrl: url });
+      const isYtTrack =
+        String(url || '').startsWith('yt-stream://') ||
+        String(url || '').includes('void-backend') ||
+        String(url || '').includes('yt-audio') ||
+        formatProviderLabel(workingTrack.source, workingTrack) === 'YouTube' ||
+        /^[\w-]{11}$/.test(resolvedYtId);
+      const trackTitleHint = String(workingTrack.name || workingTrack.title || '').trim();
+      const trackArtistHint = String(workingTrack.artist || '').trim();
+      const ytLocalStreamUrl = /^[\w-]{11}$/.test(resolvedYtId)
+        ? `/__void_api/yt-audio?id=${encodeURIComponent(resolvedYtId)}&title=${encodeURIComponent(trackTitleHint)}&artist=${encodeURIComponent(trackArtistHint)}`
+        : '';
+
+      let ytDirectCandidates: string[] = [];
+      if (isYtTrack) {
+        const [resolvedYt, extraYtUrls] = await Promise.all([
+          resolveYouTubePlayableStream({ ...workingTrack, id: resolvedYtId || id, audioUrl: url, downloadUrl: url }),
+          resolveYouTubeDownloadCandidates({ ...workingTrack, id: resolvedYtId || id, audioUrl: url, downloadUrl: url }),
+        ]);
+        ytDirectCandidates = extraYtUrls;
+        if (resolvedYt?.url) {
+          url = resolvedYt.url;
+          workingTrack = {
+            ...workingTrack,
+            downloadUrl: resolvedYt.url,
+            audioUrl: resolvedYt.url,
+            fallbackUrls: resolvedYt.fallbackUrls,
+            bitrate: resolvedYt.bitrate ?? workingTrack.bitrate,
+            codec: resolvedYt.codec ?? workingTrack.codec,
+            mimeType: resolvedYt.mimeType ?? workingTrack.mimeType,
+            qualityBadge: resolvedYt.qualityBadge ?? workingTrack.qualityBadge,
+            qualityVerified: resolvedYt.qualityVerified ?? workingTrack.qualityVerified,
+            duration: workingTrack.duration || resolvedYt.duration,
+          };
+        } else if (ytDirectCandidates.length > 0) {
+          url = ytDirectCandidates[0];
+        } else if (ytLocalStreamUrl) {
+          url = ytLocalStreamUrl;
+        }
+      }
+
+      const rawCandidates = [
+        url,
+        ...ytDirectCandidates,
+        ...(ytLocalStreamUrl ? [ytLocalStreamUrl] : []),
+        ...(Array.isArray(workingTrack.fallbackUrls) ? workingTrack.fallbackUrls : []),
+      ].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
+
+      const candidateUrls: string[] = [];
+      for (const cand of rawCandidates) {
+        if (/^https?:\/\//i.test(cand)) {
+          const proxied = `/__void_api/proxy-audio?url=${encodeURIComponent(cand)}`;
+          if (!candidateUrls.includes(proxied)) candidateUrls.push(proxied);
+        }
+        if (!candidateUrls.includes(cand)) candidateUrls.push(cand);
+      }
+
+      let blob: Blob | null = null;
+      let exactYtBlob = false;
+      let finalUrl = candidateUrls[0] || '';
+      const tryFetchCandidates = async (urlsToTry: string[]) => {
+        for (const candidateUrl of urlsToTry) {
+          try {
+            const fetchTarget = /archive\.org/i.test(candidateUrl)
+              ? `/__void_api/proxy?url=${encodeURIComponent(candidateUrl)}`
+              : candidateUrl;
+            const response = await fetch(fetchTarget, { mode: 'cors' });
+            if (!response.ok) continue;
+            const fetchedBlob = await response.blob();
+            const minValidSize = isYtTrack ? 32768 : 1024;
+            const bType = String(fetchedBlob.type || '').toLowerCase();
+            if (
+              fetchedBlob.size >= minValidSize &&
+              !bType.includes('html') &&
+              !bType.includes('json')
+            ) {
+              blob = fetchedBlob;
+              exactYtBlob = isYtTrack;
+              finalUrl = candidateUrl;
+              return true;
+            }
+          } catch {
+            // Try next candidate URL
+          }
+        }
+        return false;
+      };
+
+      await tryFetchCandidates(candidateUrls);
+
+      // Fallback: if direct candidates failed, resolve via trending/JioSaavn/YouTube stream resolver
+      if (!blob && (trackTitleHint || trackArtistHint)) {
+        const fallbackResolved = await resolveTrendingTrackStream({
+          ...workingTrack,
+          audioUrl: 'trending-resolve://force',
+        });
+        if (fallbackResolved?.url) {
+          const fbList: string[] = [];
+          if (/^https?:\/\//i.test(fallbackResolved.url)) {
+            fbList.push(`/__void_api/proxy-audio?url=${encodeURIComponent(fallbackResolved.url)}`);
+          }
+          fbList.push(fallbackResolved.url);
+          await tryFetchCandidates(fbList);
+        }
+      }
+
+      if (!blob && isYtTrack && /^[\w-]{11}$/.test(resolvedYtId || id)) {
+        blob = createYtContainerBlob();
+        exactYtBlob = false;
+      }
+
+      if (!blob) {
+        throw new Error('The audio provider did not allow this download.');
+      }
+
+      let coverBlob: Blob | undefined;
+      let coverSourceUrl =
+        (isValidCoverUrl(workingTrack.image) ? String(workingTrack.image).trim() : '') ||
+        (isValidCoverUrl(track.image) ? String(track.image).trim() : '') ||
+        getStickyCoverUrl(workingTrack) ||
+        getStickyCoverUrl(track);
+      if (!coverSourceUrl) {
+        coverSourceUrl = await resolveAndLockTrackCover(workingTrack);
+      }
+      if (coverSourceUrl) {
+        rememberStickyCover(workingTrack, coverSourceUrl);
+      }
+      if (coverSourceUrl && !String(coverSourceUrl).includes('fbcdn.net')) {
+        try {
+          const coverTarget = /^https?:\/\//i.test(String(coverSourceUrl))
+            ? `/__void_api/proxy?url=${encodeURIComponent(String(coverSourceUrl))}`
+            : String(coverSourceUrl);
+          const coverResponse = await fetch(coverTarget, { mode: 'cors' });
+          if (coverResponse.ok) {
+            const fetchedCover = await coverResponse.blob();
+            if (fetchedCover.size >= 512 && /^image\//i.test(fetchedCover.type || '')) {
+              coverBlob = fetchedCover;
+            }
+          }
+        } catch {
+          /* Keep the source artwork URL if the image host blocks CORS. */
+        }
+      }
+
+      const blobUrl = URL.createObjectURL(blob);
+      let trackDuration = Number(workingTrack.duration) || 0;
+      if (!trackDuration || !Number.isFinite(trackDuration) || trackDuration <= 0) {
+        trackDuration = await new Promise<number>(resolve => {
+          const probe = document.createElement('audio');
+          const done = (val: number) => {
+            probe.removeAttribute('src');
+            resolve(Number.isFinite(val) && val > 0 ? val : 0);
+          };
+          const timer = window.setTimeout(() => done(0), 2500);
+          probe.onloadedmetadata = () => { window.clearTimeout(timer); done(probe.duration); };
+          probe.onerror = () => { window.clearTimeout(timer); done(0); };
+          probe.src = blobUrl;
+        });
+      }
+
+      const resolvedMime = blob.type || workingTrack.mimeType || 'audio/mp4';
+      const originalBadge =
+        track.qualityBadge && track.qualityBadge !== 'Unknown'
+          ? track.qualityBadge
+          : workingTrack.qualityBadge && workingTrack.qualityBadge !== 'Unknown'
+            ? workingTrack.qualityBadge
+            : undefined;
+      const detectedBadge = getTrackQualityBadge({
+        ...workingTrack,
+        qualityBadge: undefined,
+        downloadUrl: finalUrl,
+        mimeType: resolvedMime,
+        fileSize: blob.size,
+        duration: trackDuration,
+      });
+      const finalBadge = originalBadge || detectedBadge || 'Standard (128kbps)';
+      const record: VoidDownloadRecord = {
+        id,
+        title: String(workingTrack.name || workingTrack.title || 'Untitled'),
+        artist: String(workingTrack.artist || 'Unknown artist'),
+        album: String(workingTrack.album || 'Unknown album'),
+        image: coverSourceUrl || undefined,
+        coverBlob,
+        duration: trackDuration,
+        mimeType: resolvedMime,
+        source: formatProviderLabel(workingTrack.source, workingTrack),
+        qualityBadge: finalBadge,
+        bitrate: workingTrack.bitrate,
+        codec: workingTrack.codec,
+        format: workingTrack.format,
+        qualityVerified: true,
+        exactYtBlob: isYtTrack ? exactYtBlob : undefined,
+        favorite: Boolean(workingTrack.favorite || tracks.some(t => extractCleanYouTubeId(t.id) === id && t.favorite)),
+        blob,
+        downloadedAt: Date.now(),
+      };
+      await putVoidDownload(record);
+      setDownloadedTracks(previous => {
+        const existing = previous.find(item => String(item.id).replace(/^download:/, '') === id);
+        if (existing?.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(existing.audioUrl);
+        const next = {
+          ...record,
+          favorite: Boolean(record.favorite ?? existing?.favorite),
+          image: coverSourceUrl || existing?.image,
+          artwork: coverBlob,
+          id: `download:${id}`,
+          audioUrl: blobUrl,
+          src: blobUrl,
+          fileName: `${record.title}.audio`,
+          fileSize: blob!.size,
+          importedAt: record.downloadedAt,
+        };
+        return [next, ...previous.filter(item => String(item.id).replace(/^download:/, '') !== id)];
+      });
+      setRecentlyDownloadedIds(previous => [...previous.filter(item => item !== id), id]);
+      notify(`Saved “${record.title}” to Downloads.`);
+    } catch (error) {
+      notify(error instanceof Error && /Failed to fetch|NetworkError|CORS/i.test(error.message)
+        ? 'This provider blocks browser downloads for this result.'
+        : error instanceof Error ? error.message : 'Could not save this track offline.');
+    } finally {
+      setDownloadingIds(previous => previous.filter(item => item !== id));
+    }
+  };
+
+  const reload = useCallback(async () => {
+    try {
+      const [storedTracks, storedPlaylists, storedPrefs] = await Promise.all([getTracks(), getPlaylists(), getPreferences()]);
+      let remoteFavs: Track[] = [];
+      try {
+        const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+        const arabicCatalogMap = new Map(getInstantArabicTop200().map(t => [t.id, t]));
+        remoteFavs = Array.isArray(parsedFavs) ? parsedFavs.map((item: any) => {
+          const validSavedImg = isValidCoverUrl(item?.image) ? String(item.image).trim() : '';
+          const cleanImage = validSavedImg || getStickyCoverUrl(item) || undefined;
+          if (cleanImage) rememberStickyCover(item, cleanImage);
+          else {
+            void resolveAndLockTrackCover(item);
+          }
+          const rawAudio = String(item?.audioUrl || item?.downloadUrl || item?.src || '');
+          const cleanId = String(item?.id || '').replace(/^api-/, '').replace(/^yt:/, '');
+          const canonicalArabic = arabicCatalogMap.get(`api-${cleanId}`);
+          if (canonicalArabic) {
+            return {
+              ...item,
+              ...canonicalArabic,
+              image: canonicalArabic.image || cleanImage,
+              favorite: item?.favorite,
+              lastPlayedAt: item?.lastPlayedAt,
+            };
+          }
+          const isLegacyYt = rawAudio.includes('void-backend') || item?.source === 'YouTube';
+          return {
+            ...item,
+            image: cleanImage,
+            audioUrl: isLegacyYt && /^[\w-]{11}$/.test(cleanId) ? `yt-stream://${cleanId}` : item?.audioUrl,
+            fallbackUrls: Array.isArray(item?.fallbackUrls) ? item.fallbackUrls.filter((u: string) => !String(u).includes('void-backend')) : undefined,
+          };
+        }) : [];
+      } catch { remoteFavs = []; }
+      const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
+      setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
+      setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
+      if (storedPrefs) {
+        setPrefs({ ...defaults, ...storedPrefs });
+        try { localStorage.setItem('void-theme', storedPrefs.theme); } catch {}
+      }
+      setIsReady(true);
+    } catch (error) {
+      setStorageError(error instanceof Error ? error.message : 'Local library storage could not be opened.');
+      setIsReady(true);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getVoidDownloads().then(records => {
+      if (cancelled) return;
+      const uniqueRecords = records
+        .filter(record => record && record.blob instanceof Blob && record.blob.size > 0)
+        .sort((a, b) => b.downloadedAt - a.downloadedAt)
+        .filter((record, index, all) => all.findIndex(candidate => candidate.id === record.id) === index);
+      setDownloadedTracks(uniqueRecords.map(record => {
+        const blobUrl = URL.createObjectURL(record.blob);
+        const validCoverBlob =
+          record.coverBlob instanceof Blob &&
+          record.coverBlob.size >= 512 &&
+          /^image\//i.test(record.coverBlob.type || '')
+            ? record.coverBlob
+            : undefined;
+        const validRemoteImg =
+          (isValidCoverUrl(record.image) ? String(record.image).trim() : '') ||
+          getStickyCoverUrl(record) ||
+          undefined;
+        if (validRemoteImg) {
+          rememberStickyCover(record, validRemoteImg);
+        } else {
+          void resolveAndLockTrackCover(record).then(healedUrl => {
+            if (!healedUrl || cancelled) return;
+            rememberStickyCover(record, healedUrl);
+            const healedRecord: VoidDownloadRecord = {
+              ...record,
+              image: healedUrl,
+              coverBlob: validCoverBlob,
+            };
+            void putVoidDownload(healedRecord).catch(() => {});
+            setDownloadedTracks(prev =>
+              prev.map(item =>
+                item.id === `download:${record.id}` || item.id === record.id
+                  ? { ...item, image: healedUrl }
+                  : item
+              )
+            );
+          });
+        }
+        const verifiedMime = record.blob.type || record.mimeType || 'audio/mpeg';
+        const resolvedQuality =
+          record.qualityBadge && record.qualityBadge !== 'Unknown'
+            ? record.qualityBadge
+            : getTrackQualityBadge({
+                ...record,
+                qualityBadge: undefined,
+                mimeType: verifiedMime,
+                fileSize: record.blob.size,
+              });
+        let isFav = Boolean(record.favorite);
+        if (!isFav) {
+          try {
+            const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
+            if (Array.isArray(parsedFavs)) {
+              const recYtId = extractCleanYouTubeId(record.id);
+              isFav = parsedFavs.some((f: any) => f?.favorite && (f?.id === record.id || (Boolean(recYtId) && extractCleanYouTubeId(f?.id) === recYtId)));
+            }
+          } catch {}
+        }
+        return {
+          ...record,
+          coverBlob: validCoverBlob,
+          artwork: validCoverBlob,
+          favorite: isFav,
+          mimeType: verifiedMime,
+          source: formatProviderLabel(record.source, record),
+          qualityBadge: resolvedQuality || 'Standard (128kbps)',
+          image: validRemoteImg,
+          audioUrl: blobUrl,
+          src: blobUrl,
+          fileName: `${record.title}.audio`,
+          fileSize: record.blob.size,
+          importedAt: record.downloadedAt,
+          id: `download:${record.id}`,
+        };
+      }));
+    }).catch(() => { /* Downloads remain optional when browser storage is unavailable. */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const pageFromPath = location === '/' ? 'home' : location.slice(1).split('/')[0] as Page;
+    if (['home', 'songs', 'trending', 'albums', 'artists', 'playlists', 'favorites', 'recent', 'queue', 'downloads', 'settings'].includes(pageFromPath)) setPage(pageFromPath);
+  }, [location]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    root.classList.toggle('dark', dark);
+    root.dataset.theme = dark ? 'dark' : 'light';
+  }, [prefs.theme]);
+
+  useEffect(() => {
+    let timer = 0;
+    const refreshGreeting = () => {
+      const now = new Date();
+      setGreetingHour(now.getHours());
+      const nextChange = new Date(now);
+      nextChange.setHours(now.getHours() + (now.getHours() % 2 ? 1 : 2), 0, 0, 120);
+      timer = window.setTimeout(refreshGreeting, Math.max(1000, nextChange.getTime() - now.getTime()));
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') { window.clearTimeout(timer); refreshGreeting(); }
+    };
+    refreshGreeting();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibilityChange); };
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('void-queue', JSON.stringify(queue));
+    } catch {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('void-multilang-') || k.startsWith('void-trending-cache-') || k.startsWith('void-artist-top100-'))) {
+            localStorage.removeItem(k);
+          }
+        }
+        localStorage.setItem('void-queue', JSON.stringify(queue));
+      } catch {}
+    }
+  }, [queue]);
+  useEffect(() => { try { localStorage.setItem('void-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded'); } catch {} }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const sync = (e: MediaQueryListEvent) => {
+      if (prefs.theme === 'system') {
+        const dark = e.matches;
+        document.documentElement.classList.toggle('dark', dark);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      }
+    };
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, [prefs.theme]);
+
+  useEffect(() => {
+    if (audio.current) { audio.current.volume = prefs.volume; audio.current.muted = prefs.muted; }
+    if (ytAudioPlayerRef.current) {
+      try {
+        ytAudioPlayerRef.current.setVolume?.(Math.round(prefs.volume * 100));
+        if (prefs.muted) ytAudioPlayerRef.current.mute?.();
+        else ytAudioPlayerRef.current.unMute?.();
+      } catch {}
+    }
+  }, [prefs.volume, prefs.muted]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    const timer = window.setInterval(() => {
+      if (!ytActiveRef.current || !ytAudioPlayerRef.current) return;
+      try {
+        const cur = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? 0);
+        if (Number.isFinite(cur) && cur >= 0) setPosition(cur);
+        const dur = Number(ytAudioPlayerRef.current.getDuration?.() ?? 0);
+        if (Number.isFinite(dur) && dur > 0) setDuration(dur);
+      } catch {}
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [isPlaying]);
+
+  // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn) or Local Artwork ---
+  useEffect(() => {
+    if (!activeTrack) {
+      setAtmos(null);
+      return;
+    }
+    let alive = true;
+    const defaultAmbient: Hue4 = [348, 356, 335, 88]; // Deep Burgundy
+
+    if (activeTrack.image) {
+      sampleImageUrlAmbient(activeTrack.image).then(found => {
+        if (alive) setAtmos(found ?? defaultAmbient);
+      }).catch(() => {
+        if (alive) setAtmos(defaultAmbient);
+      });
+    } else if (activeTrack.artwork && activeTrack.artwork instanceof Blob) {
+      sampleArtworkAmbient(activeTrack.artwork).then(found => {
+        if (alive) setAtmos(found ?? defaultAmbient);
+      }).catch(() => {
+        if (alive) setAtmos(defaultAmbient);
+      });
+    } else {
+      setAtmos(null);
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork]);
+
+  useEffect(() => {
+    const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    // Force pure obsidian #000000 in dark mode so Android / Samsung S24 Ultra OS navigation bar never turns white or light-tinted
+    const base: [number, number, number] = dark ? [0, 0, 0] : [246, 244, 239];
+    let target = base;
+    if (!dark && atmos) {
+      const tint = hslToRgb(atmos[0], atmos[3] / 100, .62);
+      const mix = .13;
+      target = [0, 1, 2].map(i => Math.round(base[i] + (tint[i] - base[i]) * mix)) as [number, number, number];
+    }
+    const apply = (color: number[]) => {
+      const value = dark ? '#000000' : `#${color.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+      let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
+      if (!metas.length) { const meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); metas = [meta]; }
+      metas.forEach(meta => { meta.content = value; });
+    };
+    const from = themeTint.current ?? target;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { themeTint.current = target; apply(target); return; }
+    const start = performance.now();
+    let frame = 0;
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - start) / 1400);
+      const eased = progress * progress * (3 - 2 * progress);
+      const current = [0, 1, 2].map(i => Math.round(from[i] + (target[i] - from[i]) * eased)) as [number, number, number];
+      themeTint.current = current;
+      apply(current);
+      if (progress < 1) frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
+  }, [atmos, prefs.theme]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!('fonts' in document)) setSavageState('missing');
+    else {
+      document.fonts.load(`16px "${SAVAGE_FAMILY}"`)
+        .then(faces => { if (alive) setSavageState(faces.length ? 'ready' : 'missing'); })
+        .catch(() => { if (alive) setSavageState('missing'); });
+    }
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
+    let alive = true;
+    (async () => {
+      if (storageError) { setFontsStatus('error'); return; }
+      try {
+        const stored = await listStoredFonts();
+        const usable: StoredFont[] = [];
+        for (const font of stored) {
+          try {
+            fontFaces.current.set(font.id, await loadFontFace(font.id, await font.data.arrayBuffer()));
+            usable.push(font);
+          } catch {}
+        }
+        if (alive) { setCustomFonts(usable); setFontsStatus('ready'); }
+      } catch {
+        if (alive) setFontsStatus('error');
+      }
+    })();
+    return () => { alive = false; };
+  }, [isReady, storageError]);
+
+  useEffect(() => {
+    if (fontId === 'savage-roses' && savageState === 'missing') setFontId('default');
+    else if (fontId.startsWith('custom:') && fontsStatus === 'ready' && !customFonts.some(font => `custom:${font.id}` === fontId)) setFontId('default');
+  }, [customFonts, fontId, fontsStatus, savageState]);
+
+  useEffect(() => {
+    try { localStorage.setItem('void-font', fontId); } catch {}
+  }, [fontId]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    let family: string | null = null;
+    const builtin = BUILTIN_FONTS.find(font => font.id === fontId);
+    if (builtin && (builtin.id !== 'savage-roses' || savageState !== 'missing')) family = builtin.family;
+    else if (fontId.startsWith('custom:')) {
+      const font = customFonts.find(item => `custom:${item.id}` === fontId);
+      if (font) family = fontFamilyFor(font.id);
+    }
+    if (family) {
+      root.style.setProperty('--void-font', `"${family}", var(--app-font-sans)`);
+      root.style.setProperty('--void-font-serif', `"${family}", var(--app-font-serif)`);
+    } else {
+      root.style.removeProperty('--void-font');
+      root.style.removeProperty('--void-font-serif');
+    }
+  }, [customFonts, fontId, savageState]);
+
+  const importFont = async (file: File) => {
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (!FONT_EXTENSIONS.includes(extension)) { notify('Choose a .ttf, .otf, .woff or .woff2 font file.'); return; }
+    if (file.size > FONT_MAX_BYTES) { notify('That font file is too large. Choose one under 12 MB.'); return; }
+    if (customFonts.some(font => font.fileName === file.name && font.size === file.size)) { notify('That font is already in My Fonts.'); return; }
+    setFontBusy(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const name = (await readFontName(buffer)) || cleanFontName(file.name);
+      const id = crypto.randomUUID();
+      const face = await loadFontFace(id, buffer.slice(0));
+      fontFaces.current.set(id, face);
+      const font: StoredFont = { id, name, fileName: file.name, format: extension, size: file.size, addedAt: Date.now(), data: new Blob([buffer], { type: FONT_MIME[extension] }) };
+      setCustomFonts(items => [...items, font]);
+      setFontId(`custom:${id}`);
+      try { await putStoredFont(font); notify(`“${name}” added to My Fonts.`); }
+      catch { notify(`“${name}” is active, but could not be saved on this device.`); }
+    } catch {
+      notify('That font couldn’t be loaded. Your current font is unchanged.');
+    } finally { setFontBusy(false); }
+  };
+
+  const deleteFont = async (font: StoredFont) => {
+    if (!window.confirm(`Remove “${font.name}” from VOID? Your original font file is not deleted.`)) return;
+    try {
+      await deleteStoredFont(font.id);
+      const face = fontFaces.current.get(font.id);
+      if (face) document.fonts.delete(face);
+      fontFaces.current.delete(font.id);
+      setCustomFonts(items => items.filter(item => item.id !== font.id));
+      setFontId(current => current === `custom:${font.id}` ? 'default' : current);
+      notify('Font removed.');
+    } catch {
+      notify('Could not remove this font.');
+    }
+  };
+
+  const fontOptions = useMemo(() => [
+    { id: 'default', name: 'Default', tag: 'Built in', family: 'var(--app-font-sans)', note: '', font: null as StoredFont | null },
+    ...BUILTIN_FONTS.map(font => ({
+      id: font.id,
+      name: font.name,
+      tag: font.tag,
+      family: `"${font.family}", var(--app-font-sans)`,
+      note: font.id === 'savage-roses' && savageState === 'missing' ? 'Bundled font could not be loaded.' : '',
+      font: null as StoredFont | null,
+    })),
+    ...customFonts.map(font => ({ id: `custom:${font.id}`, name: font.name, tag: font.format.toUpperCase(), family: `"${fontFamilyFor(font.id)}", var(--app-font-sans)`, note: '', font: font as StoredFont | null })),
+  ], [customFonts, savageState]);
+
+  const updatePrefs = useCallback(async (next: Preferences) => {
+    setPrefs(next);
+    try { localStorage.setItem('void-theme', next.theme); } catch {}
+    try { await savePreferences(next); } catch { notify('Could not save preferences on this device.'); }
+  }, [notify]);
+
+    const playTrack = useCallback(async (track: any, list?: string[]) => {
+    const el = audio.current;
+    if (!el) return;
+
+    if (list) setQueue(list);
+
+    // Do not call play() against the previous/empty source: that can reject and leave
+    // the media element in a stale state after a page reload. For downloaded rows, read
+    // the durable IndexedDB record on every click and use that exact Blob for playback.
+
+    // Prefer the persisted offline copy whenever this song has been downloaded. Match by stable
+    // provider ID first, then normalized title + artist so a library entry can reuse a search download.
+    const normalizeSongPart = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+    const trackId = String(track.id ?? '');
+    const cleanTrackId = trackId.replace(/^download:/, '').replace(/^api-/, '');
+    let downloadedMatch = downloadedTracks.find((item: any) => {
+      const downloadId = String(item.id ?? '').replace(/^download:/, '').replace(/^api-/, '');
+      if (downloadId && (downloadId === cleanTrackId || downloadId === trackId)) return true;
+      if (trackId.startsWith('api-')) return false;
+      return normalizeSongPart(item.title || item.name) === normalizeSongPart(track.title)
+        && normalizeSongPart(item.artist) === normalizeSongPart(track.artist)
+        && !!item.audioUrl;
+    });
+
+    // A direct reload can render the Downloads route before the asynchronous IndexedDB
+    // hydration has completed. If the click arrives during that window, re-read the
+    // durable record here instead of silently treating the row as a normal remote track.
+    if (trackId.startsWith('download:')) {
+      const downloadId = trackId.slice('download:'.length);
+      try {
+        // IndexedDB is the source of truth. Always re-read it for a Downloads-row click
+        // so playback never depends on a stale Blob URL created before/after reload.
+        const storedRecords = await getVoidDownloads();
+        const storedRecord = storedRecords.find(record => String(record.id) === downloadId);
+        if (storedRecord?.blob && storedRecord.blob.size > 0) {
+          const previousMatch = downloadedMatch;
+          const audioUrl = URL.createObjectURL(storedRecord.blob);
+          const imageUrl = storedRecord.coverBlob ? URL.createObjectURL(storedRecord.coverBlob) : storedRecord.image;
+          downloadedMatch = {
+            ...storedRecord,
+            id: `download:${storedRecord.id}`,
+            image: imageUrl,
+            audioUrl,
+            src: audioUrl,
+            fileName: `${storedRecord.title}.audio`,
+            fileSize: storedRecord.blob.size,
+            importedAt: storedRecord.downloadedAt,
+          };
+          // Keep the fresh URL in state for the current row, but do not revoke it here:
+          // the audio element may be using the previous URL while a track is changing.
+          setDownloadedTracks(previous => [downloadedMatch!, ...previous.filter(item => String(item.id) !== `download:${storedRecord.id}`)]);
+          if (previousMatch?.audioUrl?.startsWith('blob:') && previousMatch.audioUrl !== audioUrl && audio.current?.src !== previousMatch.audioUrl) {
+            URL.revokeObjectURL(previousMatch.audioUrl);
+          }
+        } else {
+          downloadedMatch = undefined;
+        }
+      } catch {
+        // The validation below reports the missing/invalid offline file to the user.
+        downloadedMatch = undefined;
+      }
+    }
+    const isOfflineDownload = !!downloadedMatch;
+    const sourceTrack = downloadedMatch ? {
+      ...track,
+      title: downloadedMatch.title || track.title,
+      artist: downloadedMatch.artist || track.artist,
+      album: downloadedMatch.album || track.album,
+      image: downloadedMatch.image || track.image,
+      duration: downloadedMatch.duration || track.duration,
+      source: downloadedMatch.source || track.source,
+      exactYtBlob: downloadedMatch.exactYtBlob ?? track.exactYtBlob,
+      // Use the object URL created from the persisted IndexedDB Blob when the
+      // Downloads list loads. It is already a valid browser audio source and is
+      // owned by downloadedTracks, so playback must not create/revoke another URL.
+      audioUrl: downloadedMatch.audioUrl,
+      src: downloadedMatch.audioUrl,
+      mimeType: downloadedMatch.mimeType || downloadedMatch.blob?.type || 'audio/mpeg',
+      offlineDownloadId: String(downloadedMatch.id ?? '').replace(/^download:/, ''),
+    } : track;
+    const remoteUrl = isOfflineDownload
+      ? downloadedMatch.audioUrl
+      : (sourceTrack.audioUrl || sourceTrack.downloadUrl || sourceTrack.src);
+    const isRemote = !isOfflineDownload && !!remoteUrl;
+    const stickyImg = getStickyCoverUrl(sourceTrack) || getStickyCoverUrl(track);
+    if (stickyImg) rememberStickyCover(sourceTrack, stickyImg);
+    let playableTrack = { ...sourceTrack, id: track.id, audioUrl: remoteUrl, image: stickyImg || sourceTrack.image || track.image };
+
+    userPausedRef.current = false;
+    switchingTrackRef.current = true;
+    if (ytActiveRef.current) {
+      ytActiveRef.current = false;
+      try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {}
+    }
+    el.pause();
+    try { el.currentTime = 0; } catch {}
+
+    const isArabicCatalogTrack = /^(?:api-|download:)?ar-\d+-\d+$/.test(String(playableTrack.id || ''));
+
+    // Update active track state immediately (0ms) so UI responds on the exact tap
+    setActiveId(playableTrack.id);
+    setStreamingTrack(playableTrack);
+    setPosition(0);
+    setDuration(playableTrack.duration > 0 && Number.isFinite(playableTrack.duration) ? playableTrack.duration : 0);
+    setIsPlaying(true);
+
+    const rawPlayableUrl = String(playableTrack.audioUrl || '');
+    const needsTrendingResolve =
+      isRemote && rawPlayableUrl.startsWith('trending-resolve://');
+
+    if (needsTrendingResolve) {
+      const resolvedTrending = await resolveTrendingTrackStream(playableTrack);
+      if (resolvedTrending?.url) {
+        const resolvedCover = resolvedTrending.image || getStickyCoverUrl(resolvedTrending) || playableTrack.image;
+        if (resolvedCover) rememberStickyCover(playableTrack, resolvedCover);
+        playableTrack = {
+          ...playableTrack,
+          audioUrl: resolvedTrending.url,
+          downloadUrl: resolvedTrending.url,
+          src: resolvedTrending.url,
+          source: resolvedTrending.source || 'JioSaavn',
+          bitrate: resolvedTrending.bitrate ?? 320,
+          codec: resolvedTrending.codec ?? 'AAC',
+          mimeType: resolvedTrending.mimeType ?? 'audio/mp4',
+          format: resolvedTrending.format ?? 'MP4 (320kbps)',
+          qualityBadge: resolvedTrending.qualityBadge ?? 'Very High (320kbps)',
+          qualityVerified: true,
+          fallbackUrls: resolvedTrending.fallbackUrls,
+          image: resolvedCover,
+          duration: resolvedTrending.duration || playableTrack.duration || 0,
+        };
+        setStreamingTrack(playableTrack);
+      }
+    }
+
+    let rawYtCandidateId = extractYouTubeIdFromTrack({ ...playableTrack, id: playableTrack.id || downloadedMatch?.id });
+    let isYouTubeTrack =
+      formatProviderLabel(playableTrack.source, playableTrack) === 'YouTube' ||
+      formatProviderLabel(downloadedMatch?.source, downloadedMatch) === 'YouTube' ||
+      String(playableTrack.audioUrl || '').startsWith('yt-stream://') ||
+      String(playableTrack.audioUrl || '').includes('void-backend') ||
+      /^[\w-]{11}$/.test(rawYtCandidateId);
+    const isDummyOfflineYtContainer =
+      isOfflineDownload &&
+      isYouTubeTrack &&
+      (!downloadedMatch?.exactYtBlob || (downloadedMatch?.blob?.size ?? 0) < 65536);
+
+    let url = playableTrack.audioUrl;
+    if (isOfflineDownload && !isDummyOfflineYtContainer) {
+      if (!downloadedMatch.blob || downloadedMatch.blob.size === 0 || !remoteUrl) {
+        switchingTrackRef.current = false;
+        setIsPlaying(false);
+        notify(`The saved audio for “${playableTrack.title || 'this song'}” is missing or empty. Download it again.`);
+        return;
+      }
+      setStreamingTrack(playableTrack);
+    } else if (isRemote || isDummyOfflineYtContainer) {
+      if (isYouTubeTrack && !String(playableTrack.audioUrl || '').startsWith('/__void_api/yt-audio')) {
+        const resolvedYt = await resolveYouTubePlayableStream({
+          ...playableTrack,
+          id: rawYtCandidateId || playableTrack.id,
+        });
+        if (resolvedYt?.url) {
+          url = resolvedYt.url;
+          playableTrack = {
+            ...playableTrack,
+            audioUrl: resolvedYt.url,
+            downloadUrl: resolvedYt.url,
+            src: resolvedYt.url,
+            fallbackUrls: resolvedYt.fallbackUrls,
+            bitrate: resolvedYt.bitrate ?? playableTrack.bitrate,
+            codec: resolvedYt.codec ?? playableTrack.codec,
+            mimeType: resolvedYt.mimeType ?? playableTrack.mimeType,
+            qualityBadge: resolvedYt.qualityBadge ?? playableTrack.qualityBadge,
+            qualityVerified: resolvedYt.qualityVerified ?? playableTrack.qualityVerified,
+            duration: resolvedYt.duration || playableTrack.duration || 0,
+          };
+        }
+      }
+      setStreamingTrack(playableTrack);
+    } else {
+      try {
+        const { file, mimeType } = await materializeAudioFile(playableTrack);
+        playableTrack = { ...playableTrack, file, mimeType };
+        url = URL.createObjectURL(playableTrack.file);
+      } catch {
+        switchingTrackRef.current = false;
+        setIsPlaying(false);
+        notify(`Could not restore “${playableTrack.fileName || playableTrack.title}” after Safari restarted.`);
+        return;
+      }
+    }
+
+    // Assign the new source and start playback immediately without redundant synchronous reload lag
+    const cleanFallbacks = (isRemote || isDummyOfflineYtContainer) && Array.isArray(playableTrack.fallbackUrls)
+      ? playableTrack.fallbackUrls.filter((u: string) => u && u !== url && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'))
+      : [];
+    const candidateUrls =
+      isDummyOfflineYtContainer && (!url || String(url).startsWith('blob:'))
+        ? []
+        : [url, ...cleanFallbacks].filter((u): u is string => Boolean(u) && !String(u).startsWith('yt-stream://') && !String(u).includes('void-backend'));
+
+    let lastError: unknown = null;
+    let playedSuccessfully = false;
+
+    for (const candidateUrl of candidateUrls) {
+      if (!candidateUrl) continue;
+      el.preload = 'auto';
+      el.src = candidateUrl;
+      el.volume = prefs.volume;
+      el.muted = prefs.muted;
+      switchingTrackRef.current = false;
+      try {
+        await el.play();
+        url = candidateUrl;
+        playedSuccessfully = true;
+        break;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        lastError = err;
+      }
+    }
+
+    // If a JioSaavn stream failed to play, immediately fall back to YouTube for that exact song
+    if (!playedSuccessfully && isRemote && !isYouTubeTrack) {
+      const ytFallback = await resolveArabicYouTubeFallback(playableTrack);
+      if (ytFallback) {
+        rawYtCandidateId = ytFallback.ytId;
+        isYouTubeTrack = true;
+        playableTrack = {
+          ...playableTrack,
+          audioUrl: ytFallback.url,
+          downloadUrl: ytFallback.url,
+          src: ytFallback.url,
+          source: 'YouTube',
+          bitrate: ytFallback.bitrate,
+          codec: ytFallback.codec,
+          mimeType: ytFallback.mimeType,
+          format: ytFallback.format,
+          qualityBadge: ytFallback.qualityBadge,
+          qualityVerified: true,
+          image: playableTrack.image || ytFallback.image,
+          duration: playableTrack.duration || ytFallback.duration || 0,
+        };
+        setStreamingTrack(playableTrack);
+        if (!ytFallback.url.startsWith('yt-stream://')) {
+          el.src = ytFallback.url;
+          el.volume = prefs.volume;
+          el.muted = prefs.muted;
+          el.load();
+          switchingTrackRef.current = false;
+          try {
+            await el.play();
+            url = ytFallback.url;
+            playedSuccessfully = true;
+          } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            lastError = err;
+          }
+        }
+      }
+    }
+
+    // Exact YouTube video playback fallback via official YT.Player when direct audio stream is unavailable
+    if (!playedSuccessfully && isYouTubeTrack && /^[\w-]{11}$/.test(rawYtCandidateId)) {
+      switchingTrackRef.current = false;
+      try {
+        const YT = await loadYouTubeIframeApi();
+        if (YT?.Player) {
+          ytActiveRef.current = true;
+          ytVideoIdRef.current = rawYtCandidateId;
+          const existingPlayer = ytAudioPlayerRef.current;
+          if (existingPlayer && typeof existingPlayer.loadVideoById === 'function') {
+            existingPlayer.setVolume?.(Math.round(prefsRef.current.volume * 100));
+            if (prefsRef.current.muted) existingPlayer.mute?.();
+            else existingPlayer.unMute?.();
+            existingPlayer.loadVideoById({ videoId: rawYtCandidateId, startSeconds: 0 });
+            existingPlayer.playVideo?.();
+            setIsPlaying(true);
+            playedSuccessfully = true;
+          } else if (ytAudioHostRef.current) {
+            ytAudioHostRef.current.innerHTML = '';
+            const mountNode = document.createElement('div');
+            ytAudioHostRef.current.appendChild(mountNode);
+            playedSuccessfully = await new Promise<boolean>(resolve => {
+              let settled = false;
+              const finish = (ok: boolean) => {
+                if (settled) return;
+                settled = true;
+                resolve(ok);
+              };
+              const timer = window.setTimeout(() => finish(true), 3500);
+              ytAudioPlayerRef.current = new YT.Player(mountNode, {
+                width: '1',
+                height: '1',
+                videoId: rawYtCandidateId,
+                playerVars: {
+                  autoplay: 1,
+                  controls: 0,
+                  disablekb: 1,
+                  fs: 0,
+                  playsinline: 1,
+                  rel: 0,
+                  origin: window.location.origin,
+                },
+                events: {
+                  onReady: (ev: any) => {
+                    window.clearTimeout(timer);
+                    try {
+                      ev.target.setVolume?.(Math.round(prefsRef.current.volume * 100));
+                      if (prefsRef.current.muted) ev.target.mute?.();
+                      else ev.target.unMute?.();
+                      if (ytActiveRef.current) {
+                        const wanted = ytVideoIdRef.current || rawYtCandidateId;
+                        if (wanted !== rawYtCandidateId) ev.target.loadVideoById(wanted);
+                        ev.target.playVideo?.();
+                        setIsPlaying(true);
+                      }
+                    } catch {}
+                    finish(true);
+                  },
+                  onStateChange: (ev: any) => {
+                    if (!ytActiveRef.current) return;
+                    if (ev.data === 1) {
+                      userPausedRef.current = false;
+                      setIsPlaying(true);
+                      const dur = Number(ev.target?.getDuration?.() || 0);
+                      if (Number.isFinite(dur) && dur > 0) {
+                        setDuration(dur);
+                        const currentVid = ytVideoIdRef.current;
+                        if (currentVid) {
+                          setStreamingTrack((cur: any) =>
+                            cur && String(cur.id || '').includes(currentVid) ? { ...cur, duration: dur } : cur
+                          );
+                          setTracks(items => {
+                            const updated = items.map(item =>
+                              String(item.id || '').includes(currentVid) ? { ...item, duration: dur } : item
+                            );
+                            try {
+                              const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+                              localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+                            } catch {}
+                            return updated;
+                          });
+                        }
+                      }
+                    } else if (ev.data === 2) {
+                      if (!userPausedRef.current && !switchingTrackRef.current) {
+                        try { ev.target?.playVideo?.(); setIsPlaying(true); } catch {}
+                        window.setTimeout(() => {
+                          if (!userPausedRef.current && !switchingTrackRef.current && ytActiveRef.current) {
+                            try { ev.target?.playVideo?.(); setIsPlaying(true); } catch {}
+                          }
+                        }, 140);
+                      } else {
+                        setIsPlaying(false);
+                      }
+                    } else if (ev.data === 0) {
+                      if (prefsRef.current.repeat === 'one') {
+                        ev.target?.seekTo?.(0, true);
+                        ev.target?.playVideo?.();
+                      } else {
+                        playRelativeRef.current(1);
+                      }
+                    }
+                  },
+                  onError: () => {
+                    window.clearTimeout(timer);
+                    finish(false);
+                  },
+                },
+              });
+            });
+          }
+        }
+      } catch {
+        playedSuccessfully = false;
+      }
+    }
+
+    if (playedSuccessfully) {
+      // Revoke the old object URL only AFTER the new track has successfully started playing
+      if (objectUrl.current && objectUrl.current !== url) {
+        URL.revokeObjectURL(objectUrl.current);
+      }
+      // Download-list URLs belong to downloadedTracks and stay alive until the
+      // list is refreshed/unmounted; only revoke URLs created for imported files.
+      objectUrl.current = (isRemote || isOfflineDownload) ? null : url;
+
+      const actualDuration = ytActiveRef.current
+        ? Number(ytAudioPlayerRef.current?.getDuration?.() || 0)
+        : el.duration;
+      const lockedCoverUrl =
+        (isValidCoverUrl(playableTrack.image) ? String(playableTrack.image).trim() : '') ||
+        (isValidCoverUrl(track.image) ? String(track.image).trim() : '') ||
+        (isValidCoverUrl(downloadedMatch?.image) ? String(downloadedMatch.image).trim() : '') ||
+        getStickyCoverUrl(playableTrack) ||
+        getStickyCoverUrl(track);
+      if (lockedCoverUrl) {
+        rememberStickyCover(playableTrack, lockedCoverUrl);
+      }
+      const persistedTrack = {
+        // Blob URLs are session-specific. Keep the library record's original source URL and use
+        // the offline blob only for this playback session; the download itself remains in IndexedDB.
+        ...((downloadedMatch && track) ? track : playableTrack),
+        title: downloadedMatch?.title || playableTrack.title,
+        artist: downloadedMatch?.artist || playableTrack.artist,
+        album: downloadedMatch?.album || playableTrack.album,
+        image: lockedCoverUrl || undefined,
+        source: formatProviderLabel(playableTrack.source, playableTrack) || playableTrack.source,
+        qualityBadge: getTrackQualityBadge(playableTrack),
+        duration: Number.isFinite(actualDuration) && actualDuration > 0 ? actualDuration : playableTrack.duration,
+        lastPlayedAt: Date.now(),
+      };
+      setTracks(items => {
+        const exists = items.some(item => item.id === persistedTrack.id);
+        const updatedItems = exists ? items.map(item => item.id === persistedTrack.id ? persistedTrack : item) : [persistedTrack, ...items];
+        if (isRemote) {
+          try {
+            const favs = updatedItems
+              .filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src))
+              .map(t => ({
+                ...t,
+                image: isValidCoverUrl(t.image) ? t.image : getStickyCoverUrl(t) || undefined,
+              }));
+            localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+          } catch {}
+        }
+        return updatedItems;
+      });
+      if (!isRemote) {
+        void saveTrack(persistedTrack).catch(() => {});
+      }
+    } else {
+      switchingTrackRef.current = false;
+      setIsPlaying(false);
+      const mediaError = audio.current?.error;
+      const isYouTubeTrack = formatProviderLabel(playableTrack.source, playableTrack) === 'YouTube';
+      const detail = isYouTubeTrack
+        ? 'The YouTube stream service may still be waking up from inactivity. Please try again in a few seconds.'
+        : mediaError?.code === 4
+          ? 'The audio format is not supported by this browser or the stream is unavailable.'
+          : mediaError?.code === 2
+            ? 'A network error interrupted the audio stream.'
+            : lastError instanceof Error && lastError.message
+              ? lastError.message
+              : 'Check the audio source and try again.';
+      notify(`Unable to play “${playableTrack.title || 'track'}”. ${detail}`);
+    }
+  }, [downloadedTracks, notify, prefs.muted, prefs.volume]);
+
+
+  const togglePlay = useCallback(async () => {
+    const el = audio.current;
+    if (!el) return;
+    if (!activeTrack) {
+      const next = tracks.find(item => queue.includes(item.id)) ?? tracks[0];
+      if (next) await playTrack(next, queue.length ? queue : tracks.map(item => item.id));
+      else notify('Import audio files to begin your library.');
+      return;
+    }
+    if (ytActiveRef.current && ytAudioPlayerRef.current) {
+      try {
+        const state = ytAudioPlayerRef.current.getPlayerState?.();
+        if (state === 1) {
+          userPausedRef.current = true;
+          ytAudioPlayerRef.current.pauseVideo?.();
+          setIsPlaying(false);
+        } else {
+          userPausedRef.current = false;
+          ytAudioPlayerRef.current.playVideo?.();
+          setIsPlaying(true);
+        }
+      } catch {}
+      return;
+    }
+    if (el.paused) {
+      userPausedRef.current = false;
+      try { await el.play(); } catch {}
+    } else {
+      userPausedRef.current = true;
+      el.pause();
+    }
+  }, [activeTrack, notify, playTrack, queue, tracks]);
+
+  const playRelative = useCallback((direction: number) => {
+    const allPool = [...downloadedTracks, ...tracks, ...(trendingTracks as any[]), ...(artistTopTracks as any[]), ...(musicResults as any[])];
+    if (!allPool.length) return;
+    const pool = queue.map(id => allPool.find(track => track.id === id)).filter((track): track is Track => !!track);
+    const fallbackList =
+      detail?.kind === 'artist' && artistTopTracks.length
+        ? (artistTopTracks as any[])
+        : page === 'downloads' && downloadedTracks.length
+          ? downloadedTracks
+          : page === 'trending' && trendingTracks.length
+            ? (trendingTracks as any[])
+            : tracks.length
+              ? tracks
+              : allPool;
+    const source = pool.length ? pool : fallbackList;
+    if (!source.length) return;
+    if (!activeId) { void playTrack(source[0], source.map(track => track.id)); return; }
+    let index = source.findIndex(track => track.id === activeId);
+    if (index < 0) index = 0;
+    if (prefs.shuffle && direction > 0 && source.length > 1) {
+      let next = index;
+      while (next === index) next = Math.floor(Math.random() * source.length);
+      index = next;
+    } else index += direction;
+    if (index < 0) index = prefs.repeat === 'all' ? source.length - 1 : 0;
+    if (index >= source.length) {
+      index = 0;
+    }
+    void playTrack(source[index], source.map(track => track.id));
+  }, [activeId, artistTopTracks, detail, downloadedTracks, musicResults, page, playTrack, prefs.repeat, prefs.shuffle, queue, tracks, trendingTracks]);
+  playRelativeRef.current = playRelative;
+
+  const mediaControls = useRef({ play: () => {}, pause: () => {}, previous: () => {}, next: () => {} });
+  mediaControls.current = {
+    play: () => { userPausedRef.current = false; if (!isPlaying) void togglePlay(); },
+    pause: () => {
+      // Ignore synthetic MediaSession pause events fired by Chrome Mobile Emulation when switching desktops or resizing
+      if (document.visibilityState === 'hidden' || Date.now() - lastVisibilityHideRef.current < 1500) {
+        return;
+      }
+      userPausedRef.current = true;
+      if (ytActiveRef.current && ytAudioPlayerRef.current) {
+        try { ytAudioPlayerRef.current.pauseVideo?.(); setIsPlaying(false); } catch {}
+      } else {
+        audio.current?.pause();
+      }
+    },
+    previous: () => playRelative(-1),
+    next: () => playRelative(1),
+  };
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const session = navigator.mediaSession;
+    const handlers: [MediaSessionAction, () => void][] = [
+      ['play', () => mediaControls.current.play()], ['pause', () => mediaControls.current.pause()],
+      ['previoustrack', () => mediaControls.current.previous()], ['nexttrack', () => mediaControls.current.next()],
+    ];
+    for (const [action, handler] of handlers) { try { session.setActionHandler(action, handler); } catch {} }
+    return () => { for (const [action] of handlers) { try { session.setActionHandler(action, null); } catch {} } };
+  }, []);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    if (activeTrack && typeof MediaMetadata !== 'undefined') {
+      const cover = getStickyCoverUrl(activeTrack) || activeTrack.image;
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: activeTrack.title || 'VOID Music',
+          artist: activeTrack.artist || 'VOID',
+          album: activeTrack.album || 'VOID',
+          artwork: cover && /^https?:\/\//i.test(cover) ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : [],
+        });
+      } catch {}
+    }
+  }, [isPlaying, activeTrack]);
+
+  const importFiles = async (files: FileList | File[], note = '') => {
+    const chosen = Array.from(files).filter(file => file.size > 0);
+    if (!chosen.length) return;
+    setImporting(true);
+    let added = 0;
+    try {
+      for (const file of chosen) {
+        try { await saveTrack(await trackFromFile(file)); added += 1; }
+        catch {
+          notify(`Could not add ${file.name}. Check browser storage permissions.`);
+        }
+      }
+      await reload();
+      if (added) notify(`${added} ${added === 1 ? 'file' : 'files'} added to your library.${note ? ` ${note}` : ''}`);
+    } finally { setImporting(false); }
+  };
+
+  const autoImport = async (files: FileList) => {
+    const all = Array.from(files);
+    const known = new Set(tracks.map(track => `${track.fileName}|${track.fileSize}`));
+    const probe = document.createElement('audio');
+    const supported: File[] = [];
+    let duplicates = 0;
+    for (const file of all) {
+      if (file.size === 0 || file.name.startsWith('.')) continue;
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (!AUTO_IMPORT_EXTENSIONS.has(extension)) continue;
+      if (!probe.canPlayType(resolveAudioMimeType(file.name, file.type))) continue;
+      const key = `${file.name}|${file.size}`;
+      if (known.has(key)) { duplicates += 1; continue; }
+      known.add(key);
+      supported.push(file);
+    }
+    if (!supported.length) {
+      notify(duplicates ? 'Everything in that folder is already in your library.' : 'No supported music files found.');
+      return;
+    }
+    await importFiles(supported, duplicates ? `${countLabel(duplicates, 'duplicate')} skipped.` : '');
+  };
+  const openImport = () => setImportMenu(true);
+
+  const toggleFavorite = async (track: Track | any) => {
+    const rawId = extractCleanYouTubeId(track?.id ?? '');
+    const isDownloadRow = String(track?.id ?? '').startsWith('download:');
+    const remoteUrl = track.audioUrl || track.downloadUrl || track.src;
+    const isRemote = Boolean(remoteUrl || isDownloadRow || String(track?.id ?? '').startsWith('api-') || formatProviderLabel(track?.source, track));
+    const nextFavorite = !Boolean(track.favorite);
+    const updated = { ...track, favorite: nextFavorite, audioUrl: remoteUrl };
+
+    if (isRemote) {
+      setStreamingTrack((current: any) => {
+        if (!current) return current;
+        const curId = extractCleanYouTubeId(current.id ?? '');
+        return current.id === track.id || (rawId && curId === rawId)
+          ? { ...current, favorite: nextFavorite }
+          : current;
+      });
+    }
+
+    // Keep downloadedTracks and IndexedDB in sync when favoriting from Downloads or Songs
+    setDownloadedTracks(prev =>
+      prev.map(item => {
+        const dlId = extractCleanYouTubeId(item?.id ?? '');
+        if (item.id === track.id || (rawId && dlId === rawId)) {
+          return { ...item, favorite: nextFavorite };
+        }
+        return item;
+      })
+    );
+
+    if (rawId) {
+      void getVoidDownloads()
+        .then(records => {
+          const matchedRecord = records.find(r => extractCleanYouTubeId(r.id) === rawId);
+          if (matchedRecord) {
+            void putVoidDownload({ ...matchedRecord, favorite: nextFavorite }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
+    setTracks(items => {
+      const matchesTrack = (item: any) => {
+        const itemCleanId = extractCleanYouTubeId(item?.id ?? '');
+        return item.id === track.id || (Boolean(rawId) && itemCleanId === rawId);
+      };
+      const exists = items.some(matchesTrack);
+      let newItems: Track[];
+      if (exists) {
+        newItems = items
+          .map(item => (matchesTrack(item) ? { ...item, favorite: nextFavorite } : item))
+          .filter(item => !(String(item.id).startsWith('download:') && !item.favorite && !item.lastPlayedAt));
+      } else if (isRemote && nextFavorite) {
+        const libraryEntry = {
+          ...updated,
+          id: isDownloadRow && rawId ? `api-${rawId}` : track.id,
+          importedAt: Number.isFinite(track.importedAt) ? track.importedAt : Date.now(),
+        };
+        newItems = [libraryEntry, ...items];
+      } else {
+        newItems = items;
+      }
+      if (isRemote) {
+        try {
+          const favs = newItems.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+      }
+      return newItems;
+    });
+    try {
+      if (!isRemote) await saveTrack(updated);
+    } catch {
+      notify('Could not save favorite.');
+    }
+  };
+
+  const deleteTrack = async (track: Track) => {
+    if (!window.confirm(`Remove “${track.title}” from VOID? The original file on your Mac will not be deleted.`)) return;
+
+    // IMPORTANT / PROTECTED DOWNLOAD DELETION FLOW:
+    // Download rows use UI IDs like "download:<database-id>" and are stored in IndexedDB,
+    // not in the regular track library. Keep the persisted record and UI row in sync.
+    // Do not replace this branch with removeTrack(), which does not delete offline blobs.
+    if (String(track.id).startsWith('download:')) {
+      const downloadId = String(track.id).slice('download:'.length);
+      setDeletingDownloadIds(ids => ids.includes(track.id) ? ids : [...ids, track.id]);
+      window.setTimeout(async () => {
+        try {
+          await removeVoidDownload(downloadId);
+          setDownloadedTracks(items => {
+            const removed = items.filter(item => item.id === track.id);
+            removed.forEach(item => {
+              if (item.audioUrl && String(item.audioUrl).startsWith('blob:')) URL.revokeObjectURL(item.audioUrl);
+              if (item.image && String(item.image).startsWith('blob:')) URL.revokeObjectURL(item.image);
+            });
+            return items.filter(item => item.id !== track.id);
+          });
+          setSelectedSongIds(ids => ids.filter(id => id !== track.id));
+          if (String(activeId) === String(track.id)) {
+            if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
+            audio.current?.pause();
+            setActiveId(null);
+            setIsPlaying(false);
+          }
+        } catch {
+          notify('Could not remove this download. Please try again.');
+        } finally {
+          setDeletingDownloadIds(ids => ids.filter(id => id !== track.id));
+        }
+      // Keep this delay matched to the 1-second CSS fade-out on the download row.
+      }, 1000);
+      return;
+    }
+
+    try {
+      await removeTrack(track.id);
+      setTracks(items => {
+        const updated = items.filter(item => item.id !== track.id);
+        try {
+          const favs = updated.filter(t => (t.favorite || t.lastPlayedAt) && (t.audioUrl || t.downloadUrl || t.src));
+          localStorage.setItem('void-remote-favorites', JSON.stringify(favs));
+        } catch {}
+        return updated;
+      });
+      setQueue(items => items.filter(id => id !== track.id));
+      const changedPlaylists = playlists.filter(playlist => playlist.trackIds.includes(track.id)).map(playlist => ({ ...playlist, trackIds: playlist.trackIds.filter(id => id !== track.id) }));
+      await Promise.all(changedPlaylists.map(savePlaylist));
+      setPlaylists(items => items.map(playlist => changedPlaylists.find(updated => updated.id === playlist.id) ?? playlist));
+      if (activeId === track.id) {
+        if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
+        audio.current?.pause();
+        setActiveId(null); setIsPlaying(false);
+        if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+      }
+      notify('Audio file removed from this library.');
+    } catch { notify('Could not remove this file from local storage.'); }
+  };
+
+  const addToQueue = (track: Track) => {
+    setQueue(items => items.includes(track.id) ? items : [...items, track.id]);
+    notify(`Added “${track.title}” to the queue.`);
+  };
+
+  const playNext = (track: Track) => {
+    if (activeId === track.id) { notify('That song is already playing.'); return; }
+    setQueue(items => {
+      const remaining = items.filter(id => id !== track.id);
+      const activeIndex = activeId ? remaining.indexOf(activeId) : -1;
+      const insertAt = activeIndex >= 0 ? activeIndex + 1 : 0;
+      return [...remaining.slice(0, insertAt), track.id, ...remaining.slice(insertAt)];
+    });
+    notify(`“${track.title}” will play next.`);
+  };
+
+  const createPlaylist = async () => {
+    const name = modalValue.trim();
+    if (!name) return;
+    const playlist: Playlist = { id: crypto.randomUUID(), name, description: '', createdAt: Date.now(), trackIds: contextTrack ? [contextTrack.id] : [] };
+    try { await savePlaylist(playlist); await reload(); setModal(null); setModalValue(''); if (contextTrack) setContextTrack(null); notify(contextTrack ? 'Playlist created and song added.' : 'Playlist created.'); }
+    catch { notify('Could not save this playlist.'); }
+  };
+
+  const renamePlaylist = async () => {
+    const target = playlists.find(item => item.name === detail?.name);
+    if (!target || !modalValue.trim()) return;
+    try {
+      await savePlaylist({ ...target, name: modalValue.trim() });
+      setDetail({ ...detail!, name: modalValue.trim() }); setModal(null); setModalValue(''); await reload();
+    } catch { notify('Could not rename this playlist.'); }
+  };
+
+  const deletePlaylistById = async (playlist: Playlist) => {
+    if (!window.confirm(`Delete the playlist “${playlist.name}”? Your audio files will stay in your library.`)) return;
+    try { await removePlaylist(playlist.id); setDetail(null); await reload(); notify('Playlist deleted.'); }
+    catch { notify('Could not delete this playlist.'); }
+  };
+
+  const addTrackToPlaylist = async (playlist: Playlist, track: Track) => {
+    if (playlist.trackIds.includes(track.id)) { notify('That song is already in this playlist.'); return; }
+    try { await savePlaylist({ ...playlist, trackIds: [...playlist.trackIds, track.id] }); await reload(); setModal(null); setContextTrack(null); notify('Added to playlist.'); }
+    catch { notify('Could not update this playlist.'); }
+  };
+
+  const rescanLibrary = async () => {
+    try {
+      for (const track of tracks) {
+        const file = new File([track.file], track.fileName, { type: track.mimeType });
+        const scanned = await trackFromFile(file);
+        await saveTrack({ ...track, title: scanned.title, artist: scanned.artist, album: scanned.album, duration: scanned.duration || track.duration, artwork: scanned.artwork ?? track.artwork });
+      }
+      await reload();
+      notify('Library scan complete.');
+    } catch { notify('Could not finish scanning this library.'); }
+  };
+
+  const clearLibrary = async () => {
+    if (!window.confirm('Clear the local VOID library and playlists? The original files on your Mac will not be deleted.')) return;
+    try {
+      await Promise.all([...tracks.map(track => removeTrack(track.id)), ...playlists.map(playlist => removePlaylist(playlist.id))]);
+      if (ytActiveRef.current) { ytActiveRef.current = false; try { ytAudioPlayerRef.current?.pauseVideo?.(); } catch {} }
+      audio.current?.pause();
+      setActiveId(null); setIsPlaying(false); setPosition(0); setDuration(0);
+      if (objectUrl.current) { URL.revokeObjectURL(objectUrl.current); objectUrl.current = null; }
+      setTracks([]); setPlaylists([]); setQueue([]);
+      notify('Local library and playlists cleared.');
+    } catch { notify('Could not clear the local library.'); }
+  };
+
+  const openCollection = (kind: 'album' | 'artist', name: string) => {
+    const target: Page = kind === 'album' ? 'albums' : 'artists';
+    setLibraryOpen(false);
+    setDetail({ kind, name });
+    setQuery('');
+    setPage(target);
+    setLocation(pathFor(target));
+    setContextTrack(null);
+  };
+
+  const flyArt = useCallback((direction: 'open' | 'close') => {
+    const art = npArt.current;
+    const playerBar = document.querySelector<HTMLElement>('.player-bar');
+    const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
+    if (!art || !source || !playerBar || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const originalDisplay = playerBar.style.getPropertyValue('display');
+    const originalPriority = playerBar.style.getPropertyPriority('display');
+    playerBar.style.setProperty('display', 'flex', 'important');
+    const from = source.getBoundingClientRect();
+    const to = art.getBoundingClientRect();
+    if (originalDisplay) playerBar.style.setProperty('display', originalDisplay, originalPriority);
+    else playerBar.style.removeProperty('display');
+    if (!from.width || !to.width) return;
+    const scale = from.width / to.width;
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const compact = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${13 / scale}px` };
+    const full = { transform: 'translate(0px, 0px) scale(1)', borderRadius: '24px' };
+    if (direction === 'open') {
+      art.animate([compact, full], { duration: 560, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+    } else {
+      const anim = art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
+      anim.onfinish = () => { art.style.opacity = '0'; };
+    }
+  }, []);
+
+  const openExpanded = useCallback(() => {
+    if (expandedRef.current) return;
+    window.clearTimeout(closeTimer.current);
+    setClosing(false);
+    setExpanded(true);
+  }, []);
+
+  const closeExpanded = useCallback(() => {
+    if (!expandedRef.current || closingRef.current) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setExpanded(false); setClosing(false); return; }
+    setClosing(true);
+    flyArt('close');
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => { setExpanded(false); setClosing(false); }, 300);
+  }, [flyArt]);
+
+  useLayoutEffect(() => { if (expanded) flyArt('open'); }, [expanded, flyArt]);
+
+  useEffect(() => {
+    const onKeys = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+      const command = event.metaKey || event.ctrlKey;
+      if (command && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setPaletteOpen(value => !value); setPaletteQuery(''); return;
+      }
+      if (event.key === 'Escape') {
+        setPaletteOpen(false); setModal(null); setContextTrack(null); closeExpanded(); setImportMenu(false); return;
+      }
+      if (editing || paletteOpen || modal || contextTrack || importMenu) return;
+      if (event.code === 'Space') { event.preventDefault(); void togglePlay(); }
+      else if (event.key === 'ArrowRight') {
+        if (activeTrack) {
+          if (ytActiveRef.current && ytAudioPlayerRef.current) {
+            const next = Math.min(duration || 0, position + 5);
+            try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+            setPosition(next);
+          } else if (audio.current) {
+            audio.current.currentTime = Math.min(audio.current.duration || 0, audio.current.currentTime + 5);
+          }
+        }
+      }
+      else if (event.key === 'ArrowLeft') {
+        if (activeTrack) {
+          if (ytActiveRef.current && ytAudioPlayerRef.current) {
+            const next = Math.max(0, position - 5);
+            try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+            setPosition(next);
+          } else if (audio.current) {
+            audio.current.currentTime = Math.max(0, audio.current.currentTime - 5);
+          }
+        }
+      }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); void updatePrefs({ ...prefs, volume: Math.min(1, prefs.volume + .05), muted: false }); }
+      else if (event.key === 'ArrowDown') { event.preventDefault(); void updatePrefs({ ...prefs, volume: Math.max(0, prefs.volume - .05) }); }
+      else if (event.key.toLowerCase() === 'm') void updatePrefs({ ...prefs, muted: !prefs.muted });
+    };
+    window.addEventListener('keydown', onKeys);
+    return () => window.removeEventListener('keydown', onKeys);
+  }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
+
+  useEffect(() => {
+    warmUpTrendingCatalog();
+  }, []);
+
+  const openTrendingLanguage = useCallback((langId: string | null) => {
+    try {
+      if (langId) sessionStorage.setItem('void-active-trending-lang', langId);
+      else sessionStorage.removeItem('void-active-trending-lang');
+    } catch {}
+    if (langId) {
+      setTrendingLanguages(promoteTrendingLanguage(langId));
+      const initial = getInitialTrendingTracks(langId);
+      setTrendingTracks(initial);
+      setTrendingLoading(initial.length === 0);
+      if (langId === 'arabic') void prewarmArabicTopStreams(30);
+    } else {
+      setTrendingTracks([]);
+      setTrendingLoading(false);
+    }
+    setActiveTrendingLangId(langId);
+    setTrendingQuery('');
+  }, []);
+
+  useEffect(() => {
+    if (!activeTrendingLangId) {
+      setTrendingTracks([]);
+      setTrendingLoading(false);
+      return;
+    }
+    if (activeTrendingLangId === 'arabic') {
+      void prewarmArabicTopStreams(30);
+    }
+    const initial = getInitialTrendingTracks(activeTrendingLangId);
+    if (initial.length > 0) {
+      setTrendingTracks(initial);
+      setTrendingLoading(false);
+    } else {
+      setTrendingLoading(true);
+    }
+    const controller = new AbortController();
+    void fetchTrendingTop100(activeTrendingLangId, controller.signal, partialItems => {
+      if (!controller.signal.aborted && partialItems.length > 0) {
+        setTrendingTracks(partialItems);
+        setTrendingLoading(false);
+      }
+    })
+      .then(items => {
+        if (!controller.signal.aborted) {
+          if (items.length > 0) setTrendingTracks(items);
+          setTrendingLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setTrendingLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [activeTrendingLangId]);
+
+  const activeTrendingLang = useMemo(
+    () => trendingLanguages.find(l => l.id === activeTrendingLangId) ?? null,
+    [trendingLanguages, activeTrendingLangId]
+  );
+
+  const displayedTrendingLanguages = useMemo(() => {
+    const q = trendingQuery.trim().toLowerCase();
+    if (!q) return trendingLanguages;
+    return trendingLanguages.filter(l =>
+      `${l.label} ${l.nativeLabel} ${l.region} ${l.subtitle} ${l.artistName || ''}`.toLowerCase().includes(q)
+    );
+  }, [trendingLanguages, trendingQuery]);
+
+  // Load Artist Top 100 Songs automatically whenever an artist detail view is opened
+  useEffect(() => {
+    if (detail?.kind !== 'artist' || !detail.name) {
+      setArtistTopTracks([]);
+      setArtistTopLoading(false);
+      return;
+    }
+    setArtistViewTab('top100');
+    const initial = getInitialArtistTop100(detail.name);
+    if (initial.length > 0) {
+      setArtistTopTracks(initial);
+      setArtistTopLoading(false);
+    } else {
+      setArtistTopTracks([]);
+      setArtistTopLoading(true);
+    }
+    const controller = new AbortController();
+    void fetchArtistTop100(detail.name, controller.signal, partial => {
+      if (!controller.signal.aborted && partial.length > 0) {
+        setArtistTopTracks(partial);
+        setArtistTopLoading(false);
+      }
+    })
+      .then(items => {
+        if (!controller.signal.aborted) {
+          if (items.length > 0) setArtistTopTracks(items);
+          setArtistTopLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setArtistTopLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [detail?.kind, detail?.name]);
+
+  const deduplicatedArtistTopTracks = useMemo(() => {
+    if (detail?.kind !== 'artist') return [];
+    const mapped = artistTopTracks.map(t => {
+      const cleanTitle = cleanCanonicalTrackTitle(t.title || t.name || '');
+      const rawId = extractCleanYouTubeId(t.id);
+      const cleanItemId = String(t.id ?? '').replace(/^(?:download:|api-)/, '').trim();
+      const isFav = Boolean(
+        tracks.some(
+          tr =>
+            tr.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(tr.id) === rawId) ||
+              (Boolean(cleanItemId) && String(tr.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+              areSongsFuzzyDuplicates(tr.title || '', cleanTitle, tr.artist || '', t.artist || '', false))
+        )
+      );
+      const offline = downloadedTracks.find(
+        (item: any) =>
+          (Boolean(rawId) && extractCleanYouTubeId(item?.id ?? '') === rawId) ||
+          (Boolean(cleanItemId) && String(item?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+          areSongsFuzzyDuplicates(String(item?.title ?? item?.name ?? ''), cleanTitle, String(item?.artist ?? ''), t.artist || '', false)
+      );
+      return {
+        ...t,
+        title: cleanTitle,
+        name: cleanTitle,
+        favorite: isFav,
+        image: t.image || getStickyCoverUrl(t) || offline?.image,
+        offlineAvailable: Boolean(offline),
+      };
+    });
+    return deduplicateTrackCollection(mapped, { ignoreArtist: true, cleanTitles: true })
+      .slice(0, 15)
+      .map((item, idx) => ({
+        ...item,
+        trendingRank: idx + 1,
+      }));
+  }, [artistTopTracks, detail?.kind, downloadedTracks, tracks]);
+
+  const [artistTopExpanded, setArtistTopExpanded] = useState(false);
+
+  const displayedArtistTopTracks = useMemo(() => {
+    if (detail?.kind !== 'artist') return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return deduplicatedArtistTopTracks;
+    return deduplicatedArtistTopTracks.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q));
+  }, [deduplicatedArtistTopTracks, detail?.kind, query]);
+
+  const visibleArtistTopTracks = useMemo(() => {
+    if (artistTopExpanded) return displayedArtistTopTracks;
+    return displayedArtistTopTracks.slice(0, 5);
+  }, [artistTopExpanded, displayedArtistTopTracks]);
+
+  const displayedTrendingTracks = useMemo(() => {
+    const q = trendingQuery.trim().toLowerCase();
+    const mapped = trendingTracks.map(t => {
+      const cleanTitle = cleanCanonicalTrackTitle(t.title || t.name || '');
+      const rawId = extractCleanYouTubeId(t.id);
+      const cleanItemId = String(t.id ?? '').replace(/^(?:download:|api-)/, '').trim();
+      const isFav = Boolean(
+        tracks.some(
+          tr =>
+            tr.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(tr.id) === rawId) ||
+              (Boolean(cleanItemId) && String(tr.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+              areSongsFuzzyDuplicates(tr.title || '', cleanTitle, tr.artist || '', t.artist || '', false))
+        ) ||
+        downloadedTracks.some(
+          (dl: any) =>
+            dl.favorite &&
+            ((Boolean(rawId) && extractCleanYouTubeId(dl.id) === rawId) ||
+              (Boolean(cleanItemId) && String(dl?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId))
+        )
+      );
+      const offline = downloadedTracks.find(
+        (dl: any) =>
+          (Boolean(rawId) && extractCleanYouTubeId(dl.id) === rawId) ||
+          (Boolean(cleanItemId) && String(dl?.id ?? '').replace(/^(?:download:|api-)/, '').trim() === cleanItemId) ||
+          areSongsFuzzyDuplicates(String(dl?.title ?? dl?.name ?? ''), cleanTitle, String(dl?.artist ?? ''), t.artist || '', false)
+      );
+      const stickyImg = t.image || getStickyCoverUrl(t) || offline?.image;
+      if (t.image) rememberStickyCover(t, t.image);
+      return {
+        ...t,
+        title: cleanTitle,
+        name: cleanTitle,
+        favorite: isFav,
+        offlineAvailable: Boolean(offline),
+        image: stickyImg,
+      };
+    });
+    const deduped = deduplicateTrackCollection(mapped, { ignoreArtist: false, cleanTitles: true }).map((item, idx) => ({
+      ...item,
+      trendingRank: idx + 1,
+    }));
+    return q
+      ? deduped.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q))
+      : deduped;
+  }, [downloadedTracks, tracks, trendingQuery, trendingTracks]);
+
+  const backLayerActive = Boolean(
+    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || activeTrendingLangId || libraryOpen || page !== 'home'
+  );
+  const backStateRef = useRef({
+    modal,
+    contextTrack,
+    importMenu,
+    paletteOpen,
+    expanded,
+    mobileFontOpen,
+    detail,
+    activeTrendingLangId,
+    libraryOpen,
+    page,
+  });
+  backStateRef.current = {
+    modal,
+    contextTrack,
+    importMenu,
+    paletteOpen,
+    expanded,
+    mobileFontOpen,
+    detail,
+    activeTrendingLangId,
+    libraryOpen,
+    page,
+  };
+
+  useEffect(() => {
+    if (!backLayerActive) return;
+    const currentPath = window.location.pathname + window.location.search;
+    if (!window.history.state?.voidBackGuard) {
+      window.history.pushState({ ...(window.history.state || {}), voidBackGuard: true }, '', currentPath);
+    }
+  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, activeTrendingLangId, libraryOpen, page]);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const st = backStateRef.current;
+      const hasActiveLayer = Boolean(
+        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.activeTrendingLangId || st.libraryOpen || st.page !== 'home'
+      );
+      if (!hasActiveLayer) return;
+
+      event.stopImmediatePropagation();
+
+      if (st.modal) {
+        setModal(null);
+      } else if (st.contextTrack) {
+        setContextTrack(null);
+      } else if (st.importMenu) {
+        setImportMenu(false);
+      } else if (st.paletteOpen) {
+        setPaletteOpen(false);
+      } else if (st.expanded) {
+        closeExpanded();
+      } else if (st.mobileFontOpen) {
+        setMobileFontOpen(false);
+      } else if (st.detail) {
+        setDetail(null);
+      } else if (st.activeTrendingLangId) {
+        setActiveTrendingLangId(null);
+        setTrendingQuery('');
+      } else if (st.libraryOpen) {
+        setLibraryOpen(false);
+      } else if (st.page !== 'home') {
+        setLibraryOpen(false);
+        setDetail(null);
+        setActiveTrendingLangId(null);
+        setPage('home');
+        setLocation('/');
+        return;
+      }
+
+      const targetPath = pathFor(st.page);
+      if (window.location.pathname !== targetPath) {
+        window.history.replaceState({ voidBackGuard: true }, '', targetPath);
+      } else {
+        window.history.pushState({ voidBackGuard: true }, '', targetPath);
+      }
+    };
+    window.addEventListener('popstate', onPopState, true);
+    return () => window.removeEventListener('popstate', onPopState, true);
+  }, [closeExpanded, setLocation]);
+
+  // Home hero follows the scroll depth of the main column (same idea as the Paper Glass scroll
+  // variable): one rAF write per frame, one custom property, no layout reads.
+  useEffect(() => {
+    if (page !== 'home' || detail || libraryOpen) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const scroller = document.querySelector<HTMLElement>('.main-area');
+    const target = contentRef.current;
+    if (!scroller || !target) return;
+    let frame = 0;
+    const write = () => { frame = 0; target.style.setProperty('--dg-sy', String(Math.min(720, Math.round(scroller.scrollTop)))); };
+    const onScroll = () => { if (!frame) frame = window.requestAnimationFrame(write); };
+    write();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+      target.style.removeProperty('--dg-sy');
+    };
+  }, [detail, libraryOpen, page]);
+
+  useEffect(() => () => {
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+    window.clearTimeout(toastTimer.current);
+    window.clearTimeout(closeTimer.current);
+    window.cancelAnimationFrame(orbFrame.current);
+  }, []);
+
+  const moveOrb = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const el = orbRef.current;
+    if (!el || event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(-1, Math.min(1, (event.clientX - rect.left - rect.width / 2) / (rect.width / 2)));
+    const y = Math.max(-1, Math.min(1, (event.clientY - rect.top - rect.height / 2) / (rect.height / 2)));
+    window.cancelAnimationFrame(orbFrame.current);
+    orbFrame.current = window.requestAnimationFrame(() => { el.style.setProperty('--ox', x.toFixed(3)); el.style.setProperty('--oy', y.toFixed(3)); });
+  };
+  const resetOrb = () => {
+    const el = orbRef.current;
+    if (!el) return;
+    window.cancelAnimationFrame(orbFrame.current);
+    el.style.setProperty('--ox', '0'); el.style.setProperty('--oy', '0');
+  };
+
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedSongIds([]);
+    setArtistTopExpanded(false);
+    if (page !== 'trending') {
+      setActiveTrendingLangId(null);
+      setTrendingQuery('');
+      try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
+    }
+  }, [page, detail?.kind, detail?.name, libraryOpen]);
+
+  const setPageAndRoute = (target: Page) => {
+    setLibraryOpen(false);
+    setDetail(null);
+    setSelectionMode(false);
+    setSelectedSongIds([]);
+    setArtistTopExpanded(false);
+    setActiveTrendingLangId(null);
+    try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
+    setTrendingQuery('');
+    setPage(target);
+    setLocation(pathFor(target));
+  };
+  const splitArtists = useCallback((raw: string): string[] => {
+    if (!raw) return [];
+    // First split on common bilingual separators (·, |) and check if it's the same artist in two scripts (e.g. "عمرو دياب · Amr Diab")
+    const bilingualParts = raw.split(/\s*[·|]\s*/).map(p => p.trim()).filter(Boolean);
+    let normalizedRaw = raw;
+    if (bilingualParts.length >= 2) {
+      const latinPart = bilingualParts.find(p => /[A-Za-z]/.test(p) && !/[\u0600-\u06FF\u0900-\u0D7F]/.test(p));
+      const nonLatinPart = bilingualParts.find(p => /[\u0600-\u06FF\u0900-\u0D7F]/.test(p));
+      if (latinPart && nonLatinPart) {
+        normalizedRaw = latinPart;
+      }
+    }
+    const parts = normalizedRaw
+      .split(/(?:,\s*|;\s*|\s*[·|]\s*|\s+\/\s+|\s*&\s*|\s+[-–—]\s+|(?=[A-Za-z])[-–—](?=[A-Za-z])|\s+feat\.?\s+|\s+ft\.?\s+|\s+with\s+|\s+and\s+|\s+vs\.?\s+)/i)
+      .map(a => a.replace(/\([^)]*\)|\[[^\]]*\]/g, '').trim())
+      .filter(a => Boolean(a) && !/^(?:unknown artist|youtube|live radio|topic|official)$/i.test(a));
+    return parts;
+  }, []);
+
+  // A downloaded copy is the canonical version of that song throughout the UI.
+  // Keep the original library record/ID for favorites and playlists, but hide duplicate
+  // same-title/same-artist records when an offline copy exists and reuse its artwork.
+  const [artistAvatarTick, setArtistAvatarTick] = useState(0);
+  useEffect(() => {
+    const onAvatarUpdate = () => setArtistAvatarTick(v => v + 1);
+    artistPhotoListeners.add(onAvatarUpdate);
+    return () => { artistPhotoListeners.delete(onAvatarUpdate); };
+  }, []);
+
+  const canonicalTracks = useMemo<Track[]>(() => {
+    const enriched: Track[] = tracks.map(track => {
+      const cleanTitle = cleanCanonicalTrackTitle(track.title);
+      const offline = downloadedTracks.find((item: any) =>
+        String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+        areSongsFuzzyDuplicates(String(item.title ?? item.name ?? ''), cleanTitle, String(item.artist ?? ''), track.artist || '', false)
+      );
+      const lockedImg =
+        getStickyCoverUrl(track) ||
+        (isValidCoverUrl(track.image) ? String(track.image).trim() : '') ||
+        (isValidCoverUrl(offline?.image) ? String(offline.image).trim() : '') ||
+        undefined;
+      return {
+        ...track,
+        title: cleanTitle || track.title,
+        image: lockedImg,
+        artwork: track.artwork || offline?.artwork,
+        offlineAvailable: Boolean(offline),
+      } as Track;
+    });
+    return deduplicateTrackCollection(enriched, { ignoreArtist: false, cleanTitles: true });
+  }, [downloadedTracks, tracks]);
+
+  const filteredTracks = useMemo<Track[]>(() => {
+    let list: Track[] = canonicalTracks;
+    if (page === 'favorites') list = list.filter(track => track.favorite);
+    if (page === 'recent') list = list.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0));
+    if (detail?.kind === 'album') list = list.filter(track => track.album === detail.name);
+    if (detail?.kind === 'artist') {
+      list = list.filter(track => {
+        const artists = splitArtists(track.artist || '');
+        return (
+          artists.some(a => areSameOrDuplicateArtist(a, detail.name)) ||
+          areSameOrDuplicateArtist(track.artist || '', detail.name)
+        );
+      });
+    }
+    if (detail?.kind === 'playlist') {
+      const playlist = playlists.find(item => item.name === detail.name);
+      list = (playlist?.trackIds ?? []).map(id => tracks.find(track => track.id === id)).filter((track): track is Track => !!track);
+    }
+    const q = query.trim().toLowerCase();
+    if (q) list = list.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
+    const mapped: Track[] = list.map(track => {
+      const cleanTitle = cleanCanonicalTrackTitle(track.title);
+      const offline = downloadedTracks.find((item: any) =>
+        String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+        areSongsFuzzyDuplicates(String(item.title ?? item.name ?? ''), cleanTitle, String(item.artist ?? ''), track.artist || '', false)
+      );
+      const lockedImg =
+        getStickyCoverUrl(track) ||
+        (isValidCoverUrl(track.image) ? String(track.image).trim() : '') ||
+        (isValidCoverUrl(offline?.image) ? String(offline.image).trim() : '') ||
+        undefined;
+      return {
+        ...track,
+        title: cleanTitle || track.title,
+        image: lockedImg,
+        artwork: track.artwork || offline?.artwork,
+        offlineAvailable: Boolean(offline),
+      } as Track;
+    });
+    return deduplicateTrackCollection(mapped, {
+      ignoreArtist: detail?.kind === 'artist',
+      cleanTitles: true,
+    });
+  }, [canonicalTracks, detail, downloadedTracks, page, playlists, query, splitArtists, tracks]);
+
+  const queueTracks = useMemo<Track[]>(() => {
+    const canonicalById = new Map(canonicalTracks.map(track => [track.id, track]));
+    const resolved: Track[] = queue.map(id => {
+      const original = tracks.find(track => track.id === id);
+      if (!original) return undefined;
+      return (
+        canonicalById.get(id) ||
+        canonicalTracks.find(track => areSongsFuzzyDuplicates(track.title, original.title, track.artist, original.artist, false))
+      );
+    }).filter((track): track is Track => !!track);
+    return deduplicateTrackCollection(resolved, { ignoreArtist: false, cleanTitles: true });
+  }, [canonicalTracks, queue, tracks]);
+
+  const albumNames = useMemo(() => [...new Set(canonicalTracks.map(track => track.album))], [canonicalTracks]);
+
+  // Smart Artist Deduplication with Avatar-Priority Merging
+  const artistNames = useMemo(() => {
+    void artistAvatarTick;
+    const rawNames: string[] = [];
+    const countByArtist = new Map<string, number>();
+    canonicalTracks.forEach(track => {
+      const names = splitArtists(track.artist || '');
+      names.forEach(n => {
+        rawNames.push(n);
+        const norm = normalizeArtistIdentityKey(n);
+        countByArtist.set(norm, (countByArtist.get(norm) ?? 0) + 1);
+      });
+    });
+    const deduped = deduplicateArtistNames(
+      rawNames,
+      name => getCachedArtistPhoto(name),
+      name => countByArtist.get(normalizeArtistIdentityKey(name)) ?? 0
+    );
+    return deduped.sort((a, b) => a.localeCompare(b));
+  }, [artistAvatarTick, canonicalTracks, splitArtists]);
+
+  useEffect(() => {
+    artistNames.slice(0, 24).forEach(name => {
+      if (!getCachedArtistPhoto(name)) {
+        void fetchArtistPhoto(name);
+      }
+    });
+  }, [artistNames]);
+
+  const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', trending: 'Trending', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', downloads: 'Downloads', settings: 'Settings' } as Record<Page, string>)[page];
+
+  const allSearchResults = useMemo(() => {
+    const q = paletteQuery.toLowerCase().trim();
+    if (!q) return [];
+    const matched = canonicalTracks.filter(track => `${track.title} ${track.artist} ${track.album} ${track.fileName}`.toLowerCase().includes(q));
+    return deduplicateTrackCollection(matched, { ignoreArtist: false, cleanTitles: true }).slice(0, 7);
+  }, [canonicalTracks, paletteQuery]);
+
+  const deduplicatedMusicResults = useMemo(() => {
+    const dedupedOnline = deduplicateTrackCollection(musicResults, { ignoreArtist: false, cleanTitles: true });
+    if (!allSearchResults.length) return dedupedOnline;
+    return dedupedOnline.filter(
+      onlineTrack =>
+        !allSearchResults.some(localTrack =>
+          areSongsFuzzyDuplicates(
+            String(onlineTrack.name || onlineTrack.title || ''),
+            localTrack.title,
+            String(onlineTrack.artist || ''),
+            localTrack.artist,
+            false
+          )
+        )
+    );
+  }, [allSearchResults, musicResults]);
+
+  const albumSearchResults = useMemo(() => {
+    const q = paletteQuery.toLowerCase().trim();
+    return q ? albumNames.filter(name => name.toLowerCase().includes(q)).slice(0, 3) : [];
+  }, [albumNames, paletteQuery]);
+
+  const artistSearchResults = useMemo(() => {
+    void artistAvatarTick;
+    const q = paletteQuery.trim();
+    if (!q) return [];
+
+    const combined: string[] = [];
+    const addArtist = (rawName: string, isTrustedOnline = false) => {
+      for (const solo of splitArtists(rawName)) {
+        const clean = solo.trim();
+        if (!clean || clean.length < 2 || isCompoundArtistString(clean)) continue;
+        if (/\b(?:dj|remix|club|radio|topic|official|channel|records)\b/i.test(clean)) continue;
+
+        const matchInfo = doesArtistMatchQuery(clean, q);
+        if (!isTrustedOnline && !matchInfo.matches) continue;
+
+        const singleWordIdx = combined.findIndex(existing => {
+          const exWords = existing.trim().split(/\s+/);
+          const newWords = clean.split(/\s+/);
+          return exWords.length === 1 && newWords.length >= 2 && newWords[0].toLowerCase() === exWords[0].toLowerCase();
+        });
+        if (singleWordIdx !== -1) {
+          combined[singleWordIdx] = clean;
+          continue;
+        }
+
+        const cleanWords = clean.split(/\s+/);
+        if (
+          cleanWords.length === 1 &&
+          combined.some(existing => {
+            const exWords = existing.trim().split(/\s+/);
+            return exWords.length >= 2 && exWords[0].toLowerCase() === cleanWords[0].toLowerCase();
+          })
+        ) {
+          continue;
+        }
+
+        const dupIdx = combined.findIndex(existing => areSameOrDuplicateArtist(existing, clean));
+        if (dupIdx !== -1) {
+          const exScore = scoreArtistAvatarUrl(getCachedArtistPhoto(combined[dupIdx]));
+          const candScore = scoreArtistAvatarUrl(getCachedArtistPhoto(clean));
+          if (candScore > exScore) {
+            combined[dupIdx] = clean;
+          } else if (candScore === exScore) {
+            combined[dupIdx] = pickCanonicalArtistDisplayName(combined[dupIdx], clean);
+          }
+          continue;
+        }
+        combined.push(clean);
+      }
+    };
+
+    // 1. Official canonical online artists first (Deezer + Apple Music/iTunes spell-corrected with valid HD avatars)
+    for (const name of onlineArtistResults) {
+      addArtist(name, true);
+    }
+    // 2. Local library artists matching the query
+    for (const name of artistNames) {
+      addArtist(name, false);
+    }
+    // 3. Solo artists from unified search results matching the query
+    for (const track of deduplicatedMusicResults) {
+      addArtist(String(track?.artist || ''), false);
+    }
+    return deduplicateArtistNames(combined, name => getCachedArtistPhoto(name)).slice(0, 6);
+  }, [artistAvatarTick, artistNames, deduplicatedMusicResults, onlineArtistResults, paletteQuery, splitArtists]);
+  const playlistSearchResults = useMemo(() => {
+    const q = paletteQuery.toLowerCase().trim();
+    return q ? playlists.filter(playlist => `${playlist.name} ${playlist.description}`.toLowerCase().includes(q)).slice(0, 3) : [];
+  }, [paletteQuery, playlists]);
+
+  const playList = (list: Track[]) => { if (list.length) void playTrack(list[0], list.map(track => track.id)); };
+  const hasPlayed = useMemo(() => tracks.some(track => track.lastPlayedAt), [tracks]);
+  const applyOfflineArtwork = useCallback((track: any) => {
+    const offline = downloadedTracks.find((item: any) =>
+      String(item.id ?? '').replace(/^download:/, '') === String(track.id ?? '') ||
+      (String(item.title ?? '').trim().toLowerCase() === String(track.title ?? '').trim().toLowerCase() &&
+       String(item.artist ?? '').trim().toLowerCase() === String(track.artist ?? '').trim().toLowerCase())
+    );
+    return offline ? { ...track, image: offline.image || undefined, offlineAvailable: true } : track;
+  }, [downloadedTracks]);
+  const jumpBack = useMemo(() => {
+    const played = canonicalTracks.filter(track => track.lastPlayedAt).sort((a, b) => (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0)).slice(0, 4);
+    return [...played, ...canonicalTracks.filter(track => !played.includes(track))].slice(0, 4).map(applyOfflineArtwork);
+  }, [applyOfflineArtwork, canonicalTracks]);
+  const recentlyAdded = useMemo(() => canonicalTracks.slice(0, 4).map(applyOfflineArtwork), [applyOfflineArtwork, canonicalTracks]);
+
+  const playSomething = () => {
+    if (!tracks.length) { notify('Import audio files to begin your library.'); return; }
+    const choices = tracks.length > 1 ? tracks.filter(track => track.id !== activeId) : tracks;
+    void playTrack(choices[Math.floor(Math.random() * choices.length)], tracks.map(track => track.id));
+  };
+
+  const moveQueue = (index: number, step: number) => {
+    const nextIndex = index + step;
+    if (nextIndex < 0 || nextIndex >= queueTracks.length) return;
+    const ids = queueTracks.map(track => track.id);
+    [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]];
+    setQueue(ids);
+  };
+
+  const moveItem = (track: Track, index: number, step: number) => {
+    if (page === 'queue') { moveQueue(index, step); return; }
+    if (detail?.kind !== 'playlist') return;
+    const playlist = playlists.find(item => item.name === detail.name);
+    if (!playlist) return;
+    const ids = [...playlist.trackIds];
+    const currentIndex = ids.indexOf(track.id);
+    const target = currentIndex + step;
+    if (currentIndex < 0 || target < 0 || target >= ids.length) return;
+    [ids[currentIndex], ids[target]] = [ids[target], ids[currentIndex]];
+    void savePlaylist({ ...playlist, trackIds: ids }).then(reload).catch(() => notify('Could not reorder this playlist.'));
+  };
+
+  const clearQueue = () => { setQueue([]); notify('Queue cleared.'); };
+  const removeFromQueue = (id: string) => setQueue(ids => ids.filter(item => item !== id));
+  const removeFromPlaylist = async (id: string) => {
+    if (detail?.kind !== 'playlist') return;
+    const playlist = playlists.find(item => item.name === detail.name);
+    if (!playlist) return;
+    try { await savePlaylist({ ...playlist, trackIds: playlist.trackIds.filter(item => item !== id) }); await reload(); }
+    catch { notify('Could not remove this song from the playlist.'); }
+  };
+
+  const normalizeMatchText = (val: unknown) =>
+    String(val ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
+
+  const latestActions = useRef<RowActions | null>(null);
+  latestActions.current = {
+    play: (track, list) => void playTrack(track, list),
+    openAlbum: name => { setDetail({ kind: 'album', name }); setQuery(''); },
+    move: moveItem,
+    removeFromList: id => page === 'queue' ? removeFromQueue(id) : void removeFromPlaylist(id),
+    favorite: track => void toggleFavorite(track),
+    menu: track => setContextTrack(track),
+    download: track => void downloadSearchTrack(track),
+    isDownloading: track => {
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      return Boolean(rawId && downloadingIds.includes(rawId));
+    },
+    isDownloadSuccess: track => {
+      if (!track) return false;
+      if ((track as any).offlineAvailable || String(track.id ?? '').startsWith('download:')) return true;
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      if (rawId && (recentlyDownloadedIds.includes(rawId) || downloadedTracks.some((item: any) => extractCleanYouTubeId(item?.id ?? '') === rawId))) {
+        return true;
+      }
+      const normTitle = normalizeMatchText(track.title || (track as any).name);
+      const normArtist = normalizeMatchText(track.artist);
+      return downloadedTracks.some((item: any) => {
+        const dlTitle = normalizeMatchText(item?.title || item?.name);
+        const dlArtist = normalizeMatchText(item?.artist);
+        return Boolean(
+          normTitle &&
+            dlTitle &&
+            normTitle === dlTitle &&
+            (!normArtist || !dlArtist || normArtist === dlArtist || dlArtist.includes(normArtist) || normArtist.includes(dlArtist))
+        );
+      });
+    },
+    canDownload: track => {
+      if (!track) return false;
+      if ((track as any).isLive || (track as any).qualityBadge === 'Live Radio' || (track as any).qualityBadge === 'FLAC Live') return false;
+      if ((track as any).offlineAvailable || String(track.id ?? '').startsWith('download:')) return true;
+      const hasRemoteSource = Boolean(
+        (track as any).audioUrl ||
+        (track as any).downloadUrl ||
+        (track as any).src ||
+        String(track.id ?? '').startsWith('api-') ||
+        formatProviderLabel((track as any).source, track)
+      );
+      if (hasRemoteSource) return true;
+      const rawId = extractCleanYouTubeId(track?.id ?? '');
+      const normTitle = normalizeMatchText(track.title || (track as any).name);
+      const normArtist = normalizeMatchText(track.artist);
+      return downloadedTracks.some((item: any) => {
+        const dlId = extractCleanYouTubeId(item?.id ?? '');
+        if (rawId && dlId === rawId) return true;
+        const dlTitle = normalizeMatchText(item?.title || item?.name);
+        const dlArtist = normalizeMatchText(item?.artist);
+        return Boolean(
+          normTitle &&
+            dlTitle &&
+            normTitle === dlTitle &&
+            (!normArtist || !dlArtist || normArtist === dlArtist || dlArtist.includes(normArtist) || normArtist.includes(dlArtist))
+        );
+      });
+    },
+  };
+  const rowActions = useMemo<RowActions>(() => ({
+    play: (track, list) => latestActions.current!.play(track, list),
+    openAlbum: name => latestActions.current!.openAlbum(name),
+    move: (track, index, step) => latestActions.current!.move(track, index, step),
+    removeFromList: id => latestActions.current!.removeFromList(id),
+    favorite: track => latestActions.current!.favorite(track),
+    menu: track => latestActions.current!.menu(track),
+    download: track => latestActions.current!.download?.(track),
+    canDownload: track => Boolean(latestActions.current!.canDownload?.(track)),
+    isDownloading: track => Boolean(latestActions.current!.isDownloading?.(track)),
+    isDownloadSuccess: track => Boolean(latestActions.current!.isDownloadSuccess?.(track)),
+  }), []);
+
+  const [viewHeroPhotoUrl, setViewHeroPhotoUrl] = useState<string | null>(null);
+  const [viewHeroAmbient, setViewHeroAmbient] = useState<Hue4 | null>(null);
+
+  const favoriteTracksList = useMemo(
+    () => canonicalTracks.filter(track => track.favorite),
+    [canonicalTracks]
+  );
+
+  const favoriteArtistNames = useMemo(() => {
+    void artistAvatarTick;
+    const names: string[] = [];
+    favoriteTracksList.forEach(t => {
+      splitArtists(t.artist || '').forEach(a => names.push(a));
+    });
+    return deduplicateArtistNames(names, name => getCachedArtistPhoto(name));
+  }, [artistAvatarTick, favoriteTracksList, splitArtists]);
+
+  useEffect(() => {
+    let alive = true;
+    if (detail?.kind === 'artist' && detail.name) {
+      const cached = getCachedArtistPhoto(detail.name);
+      const fallbackImg =
+        deduplicatedArtistTopTracks[0]?.image ||
+        filteredTracks[0]?.image ||
+        (filteredTracks[0] ? getStickyCoverUrl(filteredTracks[0]) : '') ||
+        null;
+      const seedAmbient = composeArt(`artist:${detail.name}`).ambient;
+      if (cached) {
+        setViewHeroPhotoUrl(cached);
+        sampleImageUrlAmbient(cached).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else {
+        setViewHeroPhotoUrl(fallbackImg);
+        setViewHeroAmbient(seedAmbient);
+        fetchArtistPhoto(detail.name).then(url => {
+          if (!alive) return;
+          const resolved = url || fallbackImg;
+          setViewHeroPhotoUrl(resolved);
+          if (resolved) {
+            sampleImageUrlAmbient(resolved).then(found => {
+              if (alive) setViewHeroAmbient(found ?? seedAmbient);
+            }).catch(() => {});
+          }
+        });
+      }
+      return () => { alive = false; };
+    }
+
+    if ((detail?.kind === 'album' || detail?.kind === 'playlist') && detail.name) {
+      const lead = filteredTracks[0];
+      const coverUrl = lead ? (lead.image || getStickyCoverUrl(lead) || null) : null;
+      const seedAmbient = composeArt(`${detail.kind}:${detail.name}`).ambient;
+      setViewHeroPhotoUrl(coverUrl);
+      if (coverUrl) {
+        sampleImageUrlAmbient(coverUrl).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else if (lead?.artwork instanceof Blob) {
+        sampleArtworkAmbient(lead.artwork).then(found => {
+          if (alive) setViewHeroAmbient(found ?? seedAmbient);
+        }).catch(() => {
+          if (alive) setViewHeroAmbient(seedAmbient);
+        });
+      } else {
+        setViewHeroAmbient(seedAmbient);
+      }
+      return () => { alive = false; };
+    }
+
+    setViewHeroPhotoUrl(null);
+    setViewHeroAmbient(null);
+    return () => { alive = false; };
+  }, [canonicalTracks, deduplicatedArtistTopTracks, detail?.kind, detail?.name, favoriteArtistNames, favoriteTracksList, filteredTracks, page]);
+
+  const moodIndex = Math.floor(greetingHour / 2);
+  const atmosphere = atmos ?? viewHeroAmbient;
+  // The row indicator and the equalizer borrow the colour the app already derives from the
+  // playing artwork (sampled hue, or the seeded cover palette when a song has no artwork),
+  // so the accent always belongs to the music instead of a fixed purple.
+  const rowAccent = useMemo(() => {
+    const source = atmosphere ?? (activeTrack ? artFor(activeTrack).ambient : null);
+    if (!source) return null;
+    const hue = Math.round(source[0]);
+    const saturation = Math.max(58, Math.min(92, Math.round(source[3])));
+    return `hsl(${hue} ${saturation}% 64%)`;
+  }, [atmosphere, activeTrack]);
+  const changeVolume = (value: number) => {
+    if (audio.current) audio.current.volume = value;
+    if (ytAudioPlayerRef.current) {
+      try { ytAudioPlayerRef.current.setVolume?.(Math.round(value * 100)); ytAudioPlayerRef.current.unMute?.(); } catch {}
+    }
+    void updatePrefs({ ...prefs, volume: value, muted: false });
+  };
+  const toggleMute = () => void updatePrefs({ ...prefs, muted: !prefs.muted });
+  const cycleRepeat = () => void updatePrefs({ ...prefs, repeat: prefs.repeat === 'off' ? 'all' : prefs.repeat === 'all' ? 'one' : 'off' });
+  const seekTo = (next: number) => {
+    if (ytActiveRef.current && ytAudioPlayerRef.current) {
+      try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
+    } else if (audio.current) {
+      audio.current.currentTime = next;
+    }
+    setPosition(next);
+  };
+
+  const pageDescription: Record<Page, string> = {
+    home: 'Your music, kept on this Mac.', songs: `${canonicalTracks.length} ${canonicalTracks.length === 1 ? 'song' : 'songs'} in your local library`,
+    trending: 'Discover what is trending right now.',
+    albums: `${albumNames.length} ${albumNames.length === 1 ? 'album' : 'albums'} found in your files`,
+    artists: `${artistNames.length} ${artistNames.length === 1 ? 'artist' : 'artists'} found in your files`,
+    playlists: 'A few things, gathered your way.', favorites: 'The songs you’ve kept close.', recent: 'Your listening, on this device.', queue: `${queueTracks.length} ${queueTracks.length === 1 ? 'song' : 'songs'} lined up next.`, downloads: `${downloadedTracks.length} saved for offline listening on this device.`, settings: 'A few quiet preferences.',
+  };
+
+  const artistChartCount = displayedArtistTopTracks.length;
+  const artistTotalChartCount = deduplicatedArtistTopTracks.length;
+
+  const renderDeepGlass = () => <div className="void-app" data-ambient={libraryOpen && !detail ? 'library' : page} data-track-ambient={atmosphere ? '' : undefined} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'} data-playing={isPlaying ? '' : undefined} data-library={libraryOpen && !detail ? '' : undefined}
+    style={{ ...(atmosphere ? { '--h1': atmosphere[0], '--h2': atmosphere[1], '--h3': atmosphere[2], '--s': `${atmosphere[3]}%` } : null), ...(rowAccent ? { '--row-accent': rowAccent } : null) } as CSSProperties}>
+    
+    {page === 'home' && !detail && !libraryOpen && <div className="ambient" aria-hidden="true" />}
+
+    {/* --- GLOBAL SPOTIFY CANVAS BACKGROUND VIDEO --- */}
+    {canvasVideoId && canvasEnabled && canvasBootId && (
+      <div className="canvas-container" data-ready={canvasReady && !isEnding} data-ending={isEnding ? 'true' : undefined}>
+        <iframe
+          key={canvasBootId}
+          ref={canvasFrame}
+          className="canvas-iframe"
+          src={`https://www.youtube-nocookie.com/embed/${canvasBootId}?autoplay=1&mute=1&loop=1&controls=0&disablekb=1&playsinline=1&modestbranding=1&iv_load_policy=3&rel=0&playlist=${canvasBootId}`}
+          frameBorder="0"
+          allow="autoplay; encrypted-media; fullscreen"
+          onLoad={() => setCanvasReady(true)}
+          tabIndex={-1}
+        />
+      </div>
+    )}
+
+
+      <aside className="sidebar" aria-label="Main navigation">
+        <div className="sidebar-head">
+          <button className="brand" aria-label="VOID home" onClick={() => setPageAndRoute('home')} data-testid="button-void-home"><span className="eclipse" /><span className="brand-word">VOID</span></button>
+          <button className="icon-button sidebar-toggle" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={() => setSidebarCollapsed(value => !value)} data-testid="button-toggle-sidebar">{sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</button>
+        </div>
+        <div className="nav-group"><div className="nav-label">Listen</div>
+          {navItems.filter(item => item.group === 'listen').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-collapsed-hidden={!item.compact && !active} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
+        </div>
+        <div className="nav-group"><div className="nav-label">Your library</div>
+          {navItems.filter(item => item.group === 'collection').map(item => { const Icon = item.icon; const active = page === item.id && !detail; return <button className={`nav-item ${active ? 'active' : ''}`} onClick={() => setPageAndRoute(item.id)} key={item.id} aria-current={active ? 'page' : undefined} title={item.label} data-collapsed-hidden={!item.compact && !active} data-testid={`nav-${item.id}`}><Icon /><span>{item.label}</span></button>; })}
+        </div>
+        <div className="sidebar-bottom">
+          <button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPageAndRoute('settings')} aria-current={page === 'settings' ? 'page' : undefined} title="Settings" data-testid="nav-settings"><Settings /><span>Settings</span></button>
+          <div className="library-note">{tracks.length ? `${tracks.length} local ${tracks.length === 1 ? 'file' : 'files'} · ${compactBytes(tracks.reduce((sum, track) => sum + track.fileSize, 0))} on this device` : 'Your files stay on this device.'}</div>
+        </div>
+      </aside>
+      <main className="main-area">
+        <header className="topbar">
+          <div className="top-left">
+            <span className="eclipse mobile-eclipse" />
+            <span className="brand-word mobile-brand">VOID</span>
+            {detail ? (
+              <button
+                type="button"
+                className="crumb topbar-crumb-back"
+                onClick={() => { setDetail(null); setQuery(''); }}
+                aria-label="Back"
+                data-testid="button-topbar-back"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+                <span>{title}</span>
+              </button>
+            ) : (
+              <span className="crumb">{page === 'home' ? 'A quiet place for your music' : 'Your library'}</span>
+            )}
+          </div>
+          <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
+
+            {/* Phones get the compact add action beside search; the desktop button below stays as it is. */}
+            <button className="icon-button mobile-add-music" onClick={openImport} disabled={importing} aria-label="Add music" title="Add music" data-testid="button-add-music-compact"><Plus /></button>
+            
+            {/* --- LAPTOP SCREEN VIDEO TOGGLE BUTTON --- */}
+            <button
+              className="icon-button"
+              onClick={() => setCanvasEnabled(v => !v)}
+              aria-label={canvasEnabled ? "Stop background video" : "Play background video"}
+              title={canvasEnabled ? "Stop background video" : "Play background video"}
+              style={{ position: 'relative', width: 36, height: 36 }}
+              data-testid="button-toggle-canvas"
+            >
+              <svg width="18" height="13" viewBox="0 0 18 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1" y="1" width="16" height="10" rx="2" />
+                <path d="M5 12h8" />
+              </svg>
+              {!canvasEnabled && (
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '20%',
+                  right: '20%',
+                  height: '2px',
+                  background: 'currentColor',
+                  transform: 'rotate(-38deg)',
+                  borderRadius: '1px'
+                }} />
+              )}
+            </button>
+
+            {page !== 'settings' && <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setPageAndRoute('settings')} data-testid="button-open-settings"><SlidersHorizontal /></button>}
+          </div>
+        </header>
+        <section className={`content ${page === 'home' && !detail && !libraryOpen ? 'home-content' : ''}`} ref={contentRef}>
+          {storageError ? <div className="empty-state" role="alert" data-testid="status-storage-error"><strong>Local storage unavailable</strong><p>{storageError} Your browser may be in private mode or storage may be disabled. VOID does not upload your music.</p><button className="button" onClick={() => { setStorageError(''); void reload(); }} data-testid="button-retry-storage">Try again</button></div> : null}
+          {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
+          {isReady && page === 'home' && !detail && !libraryOpen && <>
+            <div className="welcome">
+              <div>
+                <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1>
+                <DgReveal as="p" dir="up" index={1} className="welcome-copy">A quiet place for the music already yours.</DgReveal>
+                {tracks.length ? <DgReveal as="p" dir="up" index={2} className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</DgReveal> : null}
+              </div>
+            </div>
+            <DgReveal as="section" dir="depth" index={2} className="mood" aria-label={moodLabelFor(greetingHour)} onPointerMove={moveOrb} onPointerLeave={resetOrb}>
+              <div className="mood-orb-stage" ref={orbRef} aria-hidden="true" data-testid="mood-orb">
+                <div className="vinyl" data-playing={isPlaying ? '' : undefined}>
+                  <div className="vinyl-disc">
+                    <div className="vinyl-label">
+                      {activeTrack ? <Cover track={activeTrack} large /> : <span className="vinyl-label-blank" />}
+                    </div>
+                  </div>
+                  <i className="vinyl-light" />
+                </div>
+              </div>
+              <div className="mood-copy">
+                <div className="mood-label">{moodLabelFor(greetingHour)}</div>
+                <h2 className="glass-ink">{moods[moodIndex]}</h2>
+                <button className="button glass mood-play-btn" onClick={playSomething} disabled={!tracks.length} data-testid="button-play-something"><Play size={13} fill="currentColor" />Play something for me</button>
+              </div>
+            </DgReveal>
+
+{tracks.length ? <>
+  <div className="home-section">
+    <DgReveal dir="left" className="section-heading">
+      <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
+    </DgReveal>
+    <div className="jump-grid">
+      {jumpBack.map((track, i) => (
+        <DgReveal key={track.id} dir="left" index={i}>
+          <button
+            className="jump-tile"
+            onClick={() => void playTrack(track)}
+            aria-label={`Play ${track.title}`}
+            data-testid={`tile-jump-${track.id}`}
+          >
+            <Cover track={track} large />
+            <span className="jump-title">{track.title}</span>
+            <span className="jump-sub">{track.artist}</span>
+          </button>
+        </DgReveal>
+      ))}
+    </div>
+  </div>
+
+  <div className="home-section">
+    <DgReveal dir="left" className="section-heading">
+      <h2>Recently added</h2>
+      <button className="crumb" onClick={() => setPageAndRoute('songs')} data-testid="button-view-all-songs">
+        View library
+      </button>
+    </DgReveal>
+    <TrackRows items={recentlyAdded} activeId={activeId} isPlaying={isPlaying} page={page} actions={rowActions} className="recently-added-track-wrap" downloadingIds={downloadingIds} recentlyDownloadedIds={recentlyDownloadedIds} downloadedCount={downloadedTracks.length} />
+  </div>
+</> : isReady && !storageError ? <div className="empty-state">
+  <strong>Your library is waiting.</strong>
+  <p>Bring your music into VOID and make this space yours.</p>
+  <button className="button glass" onClick={openImport} data-testid="button-import-empty">
+    <Plus />Import music
+  </button>
+  <span className="empty-formats">MP3 · M4A · FLAC · WAV</span>
+</div> : null}
+</>}
+{libraryOpen && !detail && <div className="dg-page library-hub" key="library">
+            <div className="library-head">
+              <div className="eyebrow">Your collection</div>
+              <h1 className="page-title">Library</h1>
+              <p className="page-subtitle">{countLabel(albumNames.length, 'album')} · {countLabel(artistNames.length, 'artist')} · {countLabel(playlists.length, 'playlist')}</p>
+            </div>
+            <div className="library-grid">
+              {([
+                { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: countLabel(downloadedTracks.length, 'download') },
+                { id: 'favorites' as Page, label: 'Favorites', icon: Heart, count: countLabel(canonicalTracks.filter(track => track.favorite).length, 'song') },
+                { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(albumNames.length, 'album') },
+                { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(artistNames.length, 'artist') },
+                { id: 'playlists' as Page, label: 'Playlists', icon: ListMusic, count: countLabel(playlists.length, 'playlist') },
+                { id: 'recent' as Page, label: 'Recently played', icon: Clock3, count: `${tracks.filter(track => track.lastPlayedAt).length} played` },
+              ]).map((entry, index) => {
+                const Icon = entry.icon;
+                return <DgReveal key={entry.id} dir="depth" index={index}>
+                  <button
+                    className="library-card"
+                    onClick={() => setPageAndRoute(entry.id)}
+                    data-testid={`library-${entry.id}`}
+                  >
+                    <span className="library-card-icon"><Icon /></span>
+                    <span className="library-card-copy"><strong>{entry.label}</strong><small>{entry.count}</small></span>
+                    <ChevronDown className="library-card-chevron" aria-hidden="true" />
+                  </button>
+                </DgReveal>;
+              })}
+            </div>
+          </div>}
+          {!libraryOpen && page === 'trending' && !detail && (
+            !activeTrendingLang ? (
+              <div className="dg-page library-hub" key="trending-hub">
+                <div className="eyebrow" style={{ marginBottom: 2 }}>Discover</div>
+                <div className="section-heading trending-page-hero-head" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
+                  <div>
+                    <h1 className="page-title" style={{ margin: 0 }}>Trending</h1>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>Top 200 trending songs across languages</p>
+                  </div>
+                  <div className="trending-lang-search-wrap" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      className="filter-input"
+                      aria-label="Search languages"
+                      placeholder="Search languages…"
+                      value={trendingQuery}
+                      onChange={event => setTrendingQuery(event.target.value)}
+                      data-testid="input-filter-trending-languages"
+                    />
+                  </div>
+                </div>
+                <div className="trending-lang-grid">
+                  {displayedTrendingLanguages.map((lang, index) => (
+                    <DgReveal key={lang.id} dir="depth" index={index}>
+                      <TrendingLanguageCard
+                        lang={lang}
+                        onSelect={openTrendingLanguage}
+                      />
+                    </DgReveal>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="dg-page" key={`trending:${activeTrendingLang.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div className="trending-chart-topbar">
+                  <button
+                    className="crumb trending-back-btn"
+                    style={{ border: 0, background: 'transparent', cursor: 'pointer', padding: 0 }}
+                    onClick={() => openTrendingLanguage(null)}
+                    data-testid="button-back-trending"
+                  >
+                    ← Trending
+                  </button>
+                </div>
+                <div className="trending-chart-header">
+                  <div>
+                    <h1 className="page-title" style={{ margin: 0 }}>{activeTrendingLang.label}</h1>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{`Top 200 most trending songs · 40 Top ${activeTrendingLang.id === 'arabic' ? 'Arab' : activeTrendingLang.id === 'english' ? 'Global' : activeTrendingLang.label} Artists`}</p>
+                  </div>
+                  <input
+                    className="filter-input trending-chart-search"
+                    aria-label={`Search ${activeTrendingLang.label} trending`}
+                    placeholder="Search this chart…"
+                    value={trendingQuery}
+                    onChange={event => setTrendingQuery(event.target.value)}
+                    data-testid="input-filter-trending-tracks"
+                  />
+                </div>
+                {displayedTrendingTracks.length > 0 ? (
+                  <TrackRows
+                    items={displayedTrendingTracks as any}
+                    showIndex={true}
+                    activeId={activeId}
+                    isPlaying={isPlaying}
+                    page={page}
+                    actions={{
+                      ...rowActions,
+                      play: (track, list) => {
+                        setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
+                        rowActions.play(track, list);
+                      },
+                    }}
+                    downloadingIds={downloadingIds}
+                    recentlyDownloadedIds={recentlyDownloadedIds}
+                    downloadedCount={downloadedTracks.length}
+                  />
+                ) : trendingQuery.trim().length > 0 ? (
+                  <div className="empty-state">
+                    <strong>No matching songs</strong>
+                    <p>Try another search term in {activeTrendingLang.label}.</p>
+                  </div>
+                ) : null}
+              </div>
+            )
+          )}
+          {!libraryOpen && page !== 'home' && page !== 'settings' && page !== 'trending' && <div className={`dg-page${detail?.kind === 'artist' || detail?.kind === 'album' || detail?.kind === 'playlist' ? ' dg-page--cinematic' : ''}${detail?.kind === 'artist' ? ' dg-page--artist-view' : ''}`} key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: detail?.kind === 'artist' ? 0 : 6 }}>
+            {detail?.kind === 'artist' ? (
+              <>
+                <DgReveal
+                  as="section"
+                  dir="depth"
+                  className="cinematic-hero-banner artist-hero-banner"
+                  style={
+                    viewHeroAmbient
+                      ? ({
+                          '--hero-h1': viewHeroAmbient[0],
+                          '--hero-h2': viewHeroAmbient[1],
+                          '--hero-h3': viewHeroAmbient[2],
+                          '--hero-s': `${viewHeroAmbient[3]}%`,
+                        } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  <div className="cinematic-hero-backdrop" aria-hidden="true">
+                    {viewHeroPhotoUrl ? (
+                      <>
+                        <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-blur" decoding="async" />
+                        <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                      </>
+                    ) : (
+                      <>
+                        <div className="cinematic-hero-bg-blur cinematic-hero-bg-fallback">
+                          <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} square />
+                        </div>
+                        <div className="cinematic-hero-bg-img cinematic-hero-bg-fallback">
+                          <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} square />
+                        </div>
+                      </>
+                    )}
+                    <div className="cinematic-hero-gradient" />
+                  </div>
+
+                  <div className="cinematic-hero-topbar">
+                    <button
+                      type="button"
+                      className="cinematic-back-btn cinematic-back-btn--chevron"
+                      onClick={() => { setDetail(null); setQuery(''); }}
+                      aria-label="Back to artists"
+                      title="Back to artists"
+                      data-testid="button-back-artists"
+                    >
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <polyline points="15 18 9 12 15 6" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div className="cinematic-hero-body">
+                    <div className="cinematic-hero-portrait artist-hero-portrait" aria-hidden="true">
+                      <ArtistPhoto artistName={detail.name} fallbackTrack={filteredTracks[0] || (displayedArtistTopTracks[0] as any)} />
+                    </div>
+                    <div className="cinematic-hero-copy">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <div className="artist-verified-row">
+                        <VerifiedArtistBadge />
+                        <span className="artist-verified-label">Verified Artist</span>
+                      </div>
+                      <p className="cinematic-hero-subtitle artist-hero-subtitle">
+                        {artistViewTab === 'top100'
+                          ? artistTopLoading && !artistChartCount
+                            ? `Loading ${detail.name}’s top songs…`
+                            : `${artistChartCount} ${artistChartCount === 1 ? 'Top song' : 'Top songs'} ranked by global popularity`
+                          : `${filteredTracks.length} ${filteredTracks.length === 1 ? 'song' : 'songs'} saved in your library`}
+                      </p>
+                    </div>
+                  </div>
+                </DgReveal>
+
+                <div className="artist-view-tabs" role="tablist" aria-label="Artist songs view">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={artistViewTab === 'top100'}
+                    className={`artist-view-tab ${artistViewTab === 'top100' ? 'active' : ''}`}
+                    onClick={() => setArtistViewTab('top100')}
+                  >
+                    Top
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={artistViewTab === 'library'}
+                    className={`artist-view-tab ${artistViewTab === 'library' ? 'active' : ''}`}
+                    onClick={() => setArtistViewTab('library')}
+                  >
+                    Library
+                  </button>
+                </div>
+              </>
+            ) : detail?.kind === 'album' ? (
+              <DgReveal
+                as="section"
+                dir="depth"
+                className="cinematic-hero-banner album-hero-banner"
+                style={
+                  viewHeroAmbient
+                    ? ({
+                        '--hero-h1': viewHeroAmbient[0],
+                        '--hero-h2': viewHeroAmbient[1],
+                        '--hero-h3': viewHeroAmbient[2],
+                        '--hero-s': `${viewHeroAmbient[3]}%`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              >
+                <div className="cinematic-hero-backdrop" aria-hidden="true">
+                  {viewHeroPhotoUrl ? (
+                    <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                  ) : null}
+                  <div className="cinematic-hero-gradient" />
+                </div>
+                <div className="cinematic-hero-topbar">
+                  <button
+                    type="button"
+                    className="cinematic-back-btn"
+                    onClick={() => { setDetail(null); setQuery(''); }}
+                    data-testid="button-back-albums"
+                  >
+                    ← Albums
+                  </button>
+                  <input
+                    className="filter-input cinematic-filter-input"
+                    aria-label={`Filter ${detail.name}`}
+                    placeholder="Filter album…"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    data-testid="input-filter-library"
+                  />
+                </div>
+                <div className="cinematic-hero-body">
+                  <div className="cinematic-hero-portrait" aria-hidden="true">
+                    <Cover track={filteredTracks[0]} large identity={`album:${detail.name}`} />
+                  </div>
+                  <div className="cinematic-hero-copy">
+                    <div className="cinematic-eyebrow">
+                      <span className="cinematic-verified-pill">Album</span>
+                      <span className="cinematic-eyebrow-sep">·</span>
+                      <span>{countLabel(filteredTracks.length, 'song')}</span>
+                    </div>
+                    <div className="cinematic-title-row">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <VerifiedArtistBadge label="Verified Release" />
+                    </div>
+                    <p className="cinematic-hero-subtitle">
+                      {filteredTracks[0]?.artist ? `${filteredTracks[0].artist} · ` : ''}{countLabel(filteredTracks.length, 'song')} in this collection
+                    </p>
+                    <div className="cinematic-hero-actions">
+                      <button
+                        className="button primary cinematic-play-btn"
+                        onClick={() => playList(filteredTracks)}
+                        disabled={!filteredTracks.length}
+                        data-testid="button-play-collection"
+                      >
+                        <Play />
+                        {filteredTracks.length > 0 ? `Play All (${filteredTracks.length})` : 'Play'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </DgReveal>
+            ) : detail?.kind === 'playlist' ? (
+              <DgReveal
+                as="section"
+                dir="depth"
+                className="cinematic-hero-banner playlist-hero-banner"
+                style={
+                  viewHeroAmbient
+                    ? ({
+                        '--hero-h1': viewHeroAmbient[0],
+                        '--hero-h2': viewHeroAmbient[1],
+                        '--hero-h3': viewHeroAmbient[2],
+                        '--hero-s': `${viewHeroAmbient[3]}%`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              >
+                <div className="cinematic-hero-backdrop" aria-hidden="true">
+                  {viewHeroPhotoUrl ? (
+                    <img src={viewHeroPhotoUrl} alt="" className="cinematic-hero-bg-img" decoding="async" />
+                  ) : null}
+                  <div className="cinematic-hero-gradient" />
+                </div>
+                <div className="cinematic-hero-topbar">
+                  <button
+                    type="button"
+                    className="cinematic-back-btn"
+                    onClick={() => { setDetail(null); setQuery(''); }}
+                    data-testid="button-back-playlists"
+                  >
+                    ← Playlists
+                  </button>
+                  <input
+                    className="filter-input cinematic-filter-input"
+                    aria-label={`Filter ${detail.name}`}
+                    placeholder="Filter playlist…"
+                    value={query}
+                    onChange={event => setQuery(event.target.value)}
+                    data-testid="input-filter-library"
+                  />
+                </div>
+                <div className="cinematic-hero-body">
+                  <div className="cinematic-hero-portrait" aria-hidden="true">
+                    <Cover track={filteredTracks[0]} large kind="list" identity={`playlist:${detail.name}`} />
+                  </div>
+                  <div className="cinematic-hero-copy">
+                    <div className="cinematic-eyebrow">
+                      <span className="cinematic-verified-pill">Playlist</span>
+                      <span className="cinematic-eyebrow-sep">·</span>
+                      <span>{countLabel(filteredTracks.length, 'song')}</span>
+                    </div>
+                    <div className="cinematic-title-row">
+                      <h1 className="cinematic-artist-title">{detail.name}</h1>
+                      <VerifiedArtistBadge label="Curated Playlist" />
+                    </div>
+                    <p className="cinematic-hero-subtitle">
+                      {countLabel(filteredTracks.length, 'song')} curated in your collection
+                    </p>
+                    <div className="cinematic-hero-actions">
+                      <button
+                        className="button primary cinematic-play-btn"
+                        onClick={() => playList(filteredTracks)}
+                        disabled={!filteredTracks.length}
+                        data-testid="button-play-playlist"
+                      >
+                        <Play />
+                        {filteredTracks.length > 0 ? `Play Playlist (${filteredTracks.length})` : 'Play playlist'}
+                      </button>
+                      <button className="button" onClick={() => { setModal('rename'); setModalValue(detail.name); }} data-testid="button-rename-playlist">Rename</button>
+                      <button className="button" onClick={() => { const playlist = playlists.find(item => item.name === detail.name); if (playlist) void deletePlaylistById(playlist); }} data-testid="button-delete-playlist"><Trash2 /></button>
+                    </div>
+                  </div>
+                </div>
+              </DgReveal>
+            ) : (
+              <div className="collection-header-bar">
+                <div className="collection-header-copy">
+                  <div className="eyebrow">{detail ? detail.kind === 'playlist' ? 'Your collection' : 'From your files' : 'Your collection'}</div>
+                  <h1 className="page-title">{title}</h1>
+                  <p className="page-subtitle">{pageDescription[page]}</p>
+                </div>
+                <div className="collection-header-actions">
+                  {page === 'playlists' && !detail && <button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-playlist"><Plus />New playlist</button>}
+                  {page === 'queue' && queueTracks.length > 0 && <button className="button" onClick={clearQueue} data-testid="button-clear-queue"><Trash2 />Clear</button>}
+                  {(page === 'songs' || page === 'albums' || page === 'artists' || page === 'recent' || page === 'playlists' || page === 'favorites') && <input className="filter-input" aria-label={`Filter ${title}`} placeholder="Filter this view…" value={query} onChange={event => setQuery(event.target.value)} data-testid="input-filter-library" />}
+                </div>
+              </div>
+            )}
+            {selectionMode && ['songs', 'playlists', 'favorites', 'queue', 'downloads'].includes(page) && (
+              <div className="track-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '6px 0 8px' }}>
+                <span className="crumb">
+                  {selectedSongIds.length} selected
+                </span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {selectedSongIds.length > 0 && (
+                    <button className="button danger" onClick={deleteSelectedSongs} data-testid="button-delete-selected">
+                      <Trash2 size={14} /> Delete Selected ({selectedSongIds.length})
+                    </button>
+                  )}
+                  <button className="button" onClick={() => toggleSelectAllSongs(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks)} data-testid="button-select-all">
+                    {(page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)) ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {page === 'queue' ? queueTracks.length ? <div className="track-toolbar"><button className="button primary" onClick={() => playList(queueTracks)} data-testid="button-play-queue"><Play />Play queue</button><span className="crumb">Drag with arrows to change order</span></div> : null : null}
+            {page === 'albums' && !detail ? albumNames.length ? <div className="cover-grid">{albumNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map((name, i) => {
+              const representative = canonicalTracks.find(track => track.album === name);
+              return <DgReveal key={name} dir="depth" index={i}><button className="cover-card" onClick={() => { setDetail({ kind: 'album', name }); setQuery(''); }} data-testid={`card-album-${name}`}><Cover track={representative} large identity={`album:${name}`} /><div className="cover-card-title">{name}</div><div className="cover-card-sub">{representative?.artist} · {countLabel(canonicalTracks.filter(track => track.album === name).length, 'song')}</div></button></DgReveal>;
+            })}</div> : <EmptyLibrary label="No albums yet" onImport={openImport} /> : null}
+            {page === 'artists' && !detail ? artistNames.length ? (
+              <>
+                <style>{`
+                  .cover-card:hover .artist-badge { opacity: 0; visibility: hidden; }
+                  .artist-badge { transition: opacity .2s ease-in-out, visibility .2s ease-in-out; }
+                `}</style>
+                <div className="cover-grid">
+                  {artistNames.filter(name => !query || name.toLowerCase().includes(query.toLowerCase())).map((name, i) => {
+                    const representative = canonicalTracks.find(track => {
+                      const artists = splitArtists(track.artist || '');
+                      return artists.some(a => areSameOrDuplicateArtist(a, name));
+                    });
+                    const songCount = canonicalTracks.filter(track => {
+                      const artists = splitArtists(track.artist || '');
+                      return artists.some(a => areSameOrDuplicateArtist(a, name));
+                    }).length;
+                    return (
+                      <DgReveal key={name} dir="depth" index={i}>
+                        <button className="cover-card" key={name} onClick={() => { setDetail({ kind: 'artist', name }); setQuery(''); }} data-testid={`card-artist-${name}`} style={{ alignItems: 'center', textAlign: 'center' }}>
+                          <div style={{ position: 'relative', width: '130px', height: '130px', margin: '0 auto 12px' }}>
+                            <div style={{ width: '100%', height: '100%', borderRadius: '50%', overflow: 'hidden' }}>
+                              <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                            </div>
+                            <div className="artist-badge" style={{ position: 'absolute', top: '2px', right: '4px', transform: 'translate(50%, -50%)', color: 'hsl(142, 71%, 45%)', fontSize: '16px', fontWeight: '900', textShadow: '0px 2px 4px rgba(0,0,0,0.7)', zIndex: 2 }}>
+                              {songCount}
+                            </div>
+                          </div>
+                          <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                        </button>
+                      </DgReveal>
+                    );
+                  })}
+                </div>
+              </>
+            ) : <EmptyLibrary label="No artists yet" onImport={openImport} /> : null}
+            {page === 'playlists' && !detail && <div className="cover-grid">
+              {playlists.map((playlist, i) => { const lead = tracks.find(item => item.id === playlist.trackIds[0]); return <DgReveal key={playlist.id} dir="depth" index={i}><button className="cover-card" key={playlist.id} onClick={() => { setDetail({ kind: 'playlist', name: playlist.name }); setQuery(''); }} data-testid={`card-playlist-${playlist.id}`}><Cover track={lead} large kind="list" identity={`playlist:${playlist.id}`} /><div className="cover-card-title">{playlist.name}</div><div className="cover-card-sub">{countLabel(playlist.trackIds.length, 'song')}</div></button></DgReveal>; })}
+              {playlists.length === 0 && <div className="empty-state" style={{ gridColumn: '1 / -1' }}><strong>A place for your own collections.</strong><p>Create a playlist, then add songs from their track menu.</p><button className="button" onClick={() => { setModal('playlist'); setModalValue(''); }} data-testid="button-create-first-playlist"><Plus />Create playlist</button></div>}
+            </div>}
+            {(page === 'songs' || page === 'favorites' || page === 'recent' || page === 'queue' || page === 'downloads' || detail) && ((
+              detail?.kind === 'artist' && artistViewTab === 'top100'
+                ? visibleArtistTopTracks
+                : page === 'downloads'
+                  ? downloadedTracks
+                  : filteredTracks
+            ).length ? (
+              <>
+                <TrackRows 
+                  items={(
+                    detail?.kind === 'artist' && artistViewTab === 'top100'
+                      ? visibleArtistTopTracks
+                      : page === 'queue'
+                        ? queueTracks
+                        : page === 'downloads'
+                          ? downloadedTracks
+                          : filteredTracks
+                  ) as Track[]} 
+                  showIndex={page === 'queue' || page === 'favorites' || (detail?.kind === 'artist' && artistViewTab === 'top100')} 
+                  reorder={page === 'queue' || detail?.kind === 'playlist'} 
+                  activeId={activeId} 
+                  isPlaying={isPlaying}
+                  page={page} 
+                  actions={rowActions} 
+                  selectedIds={detail?.kind === 'artist' ? [] : selectedSongIds}
+                  toggleSelect={detail?.kind === 'artist' ? undefined : toggleSelectSong}
+                  toggleSelectAll={detail?.kind === 'artist' ? undefined : toggleSelectionMode}
+                  isAllSelected={detail?.kind === 'artist' ? false : ((page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).length > 0 && (page === 'queue' ? queueTracks : page === 'downloads' ? downloadedTracks as Track[] : filteredTracks).every(track => selectedSongIds.includes(track.id)))}
+                  selectionMode={detail?.kind === 'artist' ? false : selectionMode}
+                  deletingIds={deletingDownloadIds}
+                  downloadingIds={downloadingIds}
+                  recentlyDownloadedIds={recentlyDownloadedIds}
+                  downloadedCount={downloadedTracks.length}
+                />
+                {detail?.kind === 'artist' && artistViewTab === 'top100' && displayedArtistTopTracks.length > 5 && (
+                  <div className="artist-see-more-row">
+                    <button
+                      type="button"
+                      className="artist-see-more-btn"
+                      onClick={() => setArtistTopExpanded(v => !v)}
+                      data-testid="button-artist-see-more"
+                    >
+                      {artistTopExpanded ? 'See less' : 'See more'}
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : detail?.kind === 'artist' && artistViewTab === 'top100' && artistTopLoading ? (
+              <div className="empty-state">
+                <strong>Loading {detail.name}’s top songs…</strong>
+                <p>Fetching ranked discography and high-bitrate streams.</p>
+              </div>
+            ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
+            {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
+          </div>}
+          {!libraryOpen && page === 'settings' && <div className="dg-page" key="settings"><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
+            <div className="settings-section">
+              <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
+             <div className="setting-row">
+  <div>
+    <strong>Theme</strong>
+    <p>Follow your Mac, or choose a fixed appearance.</p>
+  </div>
+  <select
+    className="select-control"
+    value={prefs.theme}
+    onChange={event => void updatePrefs({ ...prefs, theme: event.target.value as Preferences['theme'] })}
+    aria-label="Theme"
+    data-testid="select-theme"
+  >
+    <option value="system">System</option>
+    <option value="light">Light</option>
+    <option value="dark">Dark</option>
+  </select>
+</div>
+
+<div className="setting-row">
+  <div>
+    <strong>Design</strong>
+    <p>Change how VOID looks. Your music, queue and playback stay exactly as they are.</p>
+  </div>
+  <select
+    className="select-control"
+    value={design}
+    onChange={event => setDesign(event.target.value as DesignId)}
+    aria-label="Design"
+    data-testid="select-design"
+  >
+    <option value="deep">Deep Glass</option>
+    <option value="paper">Paper Glass</option>
+  </select>
+</div>
+
+<div className="section-heading font-section-heading" style={{ marginTop: 30 }}>
+  <h2>Font</h2>
+  <span>Applies across VOID</span>
+</div>
+
+<button
+  className={`font-dropdown-trigger ${mobileFontOpen ? 'is-open' : ''}`}
+  onClick={() => setMobileFontOpen(open => !open)}
+  aria-expanded={mobileFontOpen}
+  aria-controls="void-font-options"
+  data-testid="button-toggle-fonts"
+>
+  <span>{fontOptions.find(option => option.id === fontId)?.name ?? 'Default'}</span>
+  <ChevronDown size={16} />
+</button>
+
+              <div id="void-font-options" className={`font-panel ${mobileFontOpen ? 'font-open mobile-open' : ''}`} role="radiogroup" aria-label="Font" data-testid="font-panel">
+                <div className="mobile-font-header">
+                  <h2>Select Font</h2>
+                  <button className="icon-button" onClick={() => setMobileFontOpen(false)}><X /></button>
+                </div>
+                <div className="font-group-label">My Fonts</div>
+                {fontOptions.map(option => {
+                  const disabled = !!option.note;
+                  const selected = fontId === option.id && !disabled;
+                  return <div className={`font-option ${selected ? 'selected' : ''}`} key={option.id}>
+                    <button className="font-select" role="radio" aria-checked={selected} disabled={disabled} onClick={() => { setFontId(option.id); setMobileFontOpen(false); }} data-testid={`font-option-${option.id}`}>
+                      <span className="font-check" aria-hidden="true">{selected ? <Check /> : null}</span>
+                      <span className="font-copy">
+                        <span className="font-name">{option.name}<em>{option.tag}</em></span>
+                        {option.note
+                          ? <span className="font-note">{option.note}</span>
+                          : <span className="font-preview" style={{ fontFamily: option.family }}>{FONT_PREVIEW}</span>}
+                      </span>
+                    </button>
+                    {option.font ? <button className="icon-button" aria-label={`Remove ${option.name}`} title="Remove font" onClick={() => void deleteFont(option.font!)} data-testid={`button-remove-font-${option.id}`}><Trash2 /></button> : null}
+                  </div>;
+                })}
+                <button className="font-import" onClick={() => fontInput.current?.click()} disabled={fontBusy} data-testid="button-import-font"><span className="font-check" aria-hidden="true"><Plus /></span>{fontBusy ? 'Adding font…' : 'Import Font'}<small>.ttf · .otf · .woff · .woff2</small></button>
+              </div>
+
+              <div className="section-heading" style={{ marginTop: 30 }}><h2>Playback</h2></div>
+              <div className="setting-row"><div><strong>Autoplay</strong><p>Continue through the queue when a song ends.</p></div><button className={`switch ${prefs.autoplay ? 'on' : ''}`} role="switch" aria-checked={prefs.autoplay} aria-label="Autoplay" onClick={() => void updatePrefs({ ...prefs, autoplay: !prefs.autoplay })} data-testid="switch-autoplay"><span /></button></div>
+              <div className="setting-row"><div><strong>Shuffle</strong><p>Play the queue in a different order.</p></div><button className={`switch ${prefs.shuffle ? 'on' : ''}`} role="switch" aria-checked={prefs.shuffle} aria-label="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="switch-shuffle"><span /></button></div>
+              <div className="setting-row"><div><strong>Repeat</strong><p>Choose what happens at the end of the queue.</p></div><select className="select-control" value={prefs.repeat} onChange={event => void updatePrefs({ ...prefs, repeat: event.target.value as Preferences['repeat'] })} aria-label="Repeat" data-testid="select-repeat"><option value="off">Off</option><option value="all">Repeat queue</option><option value="one">Repeat song</option></select></div>
+              <div className="section-heading" style={{ marginTop: 30 }}><h2>Your files</h2></div>
+              <div className="setting-row"><div><strong>Local library</strong><p>Audio files stay in this browser’s private storage. Clearing site data removes them.</p></div><span className="crumb">{tracks.length} files · {compactBytes(tracks.reduce((sum, track) => sum + track.fileSize, 0))}</span></div>
+              <p className="page-subtitle" style={{ marginTop: 17, lineHeight: 1.7 }}>VOID does not upload your audio. Browser storage can be limited, and playback depends on which codecs this browser supports. Imported files are copied into local browser storage so they can be available after refresh.</p>
+               <div className="setting-row"><div><strong>Import music</strong><p>Add more audio from your Mac.</p></div><button className="button" onClick={openImport} data-testid="button-settings-import">Add music</button></div>
+               <div className="setting-row"><div><strong>Rescan library</strong><p>Read available file tags and artwork again from stored audio.</p></div><button className="button" onClick={() => void rescanLibrary()} disabled={!tracks.length} data-testid="button-rescan-library">Rescan</button></div>
+               <div className="setting-row"><div><strong>Clear library</strong><p>Remove VOID’s local copies and playlists. Original Mac files are untouched.</p></div><button className="button danger" onClick={() => void clearLibrary()} disabled={!tracks.length && !playlists.length} data-testid="button-clear-library">Clear library</button></div>
+              <div className="section-heading" style={{ marginTop: 30 }}><h2>Keyboard shortcuts</h2></div>
+              {[['Space', 'Play or pause'], ['← / →', 'Seek 5 seconds'], ['↑ / ↓', 'Adjust volume'], ['M', 'Mute or unmute'], ['⌘ K', 'Search library'], ['Esc', 'Close the current panel']].map(([key, label]) => <div className="setting-row" key={key}><strong>{label}</strong><kbd style={{ fontFamily: 'var(--app-font-mono)', fontSize: 10, color: 'hsl(var(--muted-foreground))' }}>{key}</kbd></div>)}
+            </div>
+          </div>}
+        </section>
+      </main>
+
+      {/* Visibility follows the app state (data-hidden), so opening the expanded player takes the
+          bar out of the layout instead of covering it with another layer. */}
+      <nav
+        className="mobile-bottom-nav"
+        aria-label="Mobile navigation"
+        data-hidden={expanded ? '' : undefined}
+      >
+        {mobileNavItems.map(item => {
+          const Icon = item.icon;
+          const active = item.id === 'library'
+            ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
+            : page === item.id && !detail && !libraryOpen;
+          return (
+            <button
+              key={item.id}
+              className={`mobile-nav-item ${active ? 'active' : ''}`}
+              onClick={() => {
+                if (item.id === 'library') {
+                  setDetail(null);
+                  setLibraryOpen(true);
+                  setSelectionMode(false);
+                  setSelectedSongIds([]);
+                  setArtistTopExpanded(false);
+                  setActiveTrendingLangId(null);
+                  setTrendingQuery('');
+                } else {
+                  setPageAndRoute(item.id as Page);
+                }
+              }}
+              aria-label={item.label}
+              aria-current={active ? 'page' : undefined}
+            >
+              <Icon />
+            </button>
+          );
+        })}
+      </nav>
+    
+    {activeTrack && <div 
+      className="player-bar" 
+      data-testid="player-bar" 
+      data-np={expanded ? '' : undefined}
+    >
+      <div className="player-track" onClick={() => activeTrack && openExpanded()} onKeyDown={event => { if (activeTrack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); openExpanded(); } }} role={activeTrack ? 'button' : undefined} tabIndex={activeTrack ? 0 : undefined} aria-label={activeTrack ? 'Open now playing' : undefined} data-testid="player-current-track">
+        <Cover track={activeTrack ?? undefined} />
+        <span>
+          <span className="track-title mini-player-title-row">
+            {activeTrack?.title ?? ''}
+          </span>
+          <span className="track-sub mini-player-sub-row">
+            <span className="mini-player-artist-name">{activeTrack?.artist ?? ''}</span>
+            {activeTrack && getTrackQualityBadge(activeTrack) && (
+              <>
+                <span className="mini-player-dot" aria-hidden="true">·</span>
+                <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} compact />
+              </>
+            )}
+          </span>
+        </span>
+      </div>
+      
+      <button className="icon-button mobile-mini-play" onClick={(e) => { e.stopPropagation(); void togglePlay(); }} aria-label={isPlaying ? 'Pause' : 'Play'} disabled={!activeTrack}>
+        <VoidGlyph playing={isPlaying} />
+      </button>
+
+      <div className="player-center">
+        <div className="player-controls">
+          <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-label="Shuffle" title="Shuffle" aria-pressed={prefs.shuffle} onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="button-shuffle"><Shuffle /></button>
+          <button className="icon-button" aria-label="Previous track" title="Previous track" onClick={() => playRelative(-1)} data-testid="button-previous"><SkipBack /></button>
+          <button className="icon-button play-button" aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} onClick={() => void togglePlay()} data-testid="button-play-pause"><VoidGlyph playing={isPlaying} /></button>
+          <button className="icon-button" aria-label="Next track" title="Next track" onClick={() => playRelative(1)} data-testid="button-next"><SkipForward /></button>
+          <button className={`icon-button ${prefs.repeat !== 'off' ? 'active-control' : ''}`} aria-label={`Repeat ${prefs.repeat}`} title={`Repeat ${prefs.repeat}`} aria-pressed={prefs.repeat !== 'off'} onClick={cycleRepeat} data-testid="button-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}</button>
+        </div>
+        <div className="player-scrub">
+          <span>{activeTrack ? formatElapsed(position) : '—:—'}</span>
+          <input className="seek" aria-label="Playback position" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} disabled={!activeTrack} onChange={event => seekTo(Number(event.target.value))} data-testid="input-seek" />
+          <span>{activeTrack ? (activeTrack.isLive ? 'LIVE' : formatTime(duration)) : '—:—'}</span>
+        </div>
+      </div>
+      <div className="player-extra">
+        <button className="icon-button extra-fade extra-opt" aria-label={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} disabled={!activeTrack} onClick={() => activeTrack && void toggleFavorite(activeTrack)} data-testid="button-player-favorite"><Heart fill={activeTrack?.favorite ? 'currentColor' : 'none'} /></button>
+        <button className="icon-button extra-fade extra-opt" aria-label="Open queue" title="Queue" onClick={() => setPageAndRoute('queue')} data-testid="button-open-queue"><ListMusic /></button>
+        <button className="icon-button extra-fade" aria-label="Expand now playing" title="Now playing" onClick={openExpanded} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
+        <VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="button-mute" inputTestId="input-volume" />
+      </div>
+    </div>}
+    <input ref={fileInput} type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.alac" multiple hidden onChange={event => { if (event.target.files) void importFiles(event.target.files); event.target.value = ''; }} data-testid="input-import-files" />
+    <input ref={element => { folderInput.current = element; element?.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden onChange={event => { if (event.target.files) void autoImport(event.target.files); event.target.value = ''; }} data-testid="input-import-folder" />
+    <input ref={fontInput} type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" hidden onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFont(file); }} data-testid="input-import-font" />
+    {importMenu && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setImportMenu(false); }}><div className="import-menu" role="dialog" aria-modal="true" aria-labelledby="import-title" data-testid="import-menu">
+      <div className="import-head"><h2 id="import-title">Add music</h2><p>Files are copied into this browser’s private storage. Nothing is uploaded.</p></div>
+      <button className="import-option" onClick={() => { setImportMenu(false); folderInput.current?.click(); }} data-testid="button-auto-import"><span className="import-icon"><FolderOpen /></span><span className="import-copy"><strong>Auto Import</strong><span>Choose a folder and VOID finds the music inside it.</span></span></button>
+      <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
+      <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
+    </div></div>}
+    {paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
+        <input
+          autoFocus
+          className="palette-input"
+          placeholder="Search your music…"
+          value={paletteQuery}
+          onChange={event => setPaletteQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (paletteQuery.trim()) {
+              handleSaveHistory(paletteQuery);
+            }
+          }}
+          data-testid="input-search-palette"
+        />
+
+        {paletteQuery.trim() && (
+          <div className="palette-tabs" role="tablist" aria-label="Search category">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={paletteTab === 'songs'}
+              className={`palette-tab ${paletteTab === 'songs' ? 'active' : ''}`}
+              onClick={() => setPaletteTab('songs')}
+            >
+              Songs
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={paletteTab === 'artists'}
+              className={`palette-tab ${paletteTab === 'artists' ? 'active' : ''}`}
+              onClick={() => setPaletteTab('artists')}
+            >
+              Artists
+            </button>
+          </div>
+        )}
+
+        <div className="palette-results">
+
+          {paletteTab === 'songs' && allSearchResults.map(track => {
+            const localQuality = getTrackQualityBadge(track);
+            return (
+              <button
+                key={track.id}
+                className="palette-result search-music-result"
+                onClick={() => {
+                  handleSaveHistory(paletteQuery);
+                  void playTrack(track);
+                  setPaletteOpen(false);
+                }}
+                data-testid={`search-result-${track.id}`}
+              >
+                <Cover track={track} />
+                <span>
+                  <span className="track-title">{track.title}</span>
+                  <span className="track-sub">{track.artist} · {track.album}</span>
+                </span>
+                <span className="search-result-actions">
+                  {localQuality && <QualityBadge tier={localQuality} track={track} compact />}
+                  <Play size={13} />
+                </span>
+              </button>
+            );
+          })}
+
+          {paletteTab === 'songs' && deduplicatedMusicResults.map(track => {
+            const sourceLabel = formatProviderLabel(track.source, track) || 'Online';
+            const qualityTier = getTrackQualityBadge(track);
+            const isNonDownloadable =
+              Boolean(track.isLive) ||
+              qualityTier === 'Live Radio' ||
+              qualityTier === 'FLAC Live';
+
+            const buildApiTrack = () => ({
+              id: `api-${track.id}`,
+              title: track.name,
+              artist: track.artist,
+              album: track.album,
+              fileName: `${track.name}.${track.codec ? String(track.codec).toLowerCase() : 'audio'}`,
+              audioUrl: track.downloadUrl,
+              downloadUrl: track.downloadUrl,
+              src: track.downloadUrl,
+              image: track.image,
+              duration: track.duration,
+              source: sourceLabel,
+              qualityBadge: qualityTier,
+              bitrate: track.bitrate,
+              codec: track.codec,
+              mimeType: track.mimeType,
+              format: track.format,
+              qualityVerified: track.qualityVerified,
+              isLive: track.isLive,
+              fallbackUrls: track.fallbackUrls,
+            });
+
+            return (
+              <div
+                key={`api-${sourceLabel}-${track.id}`}
+                className="palette-result search-music-result"
+                role="button"
+                tabIndex={0}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setPaletteOpen(false);
+                    handleSaveHistory(paletteQuery);
+                    void playTrack(buildApiTrack() as any);
+                  }
+                }}
+                onClick={() => {
+                  handleSaveHistory(paletteQuery);
+                  setPaletteOpen(false);
+                  void playTrack(buildApiTrack() as any);
+                }}
+                data-testid={`search-music-${track.id}`}
+              >
+                <Cover track={{ image: track.image }} />
+                <span>
+                  <span className="track-title">{track.name}</span>
+                  <span className="track-sub">{track.artist}{track.album && track.album !== 'Unknown Album' && track.album !== sourceLabel ? ` · ${track.album}` : ''}</span>
+                </span>
+                <span className="search-result-actions">
+                  {!isNonDownloadable && (() => {
+                    const cleanResultId = extractCleanYouTubeId(track.id);
+                    const isResultDownloading = Boolean(cleanResultId && downloadingIds.includes(cleanResultId));
+                    const normResTitle = normalizeMatchText(track.name || (track as any).title);
+                    const normResArtist = normalizeMatchText(track.artist);
+                    const isResultDownloaded = Boolean(
+                      (cleanResultId &&
+                        (recentlyDownloadedIds.includes(cleanResultId) ||
+                          downloadedTracks.some((item: any) => extractCleanYouTubeId(item?.id ?? '') === cleanResultId))) ||
+                        downloadedTracks.some((item: any) => {
+                          const dlTitle = normalizeMatchText(item?.title || item?.name);
+                          const dlArtist = normalizeMatchText(item?.artist);
+                          const itemSource = formatProviderLabel(item?.source, item);
+                          const sameSong =
+                            Boolean(normResTitle && dlTitle && normResTitle === dlTitle) &&
+                            Boolean(!normResArtist || !dlArtist || normResArtist === dlArtist || dlArtist.includes(normResArtist) || normResArtist.includes(dlArtist));
+                          return sameSong && (!itemSource || itemSource === sourceLabel);
+                        })
+                    );
+                    return (
+                      <button
+                        className={`download-icon-button${isResultDownloading ? ' is-downloading' : ''}${isResultDownloaded ? ' is-download-success' : ''}`}
+                        aria-label={isResultDownloaded ? `Downloaded ${track.name}` : `Download ${track.name}`}
+                        title={isResultDownloaded ? 'Downloaded' : isResultDownloading ? 'Saving offline…' : `Save ${track.name} for offline listening`}
+                        disabled={isResultDownloading || isResultDownloaded}
+                        onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}
+                      >
+                        <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                          {isResultDownloaded ? (
+                            <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          ) : (
+                            <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                          )}
+                        </svg>
+                      </button>
+                    );
+                  })()}
+                  {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
+                </span>
+              </div>
+            );
+          })}
+
+          {paletteTab === 'artists' && paletteQuery.trim() && artistSearchResults.length > 0 && (
+            <div className="palette-artist-grid">
+              {artistSearchResults.map(name => {
+                const representative = canonicalTracks.find(track => {
+                  const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+                  return artists.includes(name.toLowerCase());
+                });
+                return (
+                  <button
+                    key={`artist-${name}`}
+                    type="button"
+                    className="palette-artist-card"
+                    onClick={() => {
+                      handleSaveHistory(paletteQuery);
+                      setPaletteOpen(false);
+                      openCollection('artist', name);
+                    }}
+                    data-testid={`search-artist-${name}`}
+                  >
+                    <div className="palette-artist-avatar">
+                      <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                    </div>
+                    <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {musicSearching && paletteQuery && (
+            <div
+              className="crumb"
+              style={{ padding: '14px 12px' }}
+            >
+              Searching music providers…
+            </div>
+          )}
+
+          {paletteQuery &&
+            !musicSearching &&
+            ((paletteTab === 'songs' && !allSearchResults.length && !musicResults.length) ||
+              (paletteTab === 'artists' && !artistSearchResults.length)) && (
+              <div
+                className="empty-state"
+                style={{ margin: 8, padding: 20 }}
+              >
+                <strong>No match found</strong>
+                <p>Try another song title, artist, or album.</p>
+              </div>
+            )}
+
+          {!paletteQuery && searchHistory.length > 0 && (
+            <div className="search-history-list" data-expanded={historyExpanded ? 'true' : 'false'}>
+              <div className="search-history-header">
+                <span className="crumb">Recent Searches</span>
+                {searchHistory.length > 4 && (
+                  <button
+                    type="button"
+                    className={`icon-button search-history-more-btn${historyExpanded ? ' is-expanded' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHistoryExpanded(prev => !prev);
+                    }}
+                    aria-label={historyExpanded ? 'Show fewer recent searches' : 'Show more recent searches'}
+                    aria-expanded={historyExpanded}
+                    title={historyExpanded ? 'Show less' : 'Show more'}
+                  >
+                    <ChevronDown size={15} strokeWidth={1.85} />
+                  </button>
+                )}
+              </div>
+              <div className={`search-history-items-scroll${historyExpanded ? ' is-expanded' : ''}`}>
+                {(historyExpanded ? searchHistory : searchHistory.slice(0, 4)).map((term, i) => (
+                  <div
+                    key={`history-${term}-${i}`}
+                    className={`palette-result search-history-item${i >= 4 ? ' is-extra-history' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    style={
+                      i >= 4
+                        ? ({ cursor: 'pointer', '--hist-idx': Math.min(i - 4, 8) } as CSSProperties)
+                        : { cursor: 'pointer' }
+                    }
+                    onClick={() => setPaletteQuery(term)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setPaletteQuery(term);
+                      }
+                    }}
+                  >
+                    <Clock3 size={16} />
+                    <span>{term}</span>
+                    <div style={{ marginLeft: 'auto', display: 'flex' }}>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        style={{ width: 28, height: 28, pointerEvents: 'auto' }}
+                        onClick={(e) => handleRemoveHistory(term, e)}
+                        aria-label="Remove from history"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!paletteQuery && searchHistory.length === 0 && (
+            <div
+              className="crumb"
+              style={{ padding: '14px 12px' }}
+            >
+              Search your local songs and connected music providers.
+            </div>
+          )}
+
+
+        </div>
+      </div>
+    </div>}
+    {modal && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setModal(null); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+       <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
+       {modal === 'add-to-playlist' ? <>
+        <p>Choose where “{contextTrack?.title}” belongs.</p>
+        {playlists.length > 0 ? (
+          playlists.map(playlist => (
+            <button className="palette-result" key={playlist.id} onClick={() => contextTrack && void addTrackToPlaylist(playlist, contextTrack)} data-testid={`button-add-to-${playlist.id}`}>
+              <ListMusic size={15} />{playlist.name}
+              <span className="crumb" style={{ marginLeft: 'auto' }}>{countLabel(playlist.trackIds.length, 'song')}</span>
+            </button>
+          ))
+        ) : (
+          <div style={{ padding: '12px 0' }}>
+            <p style={{ margin: '0 0 12px' }}>No playlists found.</p>
+            <button className="button primary" onClick={() => { setModal(null); window.setTimeout(() => { setModalValue(''); setModal('playlist'); }, 0); }} data-testid="button-create-from-modal">
+              <Plus size={14} /> Create a playlist
+            </button>
+          </div>
+        )}
+        <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-add-playlist">Close</button></div>
+       </> : modal === 'properties' && contextTrack ? <>
+         <p>Track and audio quality metadata.</p>
+         <dl className="properties-list">
+           <dt>File</dt><dd>{contextTrack.fileName}</dd>
+           <dt>Title</dt><dd>{contextTrack.title}</dd>
+           <dt>Artist</dt><dd>{contextTrack.artist}</dd>
+           <dt>Album</dt><dd>{contextTrack.album}</dd>
+           <dt>Source</dt><dd>{formatProviderLabel(contextTrack.source, contextTrack) || 'Local Library'}</dd>
+           <dt>Quality</dt><dd style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+             <QualityBadge tier={getTrackQualityBadge(contextTrack)} track={contextTrack} compact />
+             {contextTrack.bitrate ? <span>{contextTrack.bitrate} kbps</span> : null}
+             {contextTrack.codec ? <span>· {contextTrack.codec}</span> : null}
+           </dd>
+           <dt>Duration</dt><dd>{contextTrack.isLive ? 'Live Stream' : formatTime(contextTrack.duration)}</dd>
+           <dt>Format</dt><dd>{contextTrack.format || contextTrack.mimeType || 'Unknown'}</dd>
+           {contextTrack.fileSize > 0 && <><dt>Size</dt><dd>{compactBytes(contextTrack.fileSize)}</dd></>}
+           {contextTrack.importedAt > 0 && <><dt>Added</dt><dd>{new Date(contextTrack.importedAt).toLocaleString()}</dd></>}
+         </dl>
+         <div className="modal-actions"><button className="button" onClick={() => { setModal(null); setContextTrack(null); }} data-testid="button-close-properties">Close</button></div>
+      </> : <>
+        <p>{modal === 'playlist' ? 'A small collection, stored with your local library.' : 'Give this collection a new name.'}</p>
+        <input autoFocus className="modal-input" value={modalValue} maxLength={70} placeholder="Playlist name" onChange={event => setModalValue(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') modal === 'playlist' ? void createPlaylist() : void renamePlaylist(); }} data-testid="input-playlist-name" />
+        <div className="modal-actions"><button className="button" onClick={() => setModal(null)} data-testid="button-cancel-playlist">Cancel</button><button className="button primary" disabled={!modalValue.trim()} onClick={() => modal === 'playlist' ? void createPlaylist() : void renamePlaylist()} data-testid="button-save-playlist">{modal === 'playlist' ? 'Create playlist' : 'Save name'}</button></div>
+      </>}
+    </div></div>}
+    {contextTrack && modal !== 'add-to-playlist' && modal !== 'properties' && modal !== 'playlist' && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setContextTrack(null); }}><div className="modal" role="dialog" aria-modal="true" aria-label={`Actions for ${contextTrack.title}`}>
+      <h2>{contextTrack.title}</h2><p>{contextTrack.artist}</p>
+      <button className="palette-result desktop-context-only" onClick={() => { void playTrack(contextTrack); setContextTrack(null); }} data-testid="context-play"><Play size={15} />Play now</button>
+      <button className="palette-result mobile-context-only" onClick={() => { if (activeId === contextTrack.id) { void togglePlay(); } else { void playTrack(contextTrack); } setContextTrack(null); }} data-testid="context-play-mobile">{activeId === contextTrack.id && isPlaying ? <><Pause size={15} />Pause</> : <><Play size={15} />Play</>}</button>
+      <button className="palette-result mobile-context-only context-fav-btn" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite-mobile"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
+      {page !== 'downloads' && rowActions.canDownload?.(contextTrack) && (
+        <button
+          className="palette-result"
+          disabled={Boolean(rowActions.isDownloading?.(contextTrack) || rowActions.isDownloadSuccess?.(contextTrack))}
+          onClick={() => { void downloadSearchTrack(contextTrack); setContextTrack(null); }}
+          data-testid="context-download"
+        >
+          {rowActions.isDownloadSuccess?.(contextTrack) ? <><Check size={15} />Downloaded</> : <><Download size={15} />{rowActions.isDownloading?.(contextTrack) ? 'Saving offline…' : 'Download offline'}</>}
+        </button>
+      )}
+      <button className="palette-result" onClick={() => { addToQueue(contextTrack); setContextTrack(null); }} data-testid="context-add-queue"><ListPlus size={15} />Add to queue</button>
+       <button className="palette-result" onClick={() => { playNext(contextTrack); setContextTrack(null); }} data-testid="context-play-next"><SkipForward size={15} />Play next</button>
+      <button className="palette-result" onClick={() => { setModal('add-to-playlist'); }} data-testid="context-add-playlist"><ListMusic size={15} />Add to playlist</button>
+      <button className="palette-result desktop-context-only" onClick={() => { void toggleFavorite(contextTrack); setContextTrack(null); }} data-testid="context-favorite"><Heart size={15} fill={contextTrack.favorite ? 'currentColor' : 'none'} />{contextTrack.favorite ? 'Remove from favorites' : 'Add to favorites'}</button>
+       <button className="palette-result" onClick={() => openCollection('artist', contextTrack.artist)} data-testid="context-go-artist"><Mic2 size={15} />Go to artist</button>
+       <button className="palette-result" onClick={() => openCollection('album', contextTrack.album)} data-testid="context-go-album"><Disc3 size={15} />Go to album</button>
+       <button className="palette-result" onClick={() => setModal('properties')} data-testid="context-properties"><SlidersHorizontal size={15} />Properties</button>
+      {detail?.kind !== 'artist' && page !== 'trending' && (tracks.some(t => t.id === contextTrack.id) || downloadedTracks.some((d: any) => d.id === contextTrack.id || `download:${d.id}` === contextTrack.id)) && (
+        <button className="palette-result" onClick={() => { void deleteTrack(contextTrack); setContextTrack(null); }} data-testid="context-remove"><Trash2 size={15} />Remove from VOID</button>
+      )}
+      <div className="modal-actions"><button className="button" onClick={() => setContextTrack(null)} data-testid="button-close-track-menu">Close</button></div>
+    </div></div>}
+    {expanded && <div className="np-layer" data-closing={closing ? '' : undefined} data-testid="now-playing-expanded">
+      <div className="np-scrim" aria-hidden="true" onMouseDown={closeExpanded} />
+      <section className="np-panel" role="dialog" aria-modal="true" aria-label="Now playing">
+        <div className="np-glass" aria-hidden="true" />
+        <div className="np-top np-fade">
+          <button className="icon-button np-close" aria-label="Close now playing" title="Close" onClick={closeExpanded} data-testid="button-close-expanded"><X /></button>
+          <span className="brand"><span className="eclipse" /><span className="brand-word">VOID</span></span>
+          <div className="np-top-end"><VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="expanded-mute" inputTestId="expanded-volume" /></div>
+        </div>
+        {activeTrack ? <div className="np-body">
+          <div className="np-main">
+            <div className="np-art" ref={npArt}><Cover track={activeTrack} large /></div>
+            <div className="np-meta np-fade">
+              <div className="np-info">
+                <div className="np-titles">
+                  <h1>{activeTrack.title}</h1>
+                  <p>
+                    {activeTrack.artist}{activeTrack.album ? ` · ${activeTrack.album}` : ''}
+                  </p>
+                  {getTrackQualityBadge(activeTrack) && (
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <QualityBadge tier={getTrackQualityBadge(activeTrack)} track={activeTrack} />
+                    </div>
+                  )}
+                </div>
+                <button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button>
+              </div>
+              <div className="np-scrub">
+                <input className="np-seek" type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} aria-label="Now playing position" onChange={event => seekTo(Number(event.target.value))} data-testid="expanded-seek" />
+                <div className="np-times"><span>{formatElapsed(position)}</span><span>{activeTrack.isLive ? 'LIVE' : formatTime(duration)}</span></div>
+              </div>
+              <div className="np-controls">
+                <button className={`icon-button ${prefs.shuffle ? 'active-control' : ''}`} aria-pressed={prefs.shuffle} aria-label="Shuffle" title="Shuffle" onClick={() => void updatePrefs({ ...prefs, shuffle: !prefs.shuffle })} data-testid="expanded-shuffle"><Shuffle /></button>
+                <div className="np-transport">
+                  <button className="icon-button" onClick={() => playRelative(-1)} aria-label="Previous track" title="Previous track" data-testid="expanded-previous"><SkipBack /></button>
+                  <button className="icon-button play-button" onClick={() => void togglePlay()} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'} data-testid="expanded-play"><VoidGlyph playing={isPlaying} /></button>
+                  <button className="icon-button" onClick={() => playRelative(1)} aria-label="Next track" title="Next track" data-testid="expanded-next"><SkipForward /></button>
+                </div>
+                <button className={`icon-button ${prefs.repeat !== 'off' ? 'active-control' : ''}`} aria-pressed={prefs.repeat !== 'off'} aria-label={`Repeat ${prefs.repeat}`} title={`Repeat ${prefs.repeat}`} onClick={cycleRepeat} data-testid="expanded-repeat">{prefs.repeat === 'one' ? <Repeat1 /> : <Repeat />}</button>
+              </div>
+            </div>
+          </div>
+          {/* No lyrics area at all when a song has none: the panel keeps only real content
+              (synced lines, when the track actually has them). */}
+          {syncedLyrics ? <div className="np-side np-fade">
+            <div className="np-lyrics-synced" ref={sideLyricsRef} onWheel={handleLyricsScroll} onTouchMove={handleLyricsScroll}>
+              {syncedLyrics.map((line, i) => (
+                <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => seekTo(line.time)}>
+                  {line.text}
+                </div>
+              ))}
+            </div>
+          </div> : null}
+        </div> : <div className="np-body np-body-empty np-fade"><div className="empty-state"><strong>Nothing playing just yet.</strong><p>Choose a song from your local library.</p><button className="button" onClick={() => { closeExpanded(); setPageAndRoute('songs'); }} data-testid="button-browse-library">Browse library</button></div></div>}
+        {activeTrack && <div className="np-dock np-fade"><button className="icon-button" onClick={() => { closeExpanded(); setPageAndRoute('queue'); }} aria-label="Open queue" title="Open queue" data-testid="expanded-queue"><ListMusic /></button></div>}
+      </section>
+    </div>}
+    {toast && <div className="toast-stack" aria-live="polite"><div className="toast-item" data-testid="status-toast">{toast}</div></div>}
+  </div>;
+const core: VoidCore = {
+  design,
+  setDesign,
+  tracks,
+  playlists,
+  queue,
+  queueTracks,
+  filteredTracks,
+  albumNames,
+  artistNames,
+  jumpBack,
+  recentlyAdded,
+  hasPlayed,
+  isReady,
+  storageError,
+  setStorageError,
+  reload,
+  importing,
+
+  activeId,
+  activeTrack,
+  isPlaying,
+  position,
+  duration,
+  prefs,
+  updatePrefs,
+  playTrack,
+  togglePlay,
+  playRelative,
+  playList,
+  playSomething,
+  seekTo,
+  changeVolume,
+  toggleMute,
+  cycleRepeat,
+
+  page: page as VoidCore['page'],
+  detail,
+  setDetail,
+  query,
+  setQuery,
+  title,
+  pageDescription,
+  setPageAndRoute,
+  openCollection,
+  sidebarCollapsed,
+  setSidebarCollapsed,
+
+  greeting: greetings[moodIndex],
+  moodLabel: moodLabelFor(greetingHour),
+  moodLine: moods[moodIndex],
+
+  atmos: atmosphere,
+  canvasVideoId,
+  canvasEnabled,
+  setCanvasEnabled,
+  canvasReady: canvasReady && !isEnding,
+  setCanvasReady,
+
+  rowActions,
+  toggleFavorite,
+  deleteTrack,
+  addToQueue,
+  playNext,
+  clearQueue,
+  splitArtists,
+  selectedSongIds,
+  toggleSelectSong,
+  toggleSelectAllSongs,
+  deleteSelectedSongs,
+
+  createPlaylist,
+  renamePlaylist,
+  deletePlaylistById,
+  addTrackToPlaylist,
+
+  openImport,
+  importFiles,
+  autoImport,
+  rescanLibrary,
+  clearLibrary,
+  fileInput,
+  folderInput,
+  fontInput,
+
+  fontId,
+  setFontId,
+  fontOptions,
+  fontBusy,
+  importFont,
+  deleteFont,
+
+  paletteOpen,
+  setPaletteOpen,
+  paletteQuery,
+  setPaletteQuery,
+  allSearchResults,
+  musicResults: deduplicatedMusicResults,
+  musicSearching,
+  albumSearchResults,
+  artistSearchResults,
+  playlistSearchResults,
+
+  importMenu,
+  setImportMenu,
+  modal,
+  setModal,
+  modalValue,
+  setModalValue,
+  contextTrack,
+  setContextTrack,
+
+  expanded,
+  closing,
+  openExpanded,
+  closeExpanded,
+  toast,
+  notify,
+
+  fetchArtistPhoto,
+  downloadedTracks,
+  downloadSearchTrack,
+  trendingLanguages: displayedTrendingLanguages,
+  activeTrendingLang,
+  openTrendingLanguage,
+  trendingTracks: displayedTrendingTracks,
+  trendingLoading,
+  trendingQuery,
+  setTrendingQuery,
+  artistTopTracks: displayedArtistTopTracks,
+  artistTopLoading,
+  artistViewTab,
+  setArtistViewTab,
+};
+return (
+  <>
+    <div ref={ytAudioHostRef} aria-hidden="true" style={{ position: 'fixed', width: 1, height: 1, left: -9999, top: -9999, opacity: 0, pointerEvents: 'none', overflow: 'hidden' }} />
+    <audio
+      ref={audio}
+      preload="none"
+      onTimeUpdate={() => {
+        if (switchingTrackRef.current || ytActiveRef.current) return;
+        setPosition(audio.current?.currentTime ?? 0);
+      }}
+      onPlay={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
+      onPlaying={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
+      onPause={() => {
+        if (ytActiveRef.current) return;
+        if (!userPausedRef.current && !switchingTrackRef.current && audio.current && !audio.current.ended) {
+          void audio.current.play().then(() => setIsPlaying(true)).catch(() => {
+            window.setTimeout(() => {
+              if (!userPausedRef.current && !switchingTrackRef.current && audio.current && audio.current.paused && !audio.current.ended) {
+                void audio.current.play().then(() => setIsPlaying(true)).catch(() => {});
+              }
+            }, 120);
+          });
+          return;
+        }
+        setIsPlaying(false);
+      }}
+      onDurationChange={() => {
+        const value = audio.current?.duration ?? 0;
+        if (Number.isFinite(value) && value > 0) setDuration(value);
+      }}
+      onLoadedMetadata={() => {
+        const value = audio.current?.duration ?? 0;
+        if (Number.isFinite(value) && value > 0) {
+          setDuration(value);
+          if (activeId) {
+            setTracks(items => items.map(item => item.id === activeId ? { ...item, duration: value } : item));
+            const loadedTrack = tracks.find(item => item.id === activeId);
+            if (loadedTrack) void saveTrack({ ...loadedTrack, duration: value }).catch(() => undefined);
+          }
+        }
+      }}
+      onEnded={() => {
+        if (prefs.repeat === 'one' && audio.current) {
+          audio.current.currentTime = 0;
+          void audio.current.play();
+        } else {
+          playRelative(1);
+        }
+      }}
+    />
+
+    {design === 'paper'
+      ? <Suspense fallback={null}><PaperGlassApp core={core} /></Suspense>
+      : renderDeepGlass()}
+  </>
+);
+}
+
+function EmptyLibrary({ label, onImport }: { label: string; onImport: () => void }) {
+  return <div className="empty-state" data-testid="empty-library"><strong>{label}</strong><p>VOID only shows audio you’ve added. No catalog, recommendations, or placeholder tracks.</p><button className="button" onClick={onImport} data-testid="button-empty-add-files"><Plus />Add audio files</button></div>;
+}
+
+export default App;
