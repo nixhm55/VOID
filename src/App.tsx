@@ -74,6 +74,15 @@ const compactBytes = (bytes: number) => bytes > 1024 ** 3 ? `${(bytes / 1024 ** 
 
 const countLabel = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
 const rangeStyle = (fraction: number) => ({ '--p': `${Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0)) * 100}%` }) as CSSProperties;
+const activeLyricIndexAt = (seconds: number, lyrics: { time: number; text: string }[] | null) => {
+  if (!lyrics?.length) return -1;
+  if (seconds < lyrics[0].time) return 0;
+  for (let i = 0; i < lyrics.length; i += 1) {
+    const nextTime = lyrics[i + 1]?.time ?? Infinity;
+    if (seconds >= lyrics[i].time && seconds < nextTime) return i;
+  }
+  return lyrics.length - 1;
+};
 const hueOf = (seed: string) => { let hash = 0; for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 360; return hash; };
 // Presentation only: a calm mood line for each two-hour block, matching the greetings above.
 const moods = [
@@ -1643,18 +1652,21 @@ useEffect(() => {
   const [syncedLyrics, setSyncedLyrics] = useState<{time: number, text: string}[] | null>(null);
   const [lyricsManualScroll, setLyricsManualScroll] = useState(false);
   const sideLyricsRef = useRef<HTMLDivElement>(null);
+
+  // Playback time drives the whole app shell, so only publish routine clock ticks
+  // when the visible second or a time-sensitive UI boundary actually changes.
+  const setPlaybackPosition = useCallback((next: number) => {
+    if (!Number.isFinite(next) || next < 0) return;
+    setPosition(current => {
+      const crossedSecond = Math.floor(current) !== Math.floor(next);
+      const crossedLyric = activeLyricIndexAt(current, syncedLyrics) !== activeLyricIndexAt(next, syncedLyrics);
+      const crossedCanvasEnding = duration > 10 && (duration - current <= 9) !== (duration - next <= 9);
+      return crossedSecond || crossedLyric || crossedCanvasEnding ? next : current;
+    });
+  }, [duration, syncedLyrics]);
   
   const activeLyricIndex = useMemo(() => {
-    if (!syncedLyrics || syncedLyrics.length === 0) return -1;
-    // Always show the first line from time 0 so it sits waiting in position
-    if (position < syncedLyrics[0].time) return 0;
-    for (let i = 0; i < syncedLyrics.length; i++) {
-      const nextTime = syncedLyrics[i + 1]?.time ?? Infinity;
-      if (position >= syncedLyrics[i].time && position < nextTime) {
-        return i;
-      }
-    }
-    return syncedLyrics.length - 1;
+    return activeLyricIndexAt(position, syncedLyrics);
   }, [syncedLyrics, position]);
 
   useEffect(() => {
@@ -2266,13 +2278,13 @@ useEffect(() => {
       if (!ytActiveRef.current || !ytAudioPlayerRef.current) return;
       try {
         const cur = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? 0);
-        if (Number.isFinite(cur) && cur >= 0) setPosition(cur);
+        if (Number.isFinite(cur) && cur >= 0) setPlaybackPosition(cur);
         const dur = Number(ytAudioPlayerRef.current.getDuration?.() ?? 0);
         if (Number.isFinite(dur) && dur > 0) setDuration(dur);
       } catch {}
     }, 250);
     return () => window.clearInterval(timer);
-  }, [isPlaying]);
+  }, [isPlaying, setPlaybackPosition]);
 
   // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn) or Local Artwork ---
   useEffect(() => {
@@ -3333,7 +3345,8 @@ useEffect(() => {
       else if (event.key === 'ArrowRight') {
         if (activeTrack) {
           if (ytActiveRef.current && ytAudioPlayerRef.current) {
-            const next = Math.min(duration || 0, position + 5);
+            const current = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? position);
+            const next = Math.min(duration || 0, (Number.isFinite(current) ? current : position) + 5);
             try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
             setPosition(next);
           } else if (audio.current) {
@@ -3344,7 +3357,8 @@ useEffect(() => {
       else if (event.key === 'ArrowLeft') {
         if (activeTrack) {
           if (ytActiveRef.current && ytAudioPlayerRef.current) {
-            const next = Math.max(0, position - 5);
+            const current = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? position);
+            const next = Math.max(0, (Number.isFinite(current) ? current : position) - 5);
             try { ytAudioPlayerRef.current.seekTo?.(next, true); } catch {}
             setPosition(next);
           } else if (audio.current) {
@@ -5617,7 +5631,7 @@ return (
       preload="none"
       onTimeUpdate={() => {
         if (switchingTrackRef.current || ytActiveRef.current) return;
-        setPosition(audio.current?.currentTime ?? 0);
+        setPlaybackPosition(audio.current?.currentTime ?? 0);
       }}
       onPlay={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
       onPlaying={() => { if (!ytActiveRef.current) { userPausedRef.current = false; setIsPlaying(true); } }}
