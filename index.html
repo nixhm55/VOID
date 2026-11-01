@@ -88,5 +88,40 @@
   <body bgcolor="#000000" style="background: #000000 !important; margin: 0; padding: 0;">
     <div id="root" style="background: #000000 !important; width: 100vw; height: 100dvh; min-height: 100vh;"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Update Popup UI -->
+    <div id="update-popup" style="display: none; position: fixed; bottom: 20px; right: 20px; left: 20px; background: #1a1a1a; color: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 9999; font-family: sans-serif; border: 1px solid #333;">
+      <h3 style="margin: 0 0 8px 0; color: #f1c40f; font-size: 18px;">New Update Available!</h3>
+      <p style="margin: 0 0 15px 0; font-size: 14px; color: #ccc;">A new version of VOID Audio is ready.</p>
+      <div style="display: flex; gap: 10px;">
+        <a id="download-btn" href="#" style="flex: 1; text-align: center; background: #f1c40f; color: #000; padding: 10px 15px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">Update Now</a>
+        <button onclick="document.getElementById('update-popup').style.display='none'" style="flex: 1; background: transparent; border: 1px solid #555; color: #fff; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-size: 14px;">Later</button>
+      </div>
+    </div>
+
+    <script>
+      // നിങ്ങളുടെ ഇപ്പോഴത്തെ ആപ്പിന്റെ വേർഷൻ
+      const CURRENT_VERSION = "v1.0.0"; 
+      
+      // ആൻഡ്രോയിഡ് ഫോണിൽ മാത്രമാണോ എന്ന് ചെക്ക് ചെയ്യാൻ
+      const isAndroid = /Android/i.test(navigator.userAgent);
+
+      if (isAndroid) {
+        fetch("https://api.github.com/repos/nixhm55/VOID/releases/latest")
+          .then(response => response.json())
+          .then(data => {
+            const latestVersion = data.tag_name;
+            // ഗിറ്റ്ഹബ്ബിൽ നിന്നുള്ള ഡൗൺലോഡ് ലിങ്ക്
+            const downloadUrl = "https://github.com/nixhm55/VOID/releases/latest/download/app-release.apk";
+            
+            // ഗിറ്റ്ഹബ്ബിലെ വേർഷനും ഇപ്പോഴത്തെ വേർഷനും വ്യത്യാസമുണ്ടെങ്കിൽ പോപ്പ്-അപ്പ് കാണിക്കുക
+            if (latestVersion && latestVersion !== CURRENT_VERSION) {
+              document.getElementById("update-popup").style.display = "block";
+              document.getElementById("download-btn").href = downloadUrl;
+            }
+          })
+          .catch(error => console.error("Update check failed:", error));
+      }
+    </script>
   </body>
 </html>
