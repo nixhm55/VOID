@@ -509,8 +509,8 @@
 .pg-np { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 28px; }
 .pg-np-scrim { position: absolute; inset: 0; background: color-mix(in srgb, var(--pg-paper) 45%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); animation: pg-fade .4s ease both; }
 .pg-np[data-closing] .pg-np-scrim { animation: pg-fade-out .3s ease both; }
-.pg-np-panel { position: relative; z-index: 1; width: min(1120px, 100%); height: min(700px, 100%); display: flex; flex-direction: column; border-radius: 34px; overflow: hidden; background-color: var(--pg-glass-2); --np-art: min(380px, 44dvh); animation: pg-np-in .75s var(--pg-ease) both; }
-@keyframes pg-np-in { from { opacity: 0; transform: translate3d(0, 36px, 0) scale(.96); filter: blur(8px); } to { opacity: 1; transform: none; filter: none; } }
+.pg-np-panel { position: relative; z-index: 1; width: min(1120px, 100%); height: min(700px, 100%); display: flex; flex-direction: column; border-radius: 34px; overflow: hidden; background-color: var(--pg-glass-2); --np-art: min(380px, 44dvh); animation: pg-np-in .48s var(--pg-ease) both; }
+@keyframes pg-np-in { from { opacity: 0; transform: translate3d(0, 36px, 0) scale(.96); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 .pg-np[data-closing] .pg-np-panel { animation: pg-np-out .32s ease both; }
 @keyframes pg-np-out { to { opacity: 0; transform: translate3d(0, 24px, 0) scale(.98); } }
 .pg-np-top { height: 72px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 24px; }
@@ -740,4 +740,26 @@
 @media (prefers-reduced-transparency: reduce) {
   .pg-app { --pg-glass: var(--pg-paper-2); }
   .pg-app * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
+
+/* Mobile uses a quiet black canvas; preserve the paper layout and controls. */
+@media (max-width: 820px) {
+  .pg-app, .dark .pg-app {
+    --pg-paper: #000; --pg-paper-2: #000; --pg-ink: #f5f5f5; --pg-ink-2: rgba(245, 245, 245, .68); --pg-ink-3: rgba(245, 245, 245, .44);
+    --pg-line: rgba(255, 255, 255, .11); --pg-line-2: rgba(255, 255, 255, .2); --pg-glass: #000; --pg-glass-2: #000;
+    --pg-edge: transparent; --pg-hover: rgba(255, 255, 255, .06); --pg-shadow: none; --pg-blur: 0px;
+    --pg-amb-1: transparent; --pg-amb-2: transparent; --pg-amb-3: transparent; color-scheme: dark; background: #000 !important;
+  }
+  .pg-bg, .pg-app .pg-top, .pg-app .pg-side, .pg-app .pg-player, .pg-app .pg-mood, .pg-app .pg-list,
+  .pg-app .pg-fonts, .pg-app .pg-sheet, .pg-app .pg-np-panel, .pg-app .pg-empty[role='alert'],
+  .pg-app .pg-search, .pg-app .pg-toast, .pg-app .pg-mobile-nav {
+    background: #000 !important;
+  }
+  .pg-video, .pg-veil, .pg-light, .pg-grain { display: none !important; }
+  .pg-app .pg-top-actions [data-testid='button-toggle-canvas'] { display: none !important; }
+  .pg-app .pg-np-scrim { background: rgba(0, 0, 0, .76) !important; }
+  .pg-app *, .pg-app *::before, .pg-app *::after {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
 }

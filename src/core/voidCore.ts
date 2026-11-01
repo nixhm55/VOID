@@ -95,6 +95,7 @@ export interface VoidCore {
   atmos: Hue4 | null;
   canvasVideoId: string | null;
   canvasEnabled: boolean;
+  isMobileViewport: boolean;
   setCanvasEnabled: Setter<boolean>;
   canvasReady: boolean;
   setCanvasReady: Setter<boolean>;

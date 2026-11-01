@@ -543,7 +543,7 @@ export default function PaperGlassApp({ core: c }: { core: VoidCore }) {
     <div className="pg-app" data-page={page} data-track-ambient={a ? '' : undefined} data-sidebar={c.sidebarCollapsed ? 'collapsed' : 'expanded'} style={ambient}>
       {/* environment: paper, light, optional video — all behind the interface */}
       <div className="pg-bg" aria-hidden="true" />
-      {c.canvasVideoId && c.canvasEnabled && (
+      {!c.isMobileViewport && c.canvasVideoId && c.canvasEnabled && (
         <div className="pg-video" data-ready={c.canvasReady} aria-hidden="true">
           <iframe className="pg-video-frame" tabIndex={-1} frameBorder="0" allow="autoplay; encrypted-media; fullscreen" onLoad={() => c.setCanvasReady(true)}
             src={`https://www.youtube.com/embed/${c.canvasVideoId}?autoplay=1&mute=1&loop=1&controls=0&disablekb=1&playsinline=1&modestbranding=1&iv_load_policy=3&rel=0&playlist=${c.canvasVideoId}`} />

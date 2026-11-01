@@ -1417,6 +1417,7 @@ function App() {
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [canvasEnabled, setCanvasEnabled] = useState(true);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 820px)').matches);
   const [trendingLanguages, setTrendingLanguages] = useState<TrendingLanguage[]>(() => getOrderedTrendingLanguages());
   const [activeTrendingLangId, setActiveTrendingLangId] = useState<string | null>(() => {
     try { return sessionStorage.getItem('void-active-trending-lang') || null; } catch { return null; }
@@ -1640,6 +1641,8 @@ useEffect(() => {
   const objectUrl = useRef<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   const npArt = useRef<HTMLDivElement>(null);
+  const compactArtOrigin = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const compactArtViewport = useRef<{ width: number; height: number } | null>(null);
   const expandedRef = useRef(false);
   const closingRef = useRef(false);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -1647,6 +1650,14 @@ useEffect(() => {
   expandedRef.current = expanded;
   closingRef.current = closing;
   const activeTrack = streamingTrack?.id === activeId ? streamingTrack : (tracks.find(track => track.id === activeId) ?? null);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 820px)');
+    const syncViewport = () => setIsMobileViewport(media.matches);
+    syncViewport();
+    media.addEventListener('change', syncViewport);
+    return () => media.removeEventListener('change', syncViewport);
+  }, []);
 
    // --- SYNCED LYRICS STATE & LOGIC ---
   const [syncedLyrics, setSyncedLyrics] = useState<{time: number, text: string}[] | null>(null);
@@ -1770,7 +1781,7 @@ useEffect(() => {
 
   useEffect(() => {
     let active = true;
-    if (!activeTrack || !canvasEnabled || activeTrack.isLive) {
+    if (!activeTrack || !canvasEnabled || activeTrack.isLive || isMobileViewport) {
       setCanvasVideoId(null);
       setCanvasReady(false);
       return;
@@ -1797,7 +1808,7 @@ useEffect(() => {
       active = false;
       controller.abort();
     };
-  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.isLive, canvasEnabled]);
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.isLive, canvasEnabled, isMobileViewport]);
 
   // Freeze the iframe's initial video id so React never changes its src (which would reload the iframe).
   useEffect(() => {
@@ -3287,16 +3298,10 @@ useEffect(() => {
 
   const flyArt = useCallback((direction: 'open' | 'close') => {
     const art = npArt.current;
-    const playerBar = document.querySelector<HTMLElement>('.player-bar');
-    const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
-    if (!art || !source || !playerBar || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const originalDisplay = playerBar.style.getPropertyValue('display');
-    const originalPriority = playerBar.style.getPropertyPriority('display');
-    playerBar.style.setProperty('display', 'flex', 'important');
-    const from = source.getBoundingClientRect();
+    const from = compactArtOrigin.current;
+    const viewport = compactArtViewport.current;
+    if (!art || !from || !viewport || viewport.width !== window.innerWidth || viewport.height !== window.innerHeight || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const to = art.getBoundingClientRect();
-    if (originalDisplay) playerBar.style.setProperty('display', originalDisplay, originalPriority);
-    else playerBar.style.removeProperty('display');
     if (!from.width || !to.width) return;
     const scale = from.width / to.width;
     const dx = from.left + from.width / 2 - (to.left + to.width / 2);
@@ -3304,9 +3309,9 @@ useEffect(() => {
     const compact = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${13 / scale}px` };
     const full = { transform: 'translate(0px, 0px) scale(1)', borderRadius: '24px' };
     if (direction === 'open') {
-      art.animate([compact, full], { duration: 560, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
+      art.animate([compact, full], { duration: 480, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' });
     } else {
-      const anim = art.animate([full, compact], { duration: 300, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
+      const anim = art.animate([full, compact], { duration: 280, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'forwards' });
       anim.onfinish = () => { art.style.opacity = '0'; };
     }
   }, []);
@@ -3314,6 +3319,12 @@ useEffect(() => {
   const openExpanded = useCallback(() => {
     if (expandedRef.current) return;
     window.clearTimeout(closeTimer.current);
+    const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
+    const rect = source?.getBoundingClientRect();
+    compactArtOrigin.current = rect && rect.width && rect.height
+      ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+      : null;
+    compactArtViewport.current = { width: window.innerWidth, height: window.innerHeight };
     setClosing(false);
     setExpanded(true);
   }, []);
@@ -4233,7 +4244,7 @@ useEffect(() => {
     {page === 'home' && !detail && !libraryOpen && <div className="ambient" aria-hidden="true" />}
 
     {/* --- GLOBAL SPOTIFY CANVAS BACKGROUND VIDEO --- */}
-    {canvasVideoId && canvasEnabled && canvasBootId && (
+    {!isMobileViewport && canvasVideoId && canvasEnabled && canvasBootId && (
       <div className="canvas-container" data-ready={canvasReady && !isEnding} data-ending={isEnding ? 'true' : undefined}>
         <iframe
           key={canvasBootId}
@@ -5544,6 +5555,7 @@ const core: VoidCore = {
   atmos: atmosphere,
   canvasVideoId,
   canvasEnabled,
+  isMobileViewport,
   setCanvasEnabled,
   canvasReady: canvasReady && !isEnding,
   setCanvasReady,
