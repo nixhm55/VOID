@@ -804,7 +804,7 @@ export function getStickyCoverUrl(track: any): string {
   hydrateStickyCovers();
   const directCandidate = track.remoteImage || track.image;
   if (isValidCoverUrl(directCandidate)) {
-    rememberStickyCover(track, directCandidate);
+    rememberStickyCover(track, directCandidate, false, false);
     return directCandidate.trim();
   }
   const keys = normalizeTrackKey(track);

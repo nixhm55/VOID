@@ -3601,4 +3601,105 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
   .trending-track-list .track-table thead {
     display: none !important;
   }
+
+  /* Darker mobile mood card & "Play something for me" button blending with black canvas */
+  .void-app .mood {
+    background: #040406 !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+  }
+
+  .void-app .mood-copy .mood-play-btn {
+    background: #0a0a0d !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+    color: rgba(255, 255, 255, 0.88) !important;
+  }
+
+  /* Dedicated Mobile Search Page (full-page layout instead of floating capsule popup) */
+  .mobile-search-page {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-search-head {
+    padding: 4px 0 0;
+  }
+
+  .mobile-search-bar-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 46px;
+    padding: 0 12px 0 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    background: #08080b;
+    box-sizing: border-box;
+  }
+
+  .mobile-search-bar-wrap:focus-within {
+    border-color: rgba(255, 255, 255, 0.24);
+    background: #0c0c10;
+  }
+
+  .mobile-search-bar-icon {
+    flex: 0 0 auto;
+    color: hsl(var(--muted-foreground));
+    margin-right: 10px;
+  }
+
+  .mobile-search-page-input {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100% !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    font-size: 14px !important;
+    color: hsl(var(--foreground));
+    outline: none !important;
+  }
+
+  .mobile-search-clear-btn {
+    width: 28px !important;
+    height: 28px !important;
+    margin-left: 6px;
+  }
+
+  .mobile-search-tabs {
+    padding: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09) !important;
+    padding-bottom: 8px !important;
+  }
+
+  .mobile-search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-search-results .palette-result {
+    padding: 10px 8px;
+    border-radius: 12px;
+    gap: 11px;
+  }
+
+  .mobile-search-results .palette-result .cover-mini {
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+  }
+
+  .mobile-search-history .search-history-items-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
 }

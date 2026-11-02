@@ -976,12 +976,6 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
 
 const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity, loading }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string; loading?: 'eager' | 'lazy' }) {
   const [, setCoverTick] = useState(0);
-  useEffect(() => {
-    const onCoverLock = () => setCoverTick(t => t + 1);
-    stickyCoverListeners.add(onCoverLock);
-    return () => { stickyCoverListeners.delete(onCoverLock); };
-  }, []);
-
   const stickyRemoteUrl = track ? getStickyCoverUrl(track) : '';
   const [resolvedRemoteUrl, setResolvedRemoteUrl] = useState<string>('');
   const [blobSrc, setBlobSrc] = useState<string | null>(null);
@@ -1012,6 +1006,14 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
     (u): u is string => typeof u === 'string' && u.length > 0 && !failedUrls.includes(u)
   );
   const finalSrc = candidates[0] || null;
+
+  useEffect(() => {
+    if (finalSrc) return;
+    const onCoverLock = () => setCoverTick(t => t + 1);
+    stickyCoverListeners.add(onCoverLock);
+    return () => { stickyCoverListeners.delete(onCoverLock); };
+  }, [finalSrc]);
+
   const [fitScale, setFitScale] = useState<number>(() => getCachedCoverScale(finalSrc, track));
 
   useEffect(() => {
@@ -1021,7 +1023,7 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
   useEffect(() => {
     if (!track) return;
     if (stickyRemoteUrl && !failedUrls.includes(stickyRemoteUrl)) {
-      rememberStickyCover(track, stickyRemoteUrl);
+      rememberStickyCover(track, stickyRemoteUrl, false, false);
       return;
     }
     if (finalSrc) return;
@@ -1048,7 +1050,7 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
           loading={loading}
           onLoad={(e) => {
             if (isValidCoverUrl(finalSrc)) {
-              rememberStickyCover(track, finalSrc);
+              rememberStickyCover(track, finalSrc, false, false);
             }
             markCoverUrlLoaded(finalSrc);
             void isCoverUrlLoaded(finalSrc);
@@ -1583,6 +1585,7 @@ useEffect(() => {
   const [greetingHour, setGreetingHour] = useState(() => new Date().getHours());
   const [query, setQuery] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [paletteTab, setPaletteTab] = useState<'songs' | 'artists'>('songs');
   const [onlineArtistResults, setOnlineArtistResults] = useState<string[]>([]);
@@ -1617,13 +1620,13 @@ useEffect(() => {
   };
   
   useEffect(() => {
-    if (paletteOpen) {
+    if (paletteOpen || searchOpen) {
       warmUpYouTubeBackend();
     } else {
       setHistoryExpanded(false);
       setPaletteTab('songs');
     }
-  }, [paletteOpen]);
+  }, [paletteOpen, searchOpen]);
 
   useEffect(() => {
     const q = paletteQuery.trim();
@@ -1685,8 +1688,8 @@ useEffect(() => {
   const [detail, setDetail] = useState<{ kind: 'album' | 'artist' | 'playlist'; name: string } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [closing, setClosing] = useState(false);
-  // Deep Glass hub for the mobile Library tab (the underlying albums / artists / playlists
-  // pages and routes are untouched — this only decides which screen the shell shows).
+  // Deep Glass hub for the mobile Library tab (the underlying pages and desktop
+  // search modal remain untouched — this only decides which mobile screen the shell shows).
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [storageError, setStorageError] = useState('');
@@ -2316,10 +2319,10 @@ useEffect(() => {
 
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const dark = isMobileViewport || prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     root.classList.toggle('dark', dark);
     root.dataset.theme = dark ? 'dark' : 'light';
-  }, [prefs.theme]);
+  }, [isMobileViewport, prefs.theme]);
 
   useEffect(() => {
     let timer = 0;
@@ -2358,6 +2361,11 @@ useEffect(() => {
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const sync = (e: MediaQueryListEvent) => {
+      if (isMobileViewport) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.dataset.theme = 'dark';
+        return;
+      }
       if (prefs.theme === 'system') {
         const dark = e.matches;
         document.documentElement.classList.toggle('dark', dark);
@@ -2366,7 +2374,7 @@ useEffect(() => {
     };
     media.addEventListener('change', sync);
     return () => media.removeEventListener('change', sync);
-  }, [prefs.theme]);
+  }, [isMobileViewport, prefs.theme]);
 
   useEffect(() => {
     if (audio.current) { audio.current.volume = prefs.volume; audio.current.muted = prefs.muted; }
@@ -3391,6 +3399,7 @@ useEffect(() => {
   const openCollection = (kind: 'album' | 'artist', name: string) => {
     const target: Page = kind === 'album' ? 'albums' : 'artists';
     setLibraryOpen(false);
+    setSearchOpen(false);
     setDetail({ kind, name });
     setQuery('');
     setPage(target);
@@ -3726,7 +3735,7 @@ useEffect(() => {
   }, [downloadedTracks, isMobileViewport, tracks, trendingQuery, trendingTracks]);
 
   const backLayerActive = Boolean(
-    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || activeTrendingLangId || libraryOpen || page !== 'home'
+    modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || activeTrendingLangId || libraryOpen || searchOpen || page !== 'home'
   );
   const backStateRef = useRef({
     modal,
@@ -3738,6 +3747,7 @@ useEffect(() => {
     detail,
     activeTrendingLangId,
     libraryOpen,
+    searchOpen,
     page,
   });
   backStateRef.current = {
@@ -3750,6 +3760,7 @@ useEffect(() => {
     detail,
     activeTrendingLangId,
     libraryOpen,
+    searchOpen,
     page,
   };
 
@@ -3759,13 +3770,13 @@ useEffect(() => {
     if (!window.history.state?.voidBackGuard) {
       window.history.pushState({ ...(window.history.state || {}), voidBackGuard: true }, '', currentPath);
     }
-  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, activeTrendingLangId, libraryOpen, page]);
+  }, [backLayerActive, modal, contextTrack, importMenu, paletteOpen, expanded, mobileFontOpen, detail, activeTrendingLangId, libraryOpen, searchOpen, page]);
 
   useEffect(() => {
     const onPopState = (event: PopStateEvent) => {
       const st = backStateRef.current;
       const hasActiveLayer = Boolean(
-        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.activeTrendingLangId || st.libraryOpen || st.page !== 'home'
+        st.modal || st.contextTrack || st.importMenu || st.paletteOpen || st.expanded || st.mobileFontOpen || st.detail || st.activeTrendingLangId || st.libraryOpen || st.searchOpen || st.page !== 'home'
       );
       if (!hasActiveLayer) return;
 
@@ -3788,10 +3799,13 @@ useEffect(() => {
       } else if (st.activeTrendingLangId) {
         setActiveTrendingLangId(null);
         setTrendingQuery('');
+      } else if (st.searchOpen) {
+        setSearchOpen(false);
       } else if (st.libraryOpen) {
         setLibraryOpen(false);
       } else if (st.page !== 'home') {
         setLibraryOpen(false);
+        setSearchOpen(false);
         setDetail(null);
         setActiveTrendingLangId(null);
         setPage('home');
@@ -3854,6 +3868,9 @@ useEffect(() => {
   };
 
   useEffect(() => {
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTop = 0;
+    }
     setSelectionMode(false);
     setSelectedSongIds([]);
     setArtistTopExpanded(false);
@@ -3862,10 +3879,11 @@ useEffect(() => {
       setTrendingQuery('');
       try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
     }
-  }, [page, detail?.kind, detail?.name, libraryOpen]);
+  }, [page, detail?.kind, detail?.name, libraryOpen, searchOpen, activeTrendingLangId]);
 
   const setPageAndRoute = (target: Page) => {
     setLibraryOpen(false);
+    setSearchOpen(false);
     setDetail(null);
     setSelectionMode(false);
     setSelectedSongIds([]);
@@ -4480,10 +4498,10 @@ useEffect(() => {
           </div>
           )}
         </header>
-        <section className={`content ${page === 'home' && !detail && !libraryOpen ? 'home-content' : ''}`} ref={contentRef}>
+        <section className={`content ${page === 'home' && !detail && !libraryOpen && !searchOpen ? 'home-content' : ''}`} ref={contentRef}>
           {storageError ? <div className="empty-state" role="alert" data-testid="status-storage-error"><strong>Local storage unavailable</strong><p>{storageError} Your browser may be in private mode or storage may be disabled. VOID does not upload your music.</p><button className="button" onClick={() => { setStorageError(''); void reload(); }} data-testid="button-retry-storage">Try again</button></div> : null}
           {!isReady && <div className="empty-state" data-testid="status-library-loading"><strong>Opening your library</strong><p>Looking for audio you’ve saved on this device.</p></div>}
-          {isReady && page === 'home' && !detail && !libraryOpen && <>
+          {isReady && page === 'home' && !detail && !libraryOpen && !searchOpen && <>
             <div className="welcome">
               <div>
                 <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1>
@@ -4510,6 +4528,7 @@ useEffect(() => {
             </DgReveal>
 
 {tracks.length ? <>
+  {!isMobileViewport && (
   <div className="home-section">
     <DgReveal dir="left" className="section-heading">
       <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
@@ -4531,6 +4550,7 @@ useEffect(() => {
       ))}
     </div>
   </div>
+  )}
 
   <div className="home-section">
     <DgReveal dir="left" className="section-heading">
@@ -4550,7 +4570,294 @@ useEffect(() => {
   <span className="empty-formats">MP3 · M4A · FLAC · WAV</span>
 </div> : null}
 </>}
-{libraryOpen && !detail && <div className="dg-page library-hub" key="library">
+{searchOpen && !detail && <div className="dg-page mobile-search-page" key="mobile-search">
+            <div className="library-head mobile-search-head">
+              <div className="eyebrow">Discover</div>
+              <h1 className="page-title">Search</h1>
+            </div>
+            <div className="mobile-search-bar-wrap">
+              <Search size={17} className="mobile-search-bar-icon" aria-hidden="true" />
+              <input
+                className="palette-input mobile-search-page-input"
+                placeholder="Search your music…"
+                value={paletteQuery}
+                onChange={event => setPaletteQuery(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (paletteQuery.trim()) {
+                    handleSaveHistory(paletteQuery);
+                  }
+                }}
+                data-testid="input-mobile-search-page"
+              />
+              {paletteQuery && (
+                <button
+                  type="button"
+                  className="icon-button mobile-search-clear-btn"
+                  onClick={() => setPaletteQuery('')}
+                  aria-label="Clear search"
+                >
+                  <X size={15} />
+                </button>
+              )}
+            </div>
+
+            {paletteQuery.trim() && (
+              <div className="palette-tabs mobile-search-tabs" role="tablist" aria-label="Search category">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteTab === 'songs'}
+                  className={`palette-tab ${paletteTab === 'songs' ? 'active' : ''}`}
+                  onClick={() => setPaletteTab('songs')}
+                >
+                  Songs
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={paletteTab === 'artists'}
+                  className={`palette-tab ${paletteTab === 'artists' ? 'active' : ''}`}
+                  onClick={() => setPaletteTab('artists')}
+                >
+                  Artists
+                </button>
+              </div>
+            )}
+
+            <div className="mobile-search-results">
+              {paletteTab === 'songs' && allSearchResults.map(track => {
+                const localQuality = getTrackQualityBadge(track);
+                return (
+                  <button
+                    key={track.id}
+                    className="palette-result search-music-result"
+                    onClick={() => {
+                      handleSaveHistory(paletteQuery);
+                      void playTrack(track);
+                    }}
+                    data-testid={`mobile-search-result-${track.id}`}
+                  >
+                    <Cover track={track} loading="lazy" />
+                    <span>
+                      <span className="track-title">{track.title}</span>
+                      <span className="track-sub">{track.artist} · {track.album}</span>
+                    </span>
+                    <span className="search-result-actions">
+                      {localQuality && <QualityBadge tier={localQuality} track={track} compact />}
+                      <Play size={13} />
+                    </span>
+                  </button>
+                );
+              })}
+
+              {paletteTab === 'songs' && deduplicatedMusicResults.map(track => {
+                const sourceLabel = formatProviderLabel(track.source, track) || 'Online';
+                const qualityTier = getTrackQualityBadge(track);
+                const isNonDownloadable =
+                  Boolean(track.isLive) ||
+                  qualityTier === 'Live Radio' ||
+                  qualityTier === 'FLAC Live';
+
+                const buildApiTrack = () => ({
+                  id: `api-${track.id}`,
+                  title: track.name,
+                  artist: track.artist,
+                  album: track.album,
+                  fileName: `${track.name}.${track.codec ? String(track.codec).toLowerCase() : 'audio'}`,
+                  audioUrl: track.downloadUrl,
+                  downloadUrl: track.downloadUrl,
+                  src: track.downloadUrl,
+                  image: track.image,
+                  duration: track.duration,
+                  source: sourceLabel,
+                  qualityBadge: qualityTier,
+                  bitrate: track.bitrate,
+                  codec: track.codec,
+                  mimeType: track.mimeType,
+                  format: track.format,
+                  qualityVerified: track.qualityVerified,
+                  isLive: track.isLive,
+                  fallbackUrls: track.fallbackUrls,
+                });
+
+                return (
+                  <div
+                    key={`api-${sourceLabel}-${track.id}`}
+                    className="palette-result search-music-result"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleSaveHistory(paletteQuery);
+                        void playTrack(buildApiTrack() as any);
+                      }
+                    }}
+                    onClick={() => {
+                      handleSaveHistory(paletteQuery);
+                      void playTrack(buildApiTrack() as any);
+                    }}
+                    data-testid={`mobile-search-music-${track.id}`}
+                  >
+                    <Cover track={{ image: track.image }} loading="lazy" />
+                    <span>
+                      <span className="track-title">{track.name}</span>
+                      <span className="track-sub">{track.artist}{track.album && track.album !== 'Unknown Album' && track.album !== sourceLabel ? ` · ${track.album}` : ''}</span>
+                    </span>
+                    <span className="search-result-actions">
+                      {!isNonDownloadable && (() => {
+                        const cleanResultId = extractCleanYouTubeId(track.id);
+                        const isResultDownloading = Boolean(cleanResultId && downloadingIds.includes(cleanResultId));
+                        const normResTitle = normalizeMatchText(track.name || (track as any).title);
+                        const normResArtist = normalizeMatchText(track.artist);
+                        const isResultDownloaded = Boolean(
+                          (cleanResultId &&
+                            (recentlyDownloadedIds.includes(cleanResultId) ||
+                              downloadedTracks.some((item: any) => extractCleanYouTubeId(item?.id ?? '') === cleanResultId))) ||
+                            downloadedTracks.some((item: any) => {
+                              const dlTitle = normalizeMatchText(item?.title || item?.name);
+                              const dlArtist = normalizeMatchText(item?.artist);
+                              const itemSource = formatProviderLabel(item?.source, item);
+                              const sameSong =
+                                Boolean(normResTitle && dlTitle && normResTitle === dlTitle) &&
+                                Boolean(!normResArtist || !dlArtist || normResArtist === dlArtist || dlArtist.includes(normResArtist) || normResArtist.includes(dlArtist));
+                              return sameSong && (!itemSource || itemSource === sourceLabel);
+                            })
+                        );
+                        return (
+                          <button
+                            className={`download-icon-button${isResultDownloading ? ' is-downloading' : ''}${isResultDownloaded ? ' is-download-success' : ''}`}
+                            aria-label={isResultDownloaded ? `Downloaded ${track.name}` : `Download ${track.name}`}
+                            title={isResultDownloaded ? 'Downloaded' : isResultDownloading ? 'Saving offline…' : `Save ${track.name} for offline listening`}
+                            disabled={isResultDownloading || isResultDownloaded}
+                            onClick={event => { event.stopPropagation(); void downloadSearchTrack(track); }}
+                          >
+                            <svg width="13" height="15" viewBox="0 0 13 15" fill="none" aria-hidden="true" style={{ display: 'block', overflow: 'visible' }}>
+                              {isResultDownloaded ? (
+                                <path className="download-success-check" d="M2.1 7.7L5.1 10.5L11 3.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                              ) : (
+                                <path d="M6.5 1.5V10.5M2.9 7.2L6.5 10.8L10.1 7.2M2.2 13H10.8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                              )}
+                            </svg>
+                          </button>
+                        );
+                      })()}
+                      {qualityTier && <QualityBadge tier={qualityTier} track={track} compact />}
+                    </span>
+                  </div>
+                );
+              })}
+
+              {paletteTab === 'artists' && paletteQuery.trim() && artistSearchResults.length > 0 && (
+                <div className="palette-artist-grid">
+                  {artistSearchResults.map(name => {
+                    const representative = canonicalTracks.find(track => {
+                      const artists = splitArtists(track.artist || '').map(a => a.toLowerCase());
+                      return artists.includes(name.toLowerCase());
+                    });
+                    return (
+                      <button
+                        key={`artist-${name}`}
+                        type="button"
+                        className="palette-artist-card"
+                        onClick={() => {
+                          handleSaveHistory(paletteQuery);
+                          openCollection('artist', name);
+                        }}
+                        data-testid={`mobile-search-artist-${name}`}
+                      >
+                        <div className="palette-artist-avatar">
+                          <ArtistPhoto artistName={name} fallbackTrack={representative} />
+                        </div>
+                        <div className="cover-card-title" style={{ width: '100%', textAlign: 'center' }}>{name}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {musicSearching && paletteQuery && (
+                <div className="crumb" style={{ padding: '14px 4px' }}>
+                  Searching music providers…
+                </div>
+              )}
+
+              {paletteQuery &&
+                !musicSearching &&
+                ((paletteTab === 'songs' && !allSearchResults.length && !musicResults.length) ||
+                  (paletteTab === 'artists' && !artistSearchResults.length)) && (
+                  <div className="empty-state" style={{ margin: '12px 0', padding: 20 }}>
+                    <strong>No match found</strong>
+                    <p>Try another song title, artist, or album.</p>
+                  </div>
+                )}
+
+              {!paletteQuery && searchHistory.length > 0 && (
+                <div className="search-history-list mobile-search-history" data-expanded={historyExpanded ? 'true' : 'false'}>
+                  <div className="search-history-header">
+                    <span className="crumb">Recent Searches</span>
+                    {searchHistory.length > 6 && (
+                      <button
+                        type="button"
+                        className={`icon-button search-history-more-btn${historyExpanded ? ' is-expanded' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setHistoryExpanded(prev => !prev);
+                        }}
+                        aria-label={historyExpanded ? 'Show fewer recent searches' : 'Show more recent searches'}
+                        aria-expanded={historyExpanded}
+                        title={historyExpanded ? 'Show less' : 'Show more'}
+                      >
+                        <ChevronDown size={15} strokeWidth={1.85} />
+                      </button>
+                    )}
+                  </div>
+                  <div className={`search-history-items-scroll${historyExpanded ? ' is-expanded' : ''}`}>
+                    {(historyExpanded ? searchHistory : searchHistory.slice(0, 6)).map((term, i) => (
+                      <div
+                        key={`history-${term}-${i}`}
+                        className="palette-result search-history-item"
+                        role="button"
+                        tabIndex={0}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setPaletteQuery(term)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setPaletteQuery(term);
+                          }
+                        }}
+                      >
+                        <Clock3 size={16} />
+                        <span>{term}</span>
+                        <div style={{ marginLeft: 'auto', display: 'flex' }}>
+                          <button
+                            type="button"
+                            className="icon-button"
+                            style={{ width: 28, height: 28, pointerEvents: 'auto' }}
+                            onClick={(e) => handleRemoveHistory(term, e)}
+                            aria-label="Remove from history"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!paletteQuery && searchHistory.length === 0 && (
+                <div className="crumb" style={{ padding: '14px 4px' }}>
+                  Search your local songs and connected music providers.
+                </div>
+              )}
+            </div>
+          </div>}
+{libraryOpen && !searchOpen && !detail && <div className="dg-page library-hub" key="library">
             <div className="library-head">
               <div className="eyebrow">Your collection</div>
               <h1 className="page-title">Library</h1>
@@ -4581,7 +4888,7 @@ useEffect(() => {
               })}
             </div>
           </div>}
-          {!libraryOpen && page === 'trending' && !detail && (
+          {!libraryOpen && !searchOpen && page === 'trending' && !detail && (
             !activeTrendingLang ? (
               <div className="dg-page library-hub" key="trending-hub">
                 <div className="eyebrow" style={{ marginBottom: 2 }}>Discover</div>
@@ -4676,7 +4983,7 @@ useEffect(() => {
               </div>
             )
           )}
-          {!libraryOpen && page !== 'home' && page !== 'settings' && page !== 'trending' && <div className={`dg-page${detail?.kind === 'artist' || detail?.kind === 'album' || detail?.kind === 'playlist' ? ' dg-page--cinematic' : ''}${detail?.kind === 'artist' ? ' dg-page--artist-view' : ''}`} key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: detail?.kind === 'artist' ? 0 : 6 }}>
+          {!libraryOpen && !searchOpen && page !== 'home' && page !== 'settings' && page !== 'trending' && <div className={`dg-page${detail?.kind === 'artist' || detail?.kind === 'album' || detail?.kind === 'playlist' ? ' dg-page--cinematic' : ''}${detail?.kind === 'artist' ? ' dg-page--artist-view' : ''}`} key={`${page}:${detail?.kind ?? ''}:${detail?.name ?? ''}`} style={{ display: 'flex', flexDirection: 'column', gap: detail?.kind === 'artist' ? 0 : 6 }}>
             {detail?.kind === 'artist' ? (
               <>
                 <DgReveal
@@ -5044,8 +5351,10 @@ useEffect(() => {
             ) : <EmptyLibrary label={page === 'downloads' ? 'No offline downloads yet' : page === 'favorites' ? 'Nothing saved here yet' : page === 'recent' ? 'Your recent listening will live here' : page === 'queue' ? 'Your queue is clear' : detail ? 'No songs in this collection' : 'No songs in your library yet'} onImport={openImport} />)}
             {page === 'queue' && queueTracks.length > 0 && <div style={{ marginTop: 14 }}>{queueTracks.map(track => <span key={track.id} style={{ display: 'none' }}>{track.id}</span>)}</div>}
           </div>}
-          {!libraryOpen && page === 'settings' && <div className="dg-page" key="settings"><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
+          {!libraryOpen && !searchOpen && page === 'settings' && <div className="dg-page" key="settings"><div className="eyebrow">Preferences</div><h1 className="page-title">Settings</h1><p className="page-subtitle">Small adjustments for this device.</p>
             <div className="settings-section">
+              {!isMobileViewport && (
+              <>
               <div className="section-heading"><h2>Appearance</h2><span>Saved locally</span></div>
              <div className="setting-row">
   <div>
@@ -5064,6 +5373,8 @@ useEffect(() => {
     <option value="dark">Dark</option>
   </select>
 </div>
+              </>
+              )}
 
 {!isMobileViewport && (
 <div className="setting-row">
@@ -5153,8 +5464,8 @@ useEffect(() => {
         {mobileNavItems.map(item => {
           const Icon = item.icon;
           const active = item.id === 'search'
-            ? paletteOpen
-            : !paletteOpen && (
+            ? searchOpen && !detail
+            : !searchOpen && (
                 item.id === 'library'
                   ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
                   : page === item.id && !detail && !libraryOpen
@@ -5164,12 +5475,19 @@ useEffect(() => {
               key={item.id}
               className={`mobile-nav-item ${active ? 'active' : ''}`}
               onClick={() => {
+                setPaletteOpen(false);
                 if (item.id === 'search') {
-                  setPaletteOpen(true);
-                  setPaletteQuery('');
+                  setDetail(null);
+                  setLibraryOpen(false);
+                  setSearchOpen(true);
+                  setSelectionMode(false);
+                  setSelectedSongIds([]);
+                  setArtistTopExpanded(false);
+                  setActiveTrendingLangId(null);
+                  setTrendingQuery('');
                   return;
                 }
-                setPaletteOpen(false);
+                setSearchOpen(false);
                 if (item.id === 'library') {
                   setDetail(null);
                   setLibraryOpen(true);
@@ -5249,7 +5567,7 @@ useEffect(() => {
       <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
       <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
     </div></div>}
-    {paletteOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
+    {paletteOpen && !isMobileViewport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
       <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
         <input
           autoFocus
