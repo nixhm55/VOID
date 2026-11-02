@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createVoidGatewayHandler } from './_gateway';
+import { createVoidGatewayHandler } from './_gateway.js';
 
 const gateway = createVoidGatewayHandler();
 
