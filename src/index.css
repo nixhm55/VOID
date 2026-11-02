@@ -3482,17 +3482,19 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     display: none !important;
   }
 
-  .mobile-eclipse {
-    display: block !important;
-    width: 14px;
-    height: 14px;
+  .mobile-eclipse,
+  .mobile-brand {
+    display: none !important;
   }
 
-  .mobile-brand {
-    display: block !important;
-    font-size: 14px;
-    letter-spacing: 0.32em;
-    font-weight: 560;
+  /* Move mobile Home greeting ("Let the day soften.") up into the header space while keeping clear of the front punch-hole camera */
+  .content.home-content {
+    padding-top: 0 !important;
+  }
+
+  .content.home-content .welcome {
+    margin-top: -18px !important;
+    padding: 0 0 22px !important;
   }
 
   /* Mobile Bottom Navigation: symmetrical icons including Search in 2nd slot */

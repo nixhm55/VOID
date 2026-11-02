@@ -4528,7 +4528,6 @@ useEffect(() => {
             </DgReveal>
 
 {tracks.length ? <>
-  {!isMobileViewport && (
   <div className="home-section">
     <DgReveal dir="left" className="section-heading">
       <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
@@ -4550,7 +4549,6 @@ useEffect(() => {
       ))}
     </div>
   </div>
-  )}
 
   <div className="home-section">
     <DgReveal dir="left" className="section-heading">
