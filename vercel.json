@@ -7,7 +7,7 @@
       "destination": "/api/void-api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/)(?!__void_api/).*)",
       "destination": "/index.html"
     }
   ]
