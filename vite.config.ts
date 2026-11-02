@@ -900,7 +900,7 @@ async function queryThirdPartyLosslessServer(query: string): Promise<any[]> {
   return results;
 }
 
-function voidLocalGatewayPlugin(): Plugin {
+export function createVoidGatewayHandler() {
   const handler = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const rawUrl = req.url || '';
     if (!rawUrl.startsWith('/__void_api/')) {
@@ -1560,7 +1560,7 @@ function voidLocalGatewayPlugin(): Plugin {
 
         res.statusCode = upstream.status;
         res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Content-Type', upstream.headers.get('content-type') || info.mimeType || 'audio/mp4');
+        res.setHeader('Content-Type', upstream.headers.get('content-type') || info?.mimeType || 'audio/mp4');
         res.setHeader('Accept-Ranges', 'bytes');
         const contentLength = upstream.headers.get('content-length');
         if (contentLength) res.setHeader('Content-Length', contentLength);
@@ -2139,6 +2139,11 @@ function voidLocalGatewayPlugin(): Plugin {
     next();
   };
 
+  return handler;
+}
+
+function voidLocalGatewayPlugin(): Plugin {
+  const handler = createVoidGatewayHandler();
   return {
     name: 'void-local-gateway',
     configureServer(server) {

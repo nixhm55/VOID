@@ -969,7 +969,7 @@ async function readFontName(buffer: ArrayBuffer): Promise<string | null> {
   } catch { return null; }
 }
 
-const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string }) {
+const Cover = memo(function Cover({ track, large = false, kind = 'disc', identity, loading }: { track?: any; large?: boolean; kind?: 'disc' | 'list'; identity?: string; loading?: 'eager' | 'lazy' }) {
   const [, setCoverTick] = useState(0);
   useEffect(() => {
     const onCoverLock = () => setCoverTick(t => t + 1);
@@ -1040,6 +1040,7 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
           className="loaded"
           style={{ opacity: 1, transform: fitScale > 1.005 ? `scale(${fitScale})` : undefined }}
           decoding="async"
+          loading={loading}
           onLoad={(e) => {
             if (isValidCoverUrl(finalSrc)) {
               rememberStickyCover(track, finalSrc);
@@ -1071,6 +1072,7 @@ const Cover = memo(function Cover({ track, large = false, kind = 'disc', identit
   a.large === b.large &&
   a.kind === b.kind &&
   a.identity === b.identity &&
+  a.loading === b.loading &&
   a.track?.artwork === b.track?.artwork &&
   a.track?.coverBlob === b.track?.coverBlob &&
   a.track?.image === b.track?.image &&
@@ -1135,14 +1137,104 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </span>
 );
 
-const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [], downloadingIds = [], recentlyDownloadedIds = [], downloadedCount = 0 }: {
-  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number;
+const MOBILE_TRENDING_WINDOW_SIZE = 48;
+const MOBILE_TRENDING_WINDOW_STEP = 12;
+
+const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [], downloadingIds = [], recentlyDownloadedIds = [], downloadedCount = 0, mobileBatchSize, mobileResetKey = '' }: {
+  items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number; mobileBatchSize?: number; mobileResetKey?: string;
 }) {
   void downloadingIds; void recentlyDownloadedIds; void downloadedCount;
+  const [mobileVisibleCount, setMobileVisibleCount] = useState(mobileBatchSize ?? 40);
+  const [mobileWindowStart, setMobileWindowStart] = useState(0);
+  const loadMoreRef = useRef<HTMLTableRowElement>(null);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const mobileRowHeightRef = useRef(70);
+  const mobileListTopRef = useRef(0);
+  const useMobileBatches = mobileBatchSize !== undefined;
+  const itemIds = useMemo(() => items.map(item => item.id), [items]);
+  const loadedItemCount = Math.min(items.length, mobileVisibleCount);
+  const effectiveWindowStart = useMobileBatches
+    ? Math.min(mobileWindowStart, Math.max(0, loadedItemCount - MOBILE_TRENDING_WINDOW_SIZE))
+    : 0;
+  const mobileWindowEnd = Math.min(loadedItemCount, effectiveWindowStart + MOBILE_TRENDING_WINDOW_SIZE);
+  const visibleItems = useMobileBatches
+    ? items.slice(effectiveWindowStart, mobileWindowEnd)
+    : items;
+
+  useLayoutEffect(() => {
+    setMobileVisibleCount(mobileBatchSize ?? 40);
+    setMobileWindowStart(0);
+  }, [mobileBatchSize, mobileResetKey]);
+
+  useLayoutEffect(() => {
+    if (!useMobileBatches) return;
+    const table = tableRef.current;
+    const scroller = table?.closest('.main-area') as HTMLElement | null;
+    if (!table || !scroller) return;
+
+    let frame = 0;
+    const measureRows = () => {
+      const firstRow = table.querySelector<HTMLTableRowElement>('tbody tr[data-virtual-index]');
+      if (!firstRow) return;
+      const rowRect = firstRow.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      if (rowRect.height > 0) mobileRowHeightRef.current = rowRect.height;
+      const rowIndex = Number(firstRow.dataset.virtualIndex) || 0;
+      mobileListTopRef.current = rowRect.top - scrollerRect.top + scroller.scrollTop - rowIndex * mobileRowHeightRef.current;
+    };
+
+    const updateWindow = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const firstVisible = Math.max(0, Math.floor((scroller.scrollTop - mobileListTopRef.current) / mobileRowHeightRef.current));
+        const desiredStart = Math.max(
+          0,
+          Math.floor(firstVisible / MOBILE_TRENDING_WINDOW_STEP) * MOBILE_TRENDING_WINDOW_STEP - MOBILE_TRENDING_WINDOW_STEP,
+        );
+        const maxStart = Math.max(0, loadedItemCount - MOBILE_TRENDING_WINDOW_SIZE);
+        const nextStart = Math.min(desiredStart, maxStart);
+        setMobileWindowStart(current => current === nextStart ? current : nextStart);
+      });
+    };
+
+    measureRows();
+    updateWindow();
+    scroller.addEventListener('scroll', updateWindow, { passive: true });
+    window.addEventListener('resize', measureRows);
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measureRows);
+    resizeObserver?.observe(table);
+
+    return () => {
+      scroller.removeEventListener('scroll', updateWindow);
+      window.removeEventListener('resize', measureRows);
+      resizeObserver?.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [loadedItemCount, useMobileBatches]);
+
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!useMobileBatches || !sentinel || mobileVisibleCount >= items.length || typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        observer.disconnect();
+        setMobileVisibleCount(current => Math.min(items.length, current + (mobileBatchSize ?? 40)));
+      }
+    }, {
+      root: sentinel.closest('.main-area'),
+      rootMargin: '640px 0px',
+      threshold: 0,
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [items.length, mobileBatchSize, mobileVisibleCount, useMobileBatches]);
+
   const isSelectionSupported = ['songs', 'playlists', 'favorites', 'recent', 'queue', 'downloads'].includes(page) && Boolean(toggleSelectAll);
   const isSelectionMode = selectionMode;
   return <div className={`table-wrap${className ? ` ${className}` : ""}`}>
-    <table className="track-table">
+    <table ref={tableRef} className="track-table">
       <thead>
         <tr>
           <th>{showIndex ? ' ' : 'Title'}</th>
@@ -1165,28 +1257,32 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
           </th>
         </tr>
       </thead>
-      <tbody>{items.map((track, index) => {
+      <tbody>
+      {useMobileBatches && effectiveWindowStart > 0 ? (
+        <tr className="track-virtual-spacer" aria-hidden="true" style={{ '--track-virtual-spacer-height': `${effectiveWindowStart * mobileRowHeightRef.current}px` } as CSSProperties}>
+          <td colSpan={5} />
+        </tr>
+      ) : null}
+      {visibleItems.map((track, index) => {
+        const itemIndex = effectiveWindowStart + index;
         const isSelected = selectedIds.includes(track.id);
         // The playing row is the only one that animates: the equalizer is tied to the audio element's
         // real play state, not to the last row that was clicked.
         const current = activeId === track.id;
-        const providerLabel = formatProviderLabel(track.source, track);
-        const qualityBadge = getTrackQualityBadge(track);
+        const qualityBadge = useMobileBatches ? null : getTrackQualityBadge(track);
         // Each row owns its play action: the row's card area (artwork + title) passes THIS track
         // and THIS list into the shared playback path, exactly like the Jump back in tiles do.
-        const playRowTrack = () => actions.play(track, items.map(item => item.id));
-        return (
-          <DgReveal
-            as="tr"
-            dir="row"
-            index={index}
-            key={track.id}
-            className={`dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}${deletingIds.includes(track.id) ? ' download-removing' : ''}`}
-            aria-current={current ? 'true' : undefined}
-            data-testid={`row-track-${track.id}`}
-            onClick={playRowTrack}
-            style={{ cursor: 'pointer' }}
-          >
+        const playRowTrack = () => actions.play(track, itemIds);
+        const rowProps = {
+          className: `dg-row${current ? ' current' : ''}${isSelectionMode ? ' selection-mode' : ''}${deletingIds.includes(track.id) ? ' download-removing' : ''}`,
+          'aria-current': current ? 'true' as const : undefined,
+          'data-testid': `row-track-${track.id}`,
+          'data-virtual-index': useMobileBatches ? itemIndex : undefined,
+          onClick: playRowTrack,
+          style: { cursor: 'pointer' },
+        };
+        const rowContent = (
+          <>
             <td>
               <div style={{ display: 'flex', alignItems: 'center' }}>
                 {isSelectionSupported && toggleSelect && (
@@ -1209,8 +1305,8 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   </div>
                 )}
                 <div className="track-main">
-                  {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{index + 1}</span> : null}
-                  <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} /></div>
+                  {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{itemIndex + 1}</span> : null}
+                  <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} loading={useMobileBatches ? 'lazy' : undefined} /></div>
                   <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
                     <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}>
                       <span className="track-title" title={track.title}>{track.title}</span>
@@ -1247,9 +1343,28 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
               <button className="icon-button" aria-label={track.favorite ? 'Remove favorite' : 'Add favorite'} onClick={event => { event.stopPropagation(); actions.favorite(track); }} data-testid={`button-favorite-${track.id}`}><Heart fill={track.favorite ? 'currentColor' : 'none'} /></button>
               <button className="icon-button" aria-label={`More actions for ${track.title}`} onClick={event => { event.stopPropagation(); actions.menu(track); }} data-testid={`button-track-menu-${track.id}`}><MoreHorizontal /></button>
             </div></td>
-          </DgReveal>
+          </>
         );
-      })}</tbody>
+        return useMobileBatches ? (
+          <tr key={track.id} {...rowProps}>{rowContent}</tr>
+        ) : (
+          <DgReveal as="tr" dir="row" index={index} key={track.id} {...rowProps}>{rowContent}</DgReveal>
+        );
+      })}
+      {useMobileBatches && mobileWindowEnd < loadedItemCount ? (
+        <tr className="track-virtual-spacer" aria-hidden="true" style={{ '--track-virtual-spacer-height': `${(loadedItemCount - mobileWindowEnd) * mobileRowHeightRef.current}px` } as CSSProperties}>
+          <td colSpan={5} />
+        </tr>
+      ) : null}
+      {useMobileBatches && mobileVisibleCount < items.length ? (
+        <tr ref={loadMoreRef} className="track-list-more">
+          <td colSpan={5}>
+            <button type="button" className="crumb" onClick={() => setMobileVisibleCount(current => Math.min(items.length, current + (mobileBatchSize ?? 40)))}>
+              Load more songs
+            </button>
+          </td>
+        </tr>
+      ) : null}</tbody>
     </table>
   </div>;
 });
@@ -3409,8 +3524,8 @@ useEffect(() => {
   }, [activeTrack, closeExpanded, contextTrack, importMenu, modal, paletteOpen, prefs, togglePlay, updatePrefs]);
 
   useEffect(() => {
-    warmUpTrendingCatalog();
-  }, []);
+    if (!isMobileViewport) warmUpTrendingCatalog();
+  }, [isMobileViewport]);
 
   const openTrendingLanguage = useCallback((langId: string | null) => {
     try {
@@ -3598,7 +3713,7 @@ useEffect(() => {
           areSongsFuzzyDuplicates(String(dl?.title ?? dl?.name ?? ''), cleanTitle, String(dl?.artist ?? ''), t.artist || '', false)
       );
       const stickyImg = t.image || getStickyCoverUrl(t) || offline?.image;
-      if (t.image) rememberStickyCover(t, t.image);
+      if (t.image) rememberStickyCover(t, t.image, !isMobileViewport, !isMobileViewport);
       return {
         ...t,
         title: cleanTitle,
@@ -3615,7 +3730,7 @@ useEffect(() => {
     return q
       ? deduped.filter(t => `${t.title} ${t.artist} ${t.album}`.toLowerCase().includes(q))
       : deduped;
-  }, [downloadedTracks, tracks, trendingQuery, trendingTracks]);
+  }, [downloadedTracks, isMobileViewport, tracks, trendingQuery, trendingTracks]);
 
   const backLayerActive = Boolean(
     modal || contextTrack || importMenu || paletteOpen || expanded || mobileFontOpen || detail || activeTrendingLangId || libraryOpen || page !== 'home'
@@ -4141,6 +4256,16 @@ useEffect(() => {
     isDownloadSuccess: track => Boolean(latestActions.current!.isDownloadSuccess?.(track)),
   }), []);
 
+  const trendingRowActions = useMemo(() => ({
+    ...rowActions,
+    play: (track: Track, list: string[]) => {
+      if (activeTrendingLang) {
+        setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
+      }
+      rowActions.play(track, list);
+    },
+  }), [activeTrendingLang, rowActions]);
+
   const [viewHeroPhotoUrl, setViewHeroPhotoUrl] = useState<string | null>(null);
   const [viewHeroAmbient, setViewHeroAmbient] = useState<Hue4 | null>(null);
 
@@ -4522,13 +4647,18 @@ useEffect(() => {
                     activeId={activeId}
                     isPlaying={isPlaying}
                     page={page}
-                    actions={{
+                    actions={isMobileViewport ? trendingRowActions : {
                       ...rowActions,
                       play: (track, list) => {
-                        setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
+                        if (activeTrendingLang) {
+                          setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
+                        }
                         rowActions.play(track, list);
                       },
                     }}
+                    className="trending-track-list"
+                    mobileBatchSize={isMobileViewport ? 40 : undefined}
+                    mobileResetKey={trendingQuery}
                     downloadingIds={downloadingIds}
                     recentlyDownloadedIds={recentlyDownloadedIds}
                     downloadedCount={downloadedTracks.length}

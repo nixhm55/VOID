@@ -16,6 +16,7 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
     if (!enabled || !wrapper || !content) return;
 
     const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const mobileViewport = window.matchMedia('(max-width: 820px)');
     let frame = 0;
 
     const stop = () => {
@@ -26,7 +27,7 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
     };
 
     const start = () => {
-      if (motionPreference.matches || lenisRef.current) return;
+      if (mobileViewport.matches || motionPreference.matches || lenisRef.current) return;
 
       const lenis = new Lenis({
         wrapper,
@@ -47,16 +48,18 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
       frame = window.requestAnimationFrame(raf);
     };
 
-    const onMotionPreferenceChange = () => {
-      if (motionPreference.matches) stop();
+    const syncScrollMode = () => {
+      if (mobileViewport.matches || motionPreference.matches) stop();
       else start();
     };
 
-    motionPreference.addEventListener('change', onMotionPreferenceChange);
-    start();
+    motionPreference.addEventListener('change', syncScrollMode);
+    mobileViewport.addEventListener('change', syncScrollMode);
+    syncScrollMode();
 
     return () => {
-      motionPreference.removeEventListener('change', onMotionPreferenceChange);
+      motionPreference.removeEventListener('change', syncScrollMode);
+      mobileViewport.removeEventListener('change', syncScrollMode);
       stop();
     };
   }, [contentRef, enabled, wrapperRef]);

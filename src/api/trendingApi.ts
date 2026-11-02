@@ -1287,8 +1287,7 @@ export async function prewarmArabicTopStreams(limit = 25): Promise<void> {
 }
 
 /**
- * Pre-warms the Arabic 200-song artwork, top 320kbps JioSaavn streams, and top user languages in the background
- * so opening and playing Trending languages is instantaneous.
+ * Pre-warms catalog data for desktop. Mobile starts this work only after the user opens a Trending category.
  */
 export function warmUpTrendingCatalog(): void {
   if (prewarmStarted) return;

@@ -3,6 +3,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/__void_api/:path*",
+      "destination": "/api/void-api/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

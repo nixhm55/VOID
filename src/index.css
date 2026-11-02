@@ -3344,6 +3344,25 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
 
 /* Mobile uses a quiet black canvas; keep the desktop ambient and glass treatment untouched. */
 @media (max-width: 820px) {
+  .trending-track-list .track-virtual-spacer td {
+    height: var(--track-virtual-spacer-height);
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    transition: none !important;
+  }
+
+  .trending-track-list .track-list-more td {
+    height: 48px;
+    text-align: center;
+  }
+
+  .trending-track-list .track-list-more button {
+    min-height: 40px;
+    padding: 0 16px;
+  }
+
   .void-app {
     --background: 0 0% 0%; --foreground: 0 0% 93%; --surface: 0 0% 4%; --surface-raised: 0 0% 7%;
     --border: 0 0% 14%; --muted: 0 0% 9%; --muted-foreground: 0 0% 62%; --accent: 0 0% 94%; --accent-foreground: 0 0% 6%;

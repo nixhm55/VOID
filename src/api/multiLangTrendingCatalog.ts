@@ -1,9 +1,6 @@
 import { type QualityTier, cleanCanonicalTrackTitle, deduplicateTrackCollection, getPhoneticSongKey } from "./quality";
 import type { TrendingTrackItem } from "./trendingApi";
-import {
-  preloadCoverImage,
-  rememberStickyCover,
-} from "./arabicTrendingCatalog";
+import { rememberStickyCover, shouldPreloadCoverImages } from "./arabicTrendingCatalog";
 import {
   extractCleanYouTubeId,
   searchYouTube,
@@ -571,6 +568,11 @@ export const MULTI_LANG_TOP_40_ARTISTS: Record<string, LanguageCatalogConfig> = 
 const JIOSAAVN_API_BASE = "https://elitejiosaavn-api.vercel.app/api";
 const MULTI_LANG_CACHE_PREFIX = "void-multilang-deep-v8:";
 
+function rememberCatalogCover(track: any, coverUrl: string): void {
+  const preload = shouldPreloadCoverImages();
+  rememberStickyCover(track, coverUrl, preload, preload);
+}
+
 const UNWANTED_TRACK_REGEX =
   /\b(karaoke|instrumental|tribute|in the style of|originally performed by|made famous by|backing track|minus one|without vocals|no vocals|ringtone|8d|16d|slowed|reverb|sped up|nightcore|cover|lofi|lo-fi|mashup|dj\s*mix|piano version|guitar version|violin version|shorts|whatsapp status|ameritz|done again|sunfly|karafun|sing king|party tyme|hit crew|countdown)\b/i;
 
@@ -632,9 +634,12 @@ function extractJioArtistNames(song: any): string[] {
   return names;
 }
 
-async function fetchJioRawSongs(query: string, limit = 30): Promise<any[]> {
+async function fetchJioRawSongs(query: string, limit = 30, externalSignal?: AbortSignal): Promise<any[]> {
   const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), 5500);
+  const onAbort = () => ctrl.abort();
+  if (externalSignal?.aborted) ctrl.abort();
+  else externalSignal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await fetch(
       `${JIOSAAVN_API_BASE}/search/songs?query=${encodeURIComponent(query)}&page=1&limit=${limit}`,
@@ -651,6 +656,7 @@ async function fetchJioRawSongs(query: string, limit = 30): Promise<any[]> {
     return [];
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -697,10 +703,14 @@ interface ItunesCandidate {
 
 async function fetchArtistItunesSongs(
   seed: LanguageArtistSeed,
-  country: string
+  country: string,
+  externalSignal?: AbortSignal
 ): Promise<ItunesCandidate[]> {
   const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), 5000);
+  const onAbort = () => ctrl.abort();
+  if (externalSignal?.aborted) ctrl.abort();
+  else externalSignal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await fetch(
       `/__void_api/itunes-search?term=${encodeURIComponent(
@@ -747,13 +757,15 @@ async function fetchArtistItunesSongs(
     return [];
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", onAbort);
   }
 }
 
 async function deepSearch5SongsForLanguageArtist(
   config: LanguageCatalogConfig,
   seed: LanguageArtistSeed,
-  artistIdx: number
+  artistIdx: number,
+  externalSignal?: AbortSignal
 ): Promise<Omit<TrendingTrackItem, "trendingRank">[]> {
   const allowedLangs = new Set(config.jioLanguages.map((l) => l.toLowerCase()));
   const isRegionalIndianOrGlobal = config.langId !== "english";
@@ -761,10 +773,11 @@ async function deepSearch5SongsForLanguageArtist(
   // 1. Query JioSaavn first, and only query the cached iTunes/Deezer proxy when needed
   const [jioLangRes, jioDirectRes] = await Promise.all([
     isRegionalIndianOrGlobal
-      ? fetchJioRawSongs(`${seed.name} ${config.label}`, 35)
-      : fetchJioRawSongs(seed.name, 35),
-    isRegionalIndianOrGlobal ? fetchJioRawSongs(seed.name, 25) : Promise.resolve([]),
+      ? fetchJioRawSongs(`${seed.name} ${config.label}`, 35, externalSignal)
+      : fetchJioRawSongs(seed.name, 35, externalSignal),
+    isRegionalIndianOrGlobal ? fetchJioRawSongs(seed.name, 25, externalSignal) : Promise.resolve([]),
   ]);
+  if (externalSignal?.aborted) return [];
 
   const needsItunesFallback =
     !isRegionalIndianOrGlobal ||
@@ -773,8 +786,9 @@ async function deepSearch5SongsForLanguageArtist(
     jioLangRes.length + jioDirectRes.length < 5;
 
   const itunesSongs = needsItunesFallback
-    ? await fetchArtistItunesSongs(seed, config.itunesCountry)
+    ? await fetchArtistItunesSongs(seed, config.itunesCountry, externalSignal)
     : [];
+  if (externalSignal?.aborted) return [];
 
   const defaultArtistCover =
     itunesSongs.find((s) => s.artworkUrl600)?.artworkUrl600 || "";
@@ -836,8 +850,7 @@ async function deepSearch5SongsForLanguageArtist(
     const score = seed.basePopularity + (rankBonuses[slotIdx] || 20);
 
     if (coverUrl) {
-      rememberStickyCover({ id: trackId, title: name, artist: seed.name }, coverUrl);
-      preloadCoverImage(coverUrl);
+      rememberCatalogCover({ id: trackId, title: name, artist: seed.name }, coverUrl);
     }
 
     selectedTracks.push({
@@ -878,22 +891,33 @@ async function deepSearch5SongsForLanguageArtist(
       .slice(0, 5 - selectedTracks.length);
 
     if (remainingItunes.length > 0) {
-      const ytSettled = await Promise.allSettled(
-        remainingItunes.map(async (itSong) => {
-          const ytResults = await searchYouTube(
-            `${itSong.trackName} ${seed.name} ${config.label}`
-          );
-          const validYt = ytResults.find((yt) => {
-            const ytId = extractCleanYouTubeId(yt.id || yt.downloadUrl);
-            if (!/^[\w-]{11}$/.test(ytId)) return false;
-            const meta = `${yt.name || ""} ${yt.artist || ""}`;
-            if (UNWANTED_TRACK_REGEX.test(meta)) return false;
-            if (yt.duration > 0 && (yt.duration < 85 || yt.duration > 900)) return false;
-            return true;
-          });
-          return { itSong, validYt };
-        })
-      );
+      const ytSettled: PromiseSettledResult<{
+        itSong: ItunesCandidate;
+        validYt: Awaited<ReturnType<typeof searchYouTube>>[number] | undefined;
+      }>[] = [];
+      const youtubeBatchSize = shouldPreloadCoverImages() ? remainingItunes.length : 2;
+      for (let offset = 0; offset < remainingItunes.length; offset += youtubeBatchSize) {
+        if (externalSignal?.aborted) break;
+        const batch = remainingItunes.slice(offset, offset + youtubeBatchSize);
+        const settled = await Promise.allSettled(
+          batch.map(async (itSong) => {
+            const ytResults = await searchYouTube(
+              `${itSong.trackName} ${seed.name} ${config.label}`,
+              externalSignal
+            );
+            const validYt = ytResults.find((yt) => {
+              const ytId = extractCleanYouTubeId(yt.id || yt.downloadUrl);
+              if (!/^[\w-]{11}$/.test(ytId)) return false;
+              const meta = `${yt.name || ""} ${yt.artist || ""}`;
+              if (UNWANTED_TRACK_REGEX.test(meta)) return false;
+              if (yt.duration > 0 && (yt.duration < 85 || yt.duration > 900)) return false;
+              return true;
+            });
+            return { itSong, validYt };
+          })
+        );
+        ytSettled.push(...settled);
+      }
 
       for (const entry of ytSettled) {
         if (selectedTracks.length >= 5) break;
@@ -912,11 +936,10 @@ async function deepSearch5SongsForLanguageArtist(
           const streamUrl = validYt.downloadUrl || `yt-stream://${ytId}`;
 
           if (coverUrl) {
-            rememberStickyCover(
+            rememberCatalogCover(
               { id: trackId, title: itSong.trackName, artist: seed.name },
               coverUrl
             );
-            preloadCoverImage(coverUrl);
           }
 
           selectedTracks.push({
@@ -948,7 +971,7 @@ async function deepSearch5SongsForLanguageArtist(
     }
 
     if (selectedTracks.length < 5) {
-      const moreYt = await searchYouTube(`${seed.name} ${config.label} hit songs`);
+      const moreYt = await searchYouTube(`${seed.name} ${config.label} hit songs`, externalSignal);
       for (const yt of moreYt) {
         if (selectedTracks.length >= 5) break;
         const ytId = extractCleanYouTubeId(yt.id || yt.downloadUrl);
@@ -965,8 +988,7 @@ async function deepSearch5SongsForLanguageArtist(
         const streamUrl = yt.downloadUrl || `yt-stream://${ytId}`;
 
         if (coverUrl) {
-          rememberStickyCover({ id: trackId, title: yt.name, artist: seed.name }, coverUrl);
-          preloadCoverImage(coverUrl);
+          rememberCatalogCover({ id: trackId, title: yt.name, artist: seed.name }, coverUrl);
         }
 
         selectedTracks.push({
@@ -1005,7 +1027,10 @@ function validYtBitrate(b?: number): number {
 }
 
 const memoryCatalogByLang = new Map<string, TrendingTrackItem[]>();
-const activePromisesByLang = new Map<string, Promise<TrendingTrackItem[]>>();
+const activePromisesByLang = new Map<string, {
+  promise: Promise<TrendingTrackItem[]>;
+  signal?: AbortSignal;
+}>();
 
 export function getCachedMultiLangTop200(langId: string): TrendingTrackItem[] {
   const mem = memoryCatalogByLang.get(langId);
@@ -1026,7 +1051,7 @@ export function getCachedMultiLangTop200(langId: string): TrendingTrackItem[] {
       if (realItems.length > 0) {
         memoryCatalogByLang.set(langId, realItems);
         for (const item of realItems) {
-          if (item?.image) rememberStickyCover(item, item.image);
+          if (item?.image) rememberCatalogCover(item, item.image);
         }
         return realItems;
       }
@@ -1091,8 +1116,10 @@ export async function fetchDeepSearchedMultiLangTop200(
     return cached;
   }
 
-  if (activePromisesByLang.has(langId)) {
-    const existing = await activePromisesByLang.get(langId)!;
+  const requestSignal = shouldPreloadCoverImages() ? undefined : externalSignal;
+  const active = activePromisesByLang.get(langId);
+  if (active && !active.signal?.aborted) {
+    const existing = await active.promise;
     if (!externalSignal?.aborted && onPartial && existing.length > 0) {
       onPartial(existing);
     }
@@ -1114,18 +1141,17 @@ export async function fetchDeepSearchedMultiLangTop200(
       }));
     };
 
-    // High-concurrency batches of 12 artists with immediate per-artist streaming
-    for (let i = 0; i < config.artists.length; i += 12) {
-      const batch = config.artists.slice(i, i + 12);
+    // Desktop keeps its existing concurrency. Phones cap provider fan-out at four artists at a time.
+    const artistBatchSize = shouldPreloadCoverImages() ? 12 : 4;
+    for (let i = 0; i < config.artists.length; i += artistBatchSize) {
+      if (requestSignal?.aborted) break;
+      const batch = config.artists.slice(i, i + artistBatchSize);
       await Promise.allSettled(
         batch.map(async (seed, bIdx) => {
-          const tracks = await deepSearch5SongsForLanguageArtist(config, seed, i + bIdx);
+          const tracks = await deepSearch5SongsForLanguageArtist(config, seed, i + bIdx, requestSignal);
+          if (requestSignal?.aborted) return;
           if (tracks.length > 0) {
             collected.push(...tracks);
-            const snapshot = buildRanked();
-            if (snapshot.length >= 10 && !externalSignal?.aborted && onPartial) {
-              onPartial(snapshot);
-            }
           }
         })
       );
@@ -1137,16 +1163,19 @@ export async function fetchDeepSearchedMultiLangTop200(
     }
 
     const finalRanked = buildRanked();
-    if (finalRanked.length > 0) {
+    if (finalRanked.length > 0 && !requestSignal?.aborted) {
       saveCachedMultiLangTop200(langId, finalRanked);
     }
     return finalRanked;
   })();
 
-  activePromisesByLang.set(langId, task);
+  const activeRequest = { promise: task, signal: requestSignal };
+  activePromisesByLang.set(langId, activeRequest);
   try {
     return await task;
   } finally {
-    activePromisesByLang.delete(langId);
+    if (activePromisesByLang.get(langId) === activeRequest) {
+      activePromisesByLang.delete(langId);
+    }
   }
 }

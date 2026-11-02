@@ -411,6 +411,15 @@ export function preloadCoverImage(url: string): void {
   img.src = url;
 }
 
+export function shouldPreloadCoverImages(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return !window.matchMedia("(max-width: 820px)").matches;
+  } catch {
+    return window.innerWidth > 820;
+  }
+}
+
 export function isCoverUrlLoaded(url?: string | null): boolean {
   if (!url) return false;
   return loadedCoverUrls.has(url);
@@ -761,7 +770,12 @@ function persistStickyCoversDeferred(): void {
   }, 400);
 }
 
-export function rememberStickyCover(track: any, explicitUrl?: string): void {
+export function rememberStickyCover(
+  track: any,
+  explicitUrl?: string,
+  preload = shouldPreloadCoverImages(),
+  notifyListeners = true
+): void {
   hydrateStickyCovers();
   const url = explicitUrl || track?.remoteImage || track?.image;
   if (!isValidCoverUrl(url)) return;
@@ -774,10 +788,10 @@ export function rememberStickyCover(track: any, explicitUrl?: string): void {
       changed = true;
     }
   }
-  preloadCoverImage(cleanUrl);
+  if (preload) preloadCoverImage(cleanUrl);
   if (changed) {
     persistStickyCoversDeferred();
-    stickyCoverListeners.forEach((fn) => fn());
+    if (notifyListeners) stickyCoverListeners.forEach((fn) => fn());
   }
 }
 
@@ -1338,7 +1352,7 @@ async function deepSearch5SongsForArtist(
     if (isValidCoverUrl(coverUrl)) {
       stickyCoverMemoryMap.set(`ar-${artistIdx + 1}-${slotIdx + 1}`, coverUrl);
       stickyCoverMemoryMap.set(trackId, coverUrl);
-      preloadCoverImage(coverUrl);
+      if (shouldPreloadCoverImages()) preloadCoverImage(coverUrl);
     }
 
     selectedTracks.push({
@@ -1413,7 +1427,7 @@ async function deepSearch5SongsForArtist(
         if (isValidCoverUrl(coverUrl)) {
           stickyCoverMemoryMap.set(`ar-${artistIdx + 1}-${slotIdx + 1}`, coverUrl);
           stickyCoverMemoryMap.set(trackId, coverUrl);
-          preloadCoverImage(coverUrl);
+          if (shouldPreloadCoverImages()) preloadCoverImage(coverUrl);
         }
 
         selectedTracks.push({
@@ -1469,7 +1483,7 @@ async function deepSearch5SongsForArtist(
         if (isValidCoverUrl(coverUrl)) {
           stickyCoverMemoryMap.set(`ar-${artistIdx + 1}-${slotIdx + 1}`, coverUrl);
           stickyCoverMemoryMap.set(trackId, coverUrl);
-          preloadCoverImage(coverUrl);
+          if (shouldPreloadCoverImages()) preloadCoverImage(coverUrl);
         }
 
         selectedTracks.push({
