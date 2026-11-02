@@ -15,6 +15,7 @@ import {
   enrichArabicCatalogArtwork,
   fetchDeepSearchedArabicTop200,
   getInstantArabicTop200,
+  isMobileCatalogViewport,
 } from "./arabicTrendingCatalog";
 import {
   MULTI_LANG_TOP_40_ARTISTS,
@@ -81,6 +82,7 @@ export interface TrendingTrackItem {
 const TRENDING_ORDER_STORAGE_KEY = "void-trending-language-order";
 const TRENDING_CACHE_PREFIX = "void-trending-cache-v5:";
 const JIOSAAVN_API_BASE = "https://elitejiosaavn-api.vercel.app/api";
+export const MOBILE_EXCLUDED_TRENDING_LANG_IDS = new Set<string>(["french", "spanish"]);
 
 export const TRENDING_LANGUAGES: readonly TrendingLanguage[] = [
   {
@@ -410,19 +412,26 @@ function writeCachedTrending(langId: string, items: TrendingTrackItem[]): void {
  * opens the list immediately without a loading screen.
  */
 export function getInitialTrendingTracks(langId: string): TrendingTrackItem[] {
+  const isMobile = isMobileCatalogViewport();
+  if (isMobile && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(langId)) {
+    return [];
+  }
   if (langId === "arabic") {
     const instant = getInstantArabicTop200();
-    trendingMemoryCache.set("arabic", instant);
-    return instant;
+    const result = isMobile ? instant.slice(0, 100) : instant;
+    trendingMemoryCache.set("arabic", result);
+    return result;
   }
   if (MULTI_LANG_TOP_40_ARTISTS[langId]) {
     const instantMulti = getInstantMultiLangTop200(langId);
     if (instantMulti.length > 0) {
-      trendingMemoryCache.set(langId, instantMulti);
-      return instantMulti;
+      const result = isMobile ? instantMulti.slice(0, 100) : instantMulti;
+      trendingMemoryCache.set(langId, result);
+      return result;
     }
   }
-  return readCachedTrending(langId) ?? [];
+  const cached = readCachedTrending(langId) ?? [];
+  return isMobile ? cached.slice(0, 100) : cached;
 }
 
 function decodeHtml(input: string): string {
@@ -472,42 +481,53 @@ export async function fetchTrendingTop100(
   externalSignal?: AbortSignal,
   onPartial?: (items: TrendingTrackItem[]) => void
 ): Promise<TrendingTrackItem[]> {
+  const isMobile = isMobileCatalogViewport();
+  if (isMobile && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(langId)) {
+    return [];
+  }
   if (langId === "arabic") {
     const instant = getInstantArabicTop200();
-    if (instant.length > 0 && onPartial) onPartial(instant);
+    const initialSlice = isMobile ? instant.slice(0, 100) : instant;
+    if (initialSlice.length > 0 && onPartial) onPartial(initialSlice);
     const resolved = await fetchDeepSearchedArabicTop200((updated) => {
-      trendingMemoryCache.set("arabic", updated);
+      const next = isMobile ? updated.slice(0, 100) : updated;
+      trendingMemoryCache.set("arabic", next);
       if (!externalSignal?.aborted && onPartial) {
-        onPartial(updated);
+        onPartial(next);
       }
     });
     if (resolved.length > 0) {
-      trendingMemoryCache.set("arabic", resolved);
-      return resolved;
+      const finalArabic = isMobile ? resolved.slice(0, 100) : resolved;
+      trendingMemoryCache.set("arabic", finalArabic);
+      return finalArabic;
     }
-    return instant;
+    return initialSlice;
   }
 
   if (MULTI_LANG_TOP_40_ARTISTS[langId]) {
     const instant = getCachedMultiLangTop200(langId);
-    if (instant.length > 0 && onPartial) onPartial(instant);
+    const initialSlice = isMobile ? instant.slice(0, 100) : instant;
+    if (initialSlice.length > 0 && onPartial) onPartial(initialSlice);
     const resolved = await fetchDeepSearchedMultiLangTop200(langId, externalSignal, (updated) => {
-      trendingMemoryCache.set(langId, updated);
+      const next = isMobile ? updated.slice(0, 100) : updated;
+      trendingMemoryCache.set(langId, next);
       if (!externalSignal?.aborted && onPartial) {
-        onPartial(updated);
+        onPartial(next);
       }
     });
     if (resolved.length > 0) {
-      trendingMemoryCache.set(langId, resolved);
-      return resolved;
+      const finalMulti = isMobile ? resolved.slice(0, 100) : resolved;
+      trendingMemoryCache.set(langId, finalMulti);
+      return finalMulti;
     }
-    return instant;
+    return initialSlice;
   }
 
   const cached = readCachedTrending(langId);
   if (cached && cached.length >= 60) {
-    if (onPartial) onPartial(cached);
-    return cached;
+    const limited = isMobile ? cached.slice(0, 100) : cached;
+    if (onPartial) onPartial(limited);
+    return limited;
   }
 
   const language =
@@ -1271,9 +1291,10 @@ export async function prewarmArabicTopStreams(limit = 25): Promise<void> {
   if (prewarmingArabicStreams) return;
   prewarmingArabicStreams = true;
   try {
+    const effectiveLimit = isMobileCatalogViewport() ? Math.min(limit, 8) : limit;
     const tracks = getInstantArabicTop200();
     const unresolved = tracks
-      .slice(0, limit)
+      .slice(0, effectiveLimit)
       .filter((t) => String(t.audioUrl || "").startsWith("trending-resolve://"));
     for (let i = 0; i < unresolved.length; i += 4) {
       const batch = unresolved.slice(i, i + 4);

@@ -3389,4 +3389,43 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
+
+  /* Mobile Trending category cards: show artist portrait directly instead of generic landmark photos */
+  .trending-lang-card-bg {
+    display: none !important;
+  }
+
+  .trending-lang-card-artist-wrap {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .trending-lang-card-artist.is-loaded,
+  .trending-lang-card-artist-wrap .pg-artist-photo img.is-loaded {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /* Mobile Settings: hide Paper Glass / Design selection */
+  .setting-row:has([data-testid='select-design']) {
+    display: none !important;
+  }
+
+  /* Reduce heavy mobile-only blur filter transitions while keeping smooth opacity & transform motion */
+  .dg-page,
+  .home-content,
+  .content:not(.home-content) > .dg-page,
+  [data-dg-r] {
+    filter: none !important;
+  }
+
+  [data-dg-r] {
+    will-change: transform, opacity;
+    transition-property: opacity, transform;
+  }
+
+  .dg-page--artist-view .artist-hero-banner .cinematic-hero-bg-blur {
+    filter: blur(16px) saturate(1.15) brightness(0.45);
+    transform: scale(1.16);
+  }
 }

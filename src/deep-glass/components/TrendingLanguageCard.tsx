@@ -10,9 +10,11 @@ import {
 export const TrendingLanguageCard = memo(function TrendingLanguageCard({
   lang,
   onSelect,
+  isMobile = false,
 }: {
   lang: TrendingLanguage;
   onSelect: (langId: string) => void;
+  isMobile?: boolean;
 }) {
   const [artistUrl, setArtistUrl] = useState<string | null>(() =>
     getCachedTrendingCardArtistPhoto(lang)
@@ -21,17 +23,18 @@ export const TrendingLanguageCard = memo(function TrendingLanguageCard({
   const [artistRetried, setArtistRetried] = useState(false);
   const [bgIndex, setBgIndex] = useState(0);
   const [wikiBgUrl, setWikiBgUrl] = useState<string | null>(
-    () => trendingCardBgMemCache.get(lang.id) || null
+    () => (isMobile ? null : trendingCardBgMemCache.get(lang.id) || null)
   );
   const [bgLoaded, setBgLoaded] = useState(false);
 
   const bgCandidates = useMemo(() => {
+    if (isMobile) return [];
     const list = [...(lang.bgFallbackUrls || [])];
     if (wikiBgUrl && !list.includes(wikiBgUrl)) list.push(wikiBgUrl);
     return list;
-  }, [lang.bgFallbackUrls, wikiBgUrl]);
+  }, [ isMobile, lang.bgFallbackUrls, wikiBgUrl]);
 
-  const currentBgUrl = bgCandidates[bgIndex] || null;
+  const currentBgUrl = isMobile ? null : (bgCandidates[bgIndex] || null);
 
   useEffect(() => {
     let active = true;
@@ -45,13 +48,15 @@ export const TrendingLanguageCard = memo(function TrendingLanguageCard({
         if (active && url) setArtistUrl(url);
       });
     }
-    resolveTrendingCardWikiBg(lang).then(url => {
-      if (active && url) setWikiBgUrl(url);
-    });
+    if (!isMobile) {
+      resolveTrendingCardWikiBg(lang).then(url => {
+        if (active && url) setWikiBgUrl(url);
+      });
+    }
     return () => {
       active = false;
     };
-  }, [lang]);
+  }, [isMobile, lang]);
 
   return (
     <button
@@ -63,7 +68,7 @@ export const TrendingLanguageCard = memo(function TrendingLanguageCard({
       data-testid={`trending-lang-${lang.id}`}
     >
       <div className="trending-lang-card-bg-wrap" aria-hidden="true">
-        {currentBgUrl && (
+        {!isMobile && currentBgUrl && (
           <img
             src={currentBgUrl}
             alt=""

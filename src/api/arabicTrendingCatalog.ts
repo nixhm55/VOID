@@ -420,6 +420,10 @@ export function shouldPreloadCoverImages(): boolean {
   }
 }
 
+export function isMobileCatalogViewport(): boolean {
+  return !shouldPreloadCoverImages();
+}
+
 export function isCoverUrlLoaded(url?: string | null): boolean {
   if (!url) return false;
   return loadedCoverUrls.has(url);
@@ -1122,7 +1126,8 @@ function writePersistedDeepCatalog(items: TrendingTrackItem[]): void {
  */
 export function getInstantArabicTop200(): TrendingTrackItem[] {
   hydrateStickyCovers();
-  return readPersistedDeepCatalog();
+  const catalog = readPersistedDeepCatalog();
+  return isMobileCatalogViewport() ? catalog.slice(0, 100) : catalog;
 }
 
 interface ItunesCandidate {
@@ -1625,23 +1630,29 @@ export async function fetchDeepSearchedArabicTop200(
   onPartial?: (items: TrendingTrackItem[]) => void
 ): Promise<TrendingTrackItem[]> {
   hydrateStickyCovers();
+  const isMobile = isMobileCatalogViewport();
+  const maxTracks = isMobile ? 100 : 200;
+  const minCachedCount = isMobile ? 90 : 180;
+
   void ensureRank3ElLeilaYaSamraFromJioSaavn(() => {
     const updated = readPersistedDeepCatalog();
     if (updated.length > 0 && onPartial) {
-      onPartial(updated);
+      onPartial(isMobile ? updated.slice(0, maxTracks) : updated);
     }
   });
   const cached = readPersistedDeepCatalog();
-  if (cached.length >= 180) {
+  if (cached.length >= minCachedCount) {
     writePersistedDeepCatalog(cached);
-    if (onPartial) onPartial(cached);
-    return cached;
+    const limited = isMobile ? cached.slice(0, maxTracks) : cached;
+    if (onPartial) onPartial(limited);
+    return limited;
   }
 
   if (activeDeepSearchPromise) {
     const res = await activeDeepSearchPromise;
-    if (onPartial && res.length > 0) onPartial(res);
-    return res;
+    const limited = isMobile ? res.slice(0, maxTracks) : res;
+    if (onPartial && limited.length > 0) onPartial(limited);
+    return limited;
   }
 
   activeDeepSearchPromise = (async () => {
@@ -1653,25 +1664,31 @@ export async function fetchDeepSearchedArabicTop200(
         ...item,
         trendingRank: idx + 1,
       }));
-      return applyRank3ElLeilaYaSamraOverride(ranked);
+      const patched = applyRank3ElLeilaYaSamraOverride(ranked);
+      return isMobile ? patched.slice(0, maxTracks) : patched;
     };
 
-    // Process the 40 artists in fast parallel batches of 10 artists with instant per-artist streaming
-    for (let i = 0; i < TOP_40_ARABIC_ARTISTS.length; i += 10) {
-      const batch = TOP_40_ARABIC_ARTISTS.slice(i, i + 10);
+    const targetArtists = isMobile
+      ? TOP_40_ARABIC_ARTISTS.slice(0, 20)
+      : TOP_40_ARABIC_ARTISTS;
+    const batchSize = isMobile ? 4 : 10;
+
+    for (let i = 0; i < targetArtists.length; i += batchSize) {
+      const batch = targetArtists.slice(i, i + batchSize);
       await Promise.allSettled(
         batch.map(async (seed, bIdx) => {
           const songs = await deepSearch5SongsForArtist(seed, i + bIdx);
           if (songs.length > 0) {
             collected.push(...songs);
             const snapshot = buildRanked();
-            if (snapshot.length >= 10 && onPartial) {
+            if (snapshot.length >= (isMobile ? 5 : 10) && onPartial) {
               onPartial(snapshot);
             }
           }
         })
       );
       persistStickyCoversDeferred();
+      if (isMobile && collected.length >= maxTracks) break;
     }
 
     const finalRanked = buildRanked();
@@ -1683,7 +1700,8 @@ export async function fetchDeepSearchedArabicTop200(
   })();
 
   try {
-    return await activeDeepSearchPromise;
+    const result = await activeDeepSearchPromise;
+    return isMobile ? result.slice(0, maxTracks) : result;
   } finally {
     activeDeepSearchPromise = null;
   }

@@ -11,10 +11,21 @@ export const DESIGN_OPTIONS: ReadonlyArray<{ id: DesignId; label: string }> = [
   { id: 'paper', label: 'Paper Glass' },
 ];
 
+function isMobileDesignViewport(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.matchMedia('(max-width: 820px)').matches;
+  } catch {
+    return window.innerWidth <= 820;
+  }
+}
+
 export const readDesign = (): DesignId => {
+  if (isMobileDesignViewport()) return 'deep';
   try { return localStorage.getItem(DESIGN_STORAGE_KEY) === 'paper' ? 'paper' : 'deep'; } catch { return 'deep'; }
 };
 export const writeDesign = (design: DesignId) => {
+  if (isMobileDesignViewport()) return;
   try { localStorage.setItem(DESIGN_STORAGE_KEY, design); } catch { /* storage unavailable */ }
 };
 

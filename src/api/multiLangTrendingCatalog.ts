@@ -1,6 +1,6 @@
 import { type QualityTier, cleanCanonicalTrackTitle, deduplicateTrackCollection, getPhoneticSongKey } from "./quality";
 import type { TrendingTrackItem } from "./trendingApi";
-import { rememberStickyCover, shouldPreloadCoverImages } from "./arabicTrendingCatalog";
+import { isMobileCatalogViewport, rememberStickyCover, shouldPreloadCoverImages } from "./arabicTrendingCatalog";
 import {
   extractCleanYouTubeId,
   searchYouTube,
@@ -1063,7 +1063,10 @@ export function getCachedMultiLangTop200(langId: string): TrendingTrackItem[] {
 }
 
 export function getInstantMultiLangTop200(langId: string): TrendingTrackItem[] {
-  return getCachedMultiLangTop200(langId);
+  const isMobile = isMobileCatalogViewport();
+  if (isMobile && (langId === "french" || langId === "spanish")) return [];
+  const cached = getCachedMultiLangTop200(langId);
+  return isMobile ? cached.slice(0, 100) : cached;
 }
 
 function saveCachedMultiLangTop200(langId: string, items: TrendingTrackItem[]): void {
@@ -1107,23 +1110,31 @@ export async function fetchDeepSearchedMultiLangTop200(
   externalSignal?: AbortSignal,
   onPartial?: (items: TrendingTrackItem[]) => void
 ): Promise<TrendingTrackItem[]> {
+  const isMobile = isMobileCatalogViewport();
+  if (isMobile && (langId === "french" || langId === "spanish")) return [];
+
   const config = MULTI_LANG_TOP_40_ARTISTS[langId];
   if (!config) return [];
 
+  const maxTracks = isMobile ? 100 : 200;
+  const minCachedCount = isMobile ? 80 : 160;
+
   const cached = getCachedMultiLangTop200(langId);
-  if (cached.length >= 160) {
-    if (onPartial) onPartial(cached);
-    return cached;
+  if (cached.length >= minCachedCount) {
+    const limited = isMobile ? cached.slice(0, maxTracks) : cached;
+    if (onPartial) onPartial(limited);
+    return limited;
   }
 
   const requestSignal = shouldPreloadCoverImages() ? undefined : externalSignal;
   const active = activePromisesByLang.get(langId);
   if (active && !active.signal?.aborted) {
     const existing = await active.promise;
-    if (!externalSignal?.aborted && onPartial && existing.length > 0) {
-      onPartial(existing);
+    const limited = isMobile ? existing.slice(0, maxTracks) : existing;
+    if (!externalSignal?.aborted && onPartial && limited.length > 0) {
+      onPartial(limited);
     }
-    return existing;
+    return limited;
   }
 
   const task = (async () => {
@@ -1135,23 +1146,30 @@ export async function fetchDeepSearchedMultiLangTop200(
         ignoreArtist: false,
         cleanTitles: true,
       });
-      return deduped.map((item, idx) => ({
+      const sliced = isMobile ? deduped.slice(0, maxTracks) : deduped;
+      return sliced.map((item, idx) => ({
         ...item,
         trendingRank: idx + 1,
       }));
     };
 
-    // Desktop keeps its existing concurrency. Phones cap provider fan-out at four artists at a time.
-    const artistBatchSize = shouldPreloadCoverImages() ? 12 : 4;
-    for (let i = 0; i < config.artists.length; i += artistBatchSize) {
+    // Desktop keeps all 40 artists (200 songs) with batch size 12.
+    // Mobile targets top 20 artists (up to 100 songs) with batch size 4 and immediate per-artist streaming.
+    const targetArtists = isMobile ? config.artists.slice(0, 20) : config.artists;
+    const artistBatchSize = isMobile ? 4 : 12;
+    for (let i = 0; i < targetArtists.length; i += artistBatchSize) {
       if (requestSignal?.aborted) break;
-      const batch = config.artists.slice(i, i + artistBatchSize);
+      const batch = targetArtists.slice(i, i + artistBatchSize);
       await Promise.allSettled(
         batch.map(async (seed, bIdx) => {
           const tracks = await deepSearch5SongsForLanguageArtist(config, seed, i + bIdx, requestSignal);
           if (requestSignal?.aborted) return;
           if (tracks.length > 0) {
             collected.push(...tracks);
+            if (isMobile && !externalSignal?.aborted && onPartial) {
+              const partialSnapshot = buildRanked();
+              if (partialSnapshot.length > 0) onPartial(partialSnapshot);
+            }
           }
         })
       );
@@ -1160,6 +1178,7 @@ export async function fetchDeepSearchedMultiLangTop200(
       if (snapshot.length > 0 && !externalSignal?.aborted && onPartial) {
         onPartial(snapshot);
       }
+      if (isMobile && snapshot.length >= maxTracks) break;
     }
 
     const finalRanked = buildRanked();

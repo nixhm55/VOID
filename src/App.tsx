@@ -1,7 +1,7 @@
 import { fetchArtist } from './api/musicApi';
 import { extractCleanYouTubeId, extractYouTubeIdFromTrack, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
 import { searchAllProviders } from './api/unifiedSearch';
-import { fetchTrendingTop100, getInitialTrendingTracks, getOrderedTrendingLanguages, prewarmArabicTopStreams, promoteTrendingLanguage, resolveTrendingTrackStream, warmUpTrendingCatalog, type TrendingLanguage, type TrendingTrackItem } from './api/trendingApi';
+import { fetchTrendingTop100, getInitialTrendingTracks, getOrderedTrendingLanguages, MOBILE_EXCLUDED_TRENDING_LANG_IDS, prewarmArabicTopStreams, promoteTrendingLanguage, resolveTrendingTrackStream, warmUpTrendingCatalog, type TrendingLanguage, type TrendingTrackItem } from './api/trendingApi';
 import { computeAutoFitCoverScale, getCachedCoverScale, getInstantArabicTop200, getStickyCoverUrl, isCoverUrlLoaded, isValidCoverUrl, markCoverUrlLoaded, rememberStickyCover, resolveAndLockTrackCover, resolveArabicYouTubeFallback, stickyCoverListeners } from './api/arabicTrendingCatalog';
 import { resolveUniversalTrackLyrics } from './api/lyricsApi';
 import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery, fetchArtistTop100, getInitialArtistTop100, isCompoundArtistString, isValidArtistAvatarUrl, normalizeArtistIdentityKey, pickCanonicalArtistDisplayName, scoreArtistAvatarUrl, searchCanonicalArtists } from './api/artistCatalogApi';
@@ -780,24 +780,27 @@ async function resolveTrendingCardWikiBg(lang: TrendingLanguage): Promise<string
 const TrendingLanguageCard = memo(function TrendingLanguageCard({
   lang,
   onSelect,
+  isMobile = false,
 }: {
   lang: TrendingLanguage;
   onSelect: (langId: string) => void;
+  isMobile?: boolean;
 }) {
   const [artistUrl, setArtistUrl] = useState<string | null>(() => getCachedTrendingCardArtistPhoto(lang));
   const [artistLoaded, setArtistLoaded] = useState(false);
   const [artistRetried, setArtistRetried] = useState(false);
   const [bgIndex, setBgIndex] = useState(0);
-  const [wikiBgUrl, setWikiBgUrl] = useState<string | null>(() => trendingCardBgMemCache.get(lang.id) || null);
+  const [wikiBgUrl, setWikiBgUrl] = useState<string | null>(() => (isMobile ? null : trendingCardBgMemCache.get(lang.id) || null));
   const [bgLoaded, setBgLoaded] = useState(false);
 
   const bgCandidates = useMemo(() => {
+    if (isMobile) return [];
     const list = [...(lang.bgFallbackUrls || [])];
     if (wikiBgUrl && !list.includes(wikiBgUrl)) list.push(wikiBgUrl);
     return list;
-  }, [lang.bgFallbackUrls, wikiBgUrl]);
+  }, [isMobile, lang.bgFallbackUrls, wikiBgUrl]);
 
-  const currentBgUrl = bgCandidates[bgIndex] || null;
+  const currentBgUrl = isMobile ? null : (bgCandidates[bgIndex] || null);
 
   useEffect(() => {
     let active = true;
@@ -811,13 +814,15 @@ const TrendingLanguageCard = memo(function TrendingLanguageCard({
         if (active && url) setArtistUrl(url);
       });
     }
-    resolveTrendingCardWikiBg(lang).then(url => {
-      if (active && url) setWikiBgUrl(url);
-    });
+    if (!isMobile) {
+      resolveTrendingCardWikiBg(lang).then(url => {
+        if (active && url) setWikiBgUrl(url);
+      });
+    }
     return () => {
       active = false;
     };
-  }, [lang]);
+  }, [isMobile, lang]);
 
   return (
     <button
@@ -829,7 +834,7 @@ const TrendingLanguageCard = memo(function TrendingLanguageCard({
       data-testid={`trending-lang-${lang.id}`}
     >
       <div className="trending-lang-card-bg-wrap" aria-hidden="true">
-        {currentBgUrl && (
+        {!isMobile && currentBgUrl && (
           <img
             src={currentBgUrl}
             alt=""
@@ -1549,23 +1554,44 @@ function App() {
   const [isMobileViewport, setIsMobileViewport] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 820px)').matches);
   const [trendingLanguages, setTrendingLanguages] = useState<TrendingLanguage[]>(() => getOrderedTrendingLanguages());
   const [activeTrendingLangId, setActiveTrendingLangId] = useState<string | null>(() => {
-    try { return sessionStorage.getItem('void-active-trending-lang') || null; } catch { return null; }
+    try {
+      const saved = sessionStorage.getItem('void-active-trending-lang') || null;
+      if (saved && typeof window !== 'undefined' && window.matchMedia('(max-width: 820px)').matches && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(saved)) {
+        return null;
+      }
+      return saved;
+    } catch { return null; }
   });
   const [trendingTracks, setTrendingTracks] = useState<TrendingTrackItem[]>(() => {
     try {
       const saved = sessionStorage.getItem('void-active-trending-lang');
+      if (saved && typeof window !== 'undefined' && window.matchMedia('(max-width: 820px)').matches && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(saved)) {
+        return [];
+      }
       return saved ? getInitialTrendingTracks(saved) : [];
     } catch { return []; }
   });
   const [trendingLoading, setTrendingLoading] = useState(false);
   const [trendingQuery, setTrendingQuery] = useState('');
 
-  const [design, setDesign] = useState<DesignId>(readDesign);
+  const [design, setDesignState] = useState<DesignId>(readDesign);
+  const effectiveDesign: DesignId = isMobileViewport ? 'deep' : design;
+  const setDesign = useCallback((next: DesignId) => {
+    if (isMobileViewport) {
+      setDesignState('deep');
+      return;
+    }
+    setDesignState(next);
+  }, [isMobileViewport]);
 
 useEffect(() => {
+  if (isMobileViewport) {
+    document.documentElement.dataset.design = 'deep';
+    return;
+  }
   writeDesign(design);
   document.documentElement.dataset.design = design;
-}, [design]);
+}, [design, isMobileViewport]);
 
   const toggleSelectSong = (id: string) => {
     setSelectedSongIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
@@ -2435,8 +2461,12 @@ useEffect(() => {
       setAtmos(null);
       return;
     }
-    let alive = true;
     const defaultAmbient: Hue4 = [348, 356, 335, 88]; // Deep Burgundy
+    if (isMobileViewport) {
+      setAtmos(defaultAmbient);
+      return;
+    }
+    let alive = true;
 
     if (activeTrack.image) {
       sampleImageUrlAmbient(activeTrack.image).then(found => {
@@ -2457,7 +2487,7 @@ useEffect(() => {
     return () => {
       alive = false;
     };
-  }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork]);
+  }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork, isMobileViewport]);
 
   useEffect(() => {
     const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -2476,7 +2506,7 @@ useEffect(() => {
       metas.forEach(meta => { meta.content = value; });
     };
     const from = themeTint.current ?? target;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { themeTint.current = target; apply(target); return; }
+    if (dark || isMobileViewport || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { themeTint.current = target; apply(target); return; }
     const start = performance.now();
     let frame = 0;
     const step = (now: number) => {
@@ -2489,7 +2519,7 @@ useEffect(() => {
     };
     frame = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(frame);
-  }, [atmos, prefs.theme]);
+  }, [atmos, isMobileViewport, prefs.theme]);
 
   useEffect(() => {
     let alive = true;
@@ -3528,23 +3558,24 @@ useEffect(() => {
   }, [isMobileViewport]);
 
   const openTrendingLanguage = useCallback((langId: string | null) => {
+    const nextLangId = isMobileViewport && langId && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(langId) ? null : langId;
     try {
-      if (langId) sessionStorage.setItem('void-active-trending-lang', langId);
+      if (nextLangId) sessionStorage.setItem('void-active-trending-lang', nextLangId);
       else sessionStorage.removeItem('void-active-trending-lang');
     } catch {}
-    if (langId) {
-      setTrendingLanguages(promoteTrendingLanguage(langId));
-      const initial = getInitialTrendingTracks(langId);
-      setTrendingTracks(initial);
+    if (nextLangId) {
+      setTrendingLanguages(promoteTrendingLanguage(nextLangId));
+      const initial = getInitialTrendingTracks(nextLangId);
+      setTrendingTracks(isMobileViewport ? initial.slice(0, 100) : initial);
       setTrendingLoading(initial.length === 0);
-      if (langId === 'arabic') void prewarmArabicTopStreams(30);
+      if (nextLangId === 'arabic') void prewarmArabicTopStreams(isMobileViewport ? 8 : 30);
     } else {
       setTrendingTracks([]);
       setTrendingLoading(false);
     }
-    setActiveTrendingLangId(langId);
+    setActiveTrendingLangId(nextLangId);
     setTrendingQuery('');
-  }, []);
+  }, [isMobileViewport]);
 
   useEffect(() => {
     if (!activeTrendingLangId) {
@@ -3552,12 +3583,19 @@ useEffect(() => {
       setTrendingLoading(false);
       return;
     }
+    if (isMobileViewport && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(activeTrendingLangId)) {
+      setActiveTrendingLangId(null);
+      setTrendingTracks([]);
+      setTrendingLoading(false);
+      try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
+      return;
+    }
     if (activeTrendingLangId === 'arabic') {
-      void prewarmArabicTopStreams(30);
+      void prewarmArabicTopStreams(isMobileViewport ? 8 : 30);
     }
     const initial = getInitialTrendingTracks(activeTrendingLangId);
     if (initial.length > 0) {
-      setTrendingTracks(initial);
+      setTrendingTracks(isMobileViewport ? initial.slice(0, 100) : initial);
       setTrendingLoading(false);
     } else {
       setTrendingLoading(true);
@@ -3565,13 +3603,13 @@ useEffect(() => {
     const controller = new AbortController();
     void fetchTrendingTop100(activeTrendingLangId, controller.signal, partialItems => {
       if (!controller.signal.aborted && partialItems.length > 0) {
-        setTrendingTracks(partialItems);
+        setTrendingTracks(isMobileViewport ? partialItems.slice(0, 100) : partialItems);
         setTrendingLoading(false);
       }
     })
       .then(items => {
         if (!controller.signal.aborted) {
-          if (items.length > 0) setTrendingTracks(items);
+          if (items.length > 0) setTrendingTracks(isMobileViewport ? items.slice(0, 100) : items);
           setTrendingLoading(false);
         }
       })
@@ -3581,20 +3619,28 @@ useEffect(() => {
         }
       });
     return () => controller.abort();
-  }, [activeTrendingLangId]);
+  }, [activeTrendingLangId, isMobileViewport]);
 
   const activeTrendingLang = useMemo(
-    () => trendingLanguages.find(l => l.id === activeTrendingLangId) ?? null,
-    [trendingLanguages, activeTrendingLangId]
+    () => {
+      if (isMobileViewport && activeTrendingLangId && MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(activeTrendingLangId)) {
+        return null;
+      }
+      return trendingLanguages.find(l => l.id === activeTrendingLangId) ?? null;
+    },
+    [activeTrendingLangId, isMobileViewport, trendingLanguages]
   );
 
   const displayedTrendingLanguages = useMemo(() => {
+    const baseLanguages = isMobileViewport
+      ? trendingLanguages.filter(l => !MOBILE_EXCLUDED_TRENDING_LANG_IDS.has(l.id))
+      : trendingLanguages;
     const q = trendingQuery.trim().toLowerCase();
-    if (!q) return trendingLanguages;
-    return trendingLanguages.filter(l =>
+    if (!q) return baseLanguages;
+    return baseLanguages.filter(l =>
       `${l.label} ${l.nativeLabel} ${l.region} ${l.subtitle} ${l.artistName || ''}`.toLowerCase().includes(q)
     );
-  }, [trendingLanguages, trendingQuery]);
+  }, [isMobileViewport, trendingLanguages, trendingQuery]);
 
   // Load Artist Top 100 Songs automatically whenever an artist detail view is opened
   useEffect(() => {
@@ -3723,7 +3769,8 @@ useEffect(() => {
         image: stickyImg,
       };
     });
-    const deduped = deduplicateTrackCollection(mapped, { ignoreArtist: false, cleanTitles: true }).map((item, idx) => ({
+    const dedupedAll = deduplicateTrackCollection(mapped, { ignoreArtist: false, cleanTitles: true });
+    const deduped = (isMobileViewport ? dedupedAll.slice(0, 100) : dedupedAll).map((item, idx) => ({
       ...item,
       trendingRank: idx + 1,
     }));
@@ -4017,12 +4064,14 @@ useEffect(() => {
   }, [artistAvatarTick, canonicalTracks, splitArtists]);
 
   useEffect(() => {
-    artistNames.slice(0, 24).forEach(name => {
+    if (isMobileViewport && page !== 'artists') return;
+    const limit = isMobileViewport ? 12 : 24;
+    artistNames.slice(0, limit).forEach(name => {
       if (!getCachedArtistPhoto(name)) {
         void fetchArtistPhoto(name);
       }
     });
-  }, [artistNames]);
+  }, [artistNames, isMobileViewport, page]);
 
   const title = detail?.name ?? ({ home: 'Home', songs: 'Songs', trending: 'Trending', albums: 'Albums', artists: 'Artists', playlists: 'Playlists', favorites: 'Favorites', recent: 'Recently played', queue: 'Queue', downloads: 'Downloads', settings: 'Settings' } as Record<Page, string>)[page];
 
@@ -4590,7 +4639,7 @@ useEffect(() => {
                 <div className="section-heading trending-page-hero-head" style={{ alignItems: 'center', marginBottom: 12, marginTop: 0 }}>
                   <div>
                     <h1 className="page-title" style={{ margin: 0 }}>Trending</h1>
-                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>Top 200 trending songs across languages</p>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{isMobileViewport ? 'Top 100 trending songs across languages' : 'Top 200 trending songs across languages'}</p>
                   </div>
                   <div className="trending-lang-search-wrap" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input
@@ -4609,6 +4658,7 @@ useEffect(() => {
                       <TrendingLanguageCard
                         lang={lang}
                         onSelect={openTrendingLanguage}
+                        isMobile={isMobileViewport}
                       />
                     </DgReveal>
                   ))}
@@ -4629,7 +4679,7 @@ useEffect(() => {
                 <div className="trending-chart-header">
                   <div>
                     <h1 className="page-title" style={{ margin: 0 }}>{activeTrendingLang.label}</h1>
-                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{`Top 200 most trending songs · 40 Top ${activeTrendingLang.id === 'arabic' ? 'Arab' : activeTrendingLang.id === 'english' ? 'Global' : activeTrendingLang.label} Artists`}</p>
+                    <p className="page-subtitle" style={{ margin: '2px 0 0 0' }}>{`${isMobileViewport ? 'Top 100 most trending songs · 20 Top' : 'Top 200 most trending songs · 40 Top'} ${activeTrendingLang.id === 'arabic' ? 'Arab' : activeTrendingLang.id === 'english' ? 'Global' : activeTrendingLang.label} Artists`}</p>
                   </div>
                   <input
                     className="filter-input trending-chart-search"
@@ -4667,6 +4717,11 @@ useEffect(() => {
                   <div className="empty-state">
                     <strong>No matching songs</strong>
                     <p>Try another search term in {activeTrendingLang.label}.</p>
+                  </div>
+                ) : trendingLoading ? (
+                  <div className="empty-state" data-testid="status-trending-loading">
+                    <strong>Loading {activeTrendingLang.label} trending songs…</strong>
+                    <p>Fetching top ranked tracks.</p>
                   </div>
                 ) : null}
               </div>
@@ -5061,6 +5116,7 @@ useEffect(() => {
   </select>
 </div>
 
+{!isMobileViewport && (
 <div className="setting-row">
   <div>
     <strong>Design</strong>
@@ -5077,6 +5133,7 @@ useEffect(() => {
     <option value="paper">Paper Glass</option>
   </select>
 </div>
+)}
 
 <div className="section-heading font-section-heading" style={{ marginTop: 30 }}>
   <h2>Font</h2>
@@ -5860,7 +5917,7 @@ return (
       }}
     />
 
-    {design === 'paper'
+    {!isMobileViewport && effectiveDesign === 'paper'
       ? <Suspense fallback={null}><PaperGlassApp core={core} /></Suspense>
       : renderDeepGlass()}
   </>
