@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createVoidGatewayHandler } from '../../vite.config';
+import { createVoidGatewayHandler } from './_gateway';
 
 const gateway = createVoidGatewayHandler();
 
