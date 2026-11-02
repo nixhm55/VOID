@@ -52,17 +52,17 @@ const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 
   { id: 'queue', label: 'Queue', icon: AudioLines, group: 'collection', compact: false },
   { id: 'downloads', label: 'Downloads', icon: Download, group: 'collection', compact: true },
 ];
-// Mobile bottom bar: five primary destinations. Library is the one hub for the collection views
-// (albums, artists, playlists, recently played, queue) that stay individually routable.
-const mobileNavItems: { id: Page | 'library'; label: string; icon: typeof Home }[] = [
+// Mobile bottom bar: five primary destinations. Search replaces Music in the 2nd slot;
+// Library is the one hub for the collection views (downloads, songs, favorites, albums, artists, playlists, recently played, queue).
+const mobileNavItems: { id: Page | 'library' | 'search'; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'Home', icon: Home },
-  { id: 'songs', label: 'Music', icon: Music2 },
+  { id: 'search', label: 'Search', icon: Search },
   { id: 'trending', label: 'Trending', icon: TrendingUp },
   { id: 'library', label: 'Library', icon: LibraryIcon },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 // Pages that the Library hub owns, so its tab stays lit while browsing inside the collection.
-const LIBRARY_PAGES: Page[] = ['downloads', 'favorites', 'albums', 'artists', 'playlists', 'recent', 'queue'];
+const LIBRARY_PAGES: Page[] = ['downloads', 'songs', 'favorites', 'albums', 'artists', 'playlists', 'recent', 'queue'];
 
 const pathFor = (page: Page) => page === 'home' ? '/' : `/${page}`;
 const formatTime = (seconds: number) => {
@@ -1142,81 +1142,24 @@ const SelectionEmblem = ({ selected }: { selected: boolean }) => (
   </span>
 );
 
-const MOBILE_TRENDING_WINDOW_SIZE = 48;
-const MOBILE_TRENDING_WINDOW_STEP = 12;
-
 const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = false, activeId, isPlaying = false, page, actions, selectedIds = [], toggleSelect, toggleSelectAll, isAllSelected, selectionMode = false, className = "", deletingIds = [], downloadingIds = [], recentlyDownloadedIds = [], downloadedCount = 0, mobileBatchSize, mobileResetKey = '' }: {
   items: Track[]; showIndex?: boolean; reorder?: boolean; activeId: string | null; isPlaying?: boolean; page: Page; actions: RowActions; selectedIds?: string[]; toggleSelect?: (id: string) => void; toggleSelectAll?: () => void; isAllSelected?: boolean; selectionMode?: boolean; className?: string; deletingIds?: string[]; downloadingIds?: string[]; recentlyDownloadedIds?: string[]; downloadedCount?: number; mobileBatchSize?: number; mobileResetKey?: string;
 }) {
   void downloadingIds; void recentlyDownloadedIds; void downloadedCount;
   const [mobileVisibleCount, setMobileVisibleCount] = useState(mobileBatchSize ?? 40);
-  const [mobileWindowStart, setMobileWindowStart] = useState(0);
   const loadMoreRef = useRef<HTMLTableRowElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
-  const mobileRowHeightRef = useRef(70);
-  const mobileListTopRef = useRef(0);
   const useMobileBatches = mobileBatchSize !== undefined;
   const itemIds = useMemo(() => items.map(item => item.id), [items]);
   const loadedItemCount = Math.min(items.length, mobileVisibleCount);
-  const effectiveWindowStart = useMobileBatches
-    ? Math.min(mobileWindowStart, Math.max(0, loadedItemCount - MOBILE_TRENDING_WINDOW_SIZE))
-    : 0;
-  const mobileWindowEnd = Math.min(loadedItemCount, effectiveWindowStart + MOBILE_TRENDING_WINDOW_SIZE);
+  const effectiveWindowStart = 0;
   const visibleItems = useMobileBatches
-    ? items.slice(effectiveWindowStart, mobileWindowEnd)
+    ? items.slice(0, loadedItemCount)
     : items;
 
   useLayoutEffect(() => {
     setMobileVisibleCount(mobileBatchSize ?? 40);
-    setMobileWindowStart(0);
   }, [mobileBatchSize, mobileResetKey]);
-
-  useLayoutEffect(() => {
-    if (!useMobileBatches) return;
-    const table = tableRef.current;
-    const scroller = table?.closest('.main-area') as HTMLElement | null;
-    if (!table || !scroller) return;
-
-    let frame = 0;
-    const measureRows = () => {
-      const firstRow = table.querySelector<HTMLTableRowElement>('tbody tr[data-virtual-index]');
-      if (!firstRow) return;
-      const rowRect = firstRow.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      if (rowRect.height > 0) mobileRowHeightRef.current = rowRect.height;
-      const rowIndex = Number(firstRow.dataset.virtualIndex) || 0;
-      mobileListTopRef.current = rowRect.top - scrollerRect.top + scroller.scrollTop - rowIndex * mobileRowHeightRef.current;
-    };
-
-    const updateWindow = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        const firstVisible = Math.max(0, Math.floor((scroller.scrollTop - mobileListTopRef.current) / mobileRowHeightRef.current));
-        const desiredStart = Math.max(
-          0,
-          Math.floor(firstVisible / MOBILE_TRENDING_WINDOW_STEP) * MOBILE_TRENDING_WINDOW_STEP - MOBILE_TRENDING_WINDOW_STEP,
-        );
-        const maxStart = Math.max(0, loadedItemCount - MOBILE_TRENDING_WINDOW_SIZE);
-        const nextStart = Math.min(desiredStart, maxStart);
-        setMobileWindowStart(current => current === nextStart ? current : nextStart);
-      });
-    };
-
-    measureRows();
-    updateWindow();
-    scroller.addEventListener('scroll', updateWindow, { passive: true });
-    window.addEventListener('resize', measureRows);
-    const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measureRows);
-    resizeObserver?.observe(table);
-
-    return () => {
-      scroller.removeEventListener('scroll', updateWindow);
-      window.removeEventListener('resize', measureRows);
-      resizeObserver?.disconnect();
-      if (frame) window.cancelAnimationFrame(frame);
-    };
-  }, [loadedItemCount, useMobileBatches]);
 
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -1263,11 +1206,6 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
         </tr>
       </thead>
       <tbody>
-      {useMobileBatches && effectiveWindowStart > 0 ? (
-        <tr className="track-virtual-spacer" aria-hidden="true" style={{ '--track-virtual-spacer-height': `${effectiveWindowStart * mobileRowHeightRef.current}px` } as CSSProperties}>
-          <td colSpan={5} />
-        </tr>
-      ) : null}
       {visibleItems.map((track, index) => {
         const itemIndex = effectiveWindowStart + index;
         const isSelected = selectedIds.includes(track.id);
@@ -1310,7 +1248,7 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
                   </div>
                 )}
                 <div className="track-main">
-                  {showIndex ? <span style={{ width: 16, color: 'hsl(var(--muted-foreground))' }}>{itemIndex + 1}</span> : null}
+                  {showIndex ? <span className="track-index-num" style={{ minWidth: 20, width: 20, flexShrink: 0, color: 'hsl(var(--muted-foreground))' }}>{itemIndex + 1}</span> : null}
                   <div style={{ flex: "0 0 44px", width: 44, height: 44 }}><Cover track={track} loading={useMobileBatches ? 'lazy' : undefined} /></div>
                   <div className="track-main" style={{ border: 0, background: 'transparent', padding: 0, textAlign: 'left', minWidth: 0, width: 0, flex: '1 1 0%', overflow: 'hidden' }}>
                     <span style={{ display: 'block', minWidth: 0, width: '100%', overflow: 'hidden' }}>
@@ -1356,14 +1294,9 @@ const TrackRows = memo(function TrackRows({ items, showIndex = false, reorder = 
           <DgReveal as="tr" dir="row" index={index} key={track.id} {...rowProps}>{rowContent}</DgReveal>
         );
       })}
-      {useMobileBatches && mobileWindowEnd < loadedItemCount ? (
-        <tr className="track-virtual-spacer" aria-hidden="true" style={{ '--track-virtual-spacer-height': `${(loadedItemCount - mobileWindowEnd) * mobileRowHeightRef.current}px` } as CSSProperties}>
-          <td colSpan={5} />
-        </tr>
-      ) : null}
       {useMobileBatches && mobileVisibleCount < items.length ? (
         <tr ref={loadMoreRef} className="track-list-more">
-          <td colSpan={5}>
+          <td colSpan={2}>
             <button type="button" className="crumb" onClick={() => setMobileVisibleCount(current => Math.min(items.length, current + (mobileBatchSize ?? 40)))}>
               Load more songs
             </button>
@@ -1822,17 +1755,22 @@ useEffect(() => {
   const [lyricsManualScroll, setLyricsManualScroll] = useState(false);
   const sideLyricsRef = useRef<HTMLDivElement>(null);
 
+  const positionRef = useRef(0);
+
   // Playback time drives the whole app shell, so only publish routine clock ticks
   // when the visible second or a time-sensitive UI boundary actually changes.
+  // On mobile, skip per-second state updates while the expanded player is closed so scrolling never stutters.
   const setPlaybackPosition = useCallback((next: number) => {
     if (!Number.isFinite(next) || next < 0) return;
+    positionRef.current = next;
+    if (isMobileViewport && !expandedRef.current && !closingRef.current) return;
     setPosition(current => {
       const crossedSecond = Math.floor(current) !== Math.floor(next);
       const crossedLyric = activeLyricIndexAt(current, syncedLyrics) !== activeLyricIndexAt(next, syncedLyrics);
       const crossedCanvasEnding = duration > 10 && (duration - current <= 9) !== (duration - next <= 9);
       return crossedSecond || crossedLyric || crossedCanvasEnding ? next : current;
     });
-  }, [duration, syncedLyrics]);
+  }, [duration, isMobileViewport, syncedLyrics]);
   
   const activeLyricIndex = useMemo(() => {
     return activeLyricIndexAt(position, syncedLyrics);
@@ -2490,8 +2428,8 @@ useEffect(() => {
   }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork, isMobileViewport]);
 
   useEffect(() => {
-    const dark = prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    // Force pure obsidian #000000 in dark mode so Android / Samsung S24 Ultra OS navigation bar never turns white or light-tinted
+    const dark = isMobileViewport || prefs.theme === 'dark' || (prefs.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    // Force pure obsidian #000000 on mobile and in dark mode so OS status/navigation bars never show a light gap
     const base: [number, number, number] = dark ? [0, 0, 0] : [246, 244, 239];
     let target = base;
     if (!dark && atmos) {
@@ -2501,6 +2439,7 @@ useEffect(() => {
     }
     const apply = (color: number[]) => {
       const value = dark ? '#000000' : `#${color.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+      document.documentElement.style.backgroundColor = dark ? '#000000' : '#f6f4ef';
       let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
       if (!metas.length) { const meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta); metas = [meta]; }
       metas.forEach(meta => { meta.content = value; });
@@ -3487,6 +3426,13 @@ useEffect(() => {
   const openExpanded = useCallback(() => {
     if (expandedRef.current) return;
     window.clearTimeout(closeTimer.current);
+    const liveTime = ytActiveRef.current && ytAudioPlayerRef.current
+      ? Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? positionRef.current)
+      : (audio.current?.currentTime ?? positionRef.current);
+    if (Number.isFinite(liveTime) && liveTime >= 0) {
+      positionRef.current = liveTime;
+      setPosition(liveTime);
+    }
     const source = document.querySelector<HTMLElement>('.player-track .cover-mini');
     const rect = source?.getBoundingClientRect();
     compactArtOrigin.current = rect && rect.width && rect.height
@@ -3867,7 +3813,7 @@ useEffect(() => {
   // Home hero follows the scroll depth of the main column (same idea as the Paper Glass scroll
   // variable): one rAF write per frame, one custom property, no layout reads.
   useEffect(() => {
-    if (page !== 'home' || detail || libraryOpen) return;
+    if (isMobileViewport || page !== 'home' || detail || libraryOpen) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const scroller = document.querySelector<HTMLElement>('.main-area');
     const target = contentRef.current;
@@ -3882,7 +3828,7 @@ useEffect(() => {
       if (frame) window.cancelAnimationFrame(frame);
       target.style.removeProperty('--dg-sy');
     };
-  }, [detail, libraryOpen, page]);
+  }, [detail, isMobileViewport, libraryOpen, page]);
 
   useEffect(() => () => {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
@@ -4496,6 +4442,7 @@ useEffect(() => {
               <span className="crumb">{page === 'home' ? 'A quiet place for your music' : 'Your library'}</span>
             )}
           </div>
+          {!isMobileViewport && (
           <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
             <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
 
@@ -4531,6 +4478,7 @@ useEffect(() => {
 
             {page !== 'settings' && <button className="icon-button" aria-label="Settings" title="Settings" onClick={() => setPageAndRoute('settings')} data-testid="button-open-settings"><SlidersHorizontal /></button>}
           </div>
+          )}
         </header>
         <section className={`content ${page === 'home' && !detail && !libraryOpen ? 'home-content' : ''}`} ref={contentRef}>
           {storageError ? <div className="empty-state" role="alert" data-testid="status-storage-error"><strong>Local storage unavailable</strong><p>{storageError} Your browser may be in private mode or storage may be disabled. VOID does not upload your music.</p><button className="button" onClick={() => { setStorageError(''); void reload(); }} data-testid="button-retry-storage">Try again</button></div> : null}
@@ -4606,11 +4554,12 @@ useEffect(() => {
             <div className="library-head">
               <div className="eyebrow">Your collection</div>
               <h1 className="page-title">Library</h1>
-              <p className="page-subtitle">{countLabel(albumNames.length, 'album')} · {countLabel(artistNames.length, 'artist')} · {countLabel(playlists.length, 'playlist')}</p>
+              <p className="page-subtitle">{countLabel(canonicalTracks.length, 'song')} · {countLabel(albumNames.length, 'album')} · {countLabel(artistNames.length, 'artist')} · {countLabel(playlists.length, 'playlist')}</p>
             </div>
             <div className="library-grid">
               {([
                 { id: 'downloads' as Page, label: 'Downloads', icon: Download, count: countLabel(downloadedTracks.length, 'download') },
+                { id: 'songs' as Page, label: 'Songs', icon: Music2, count: countLabel(canonicalTracks.length, 'song') },
                 { id: 'favorites' as Page, label: 'Favorites', icon: Heart, count: countLabel(canonicalTracks.filter(track => track.favorite).length, 'song') },
                 { id: 'albums' as Page, label: 'Albums', icon: Disc3, count: countLabel(albumNames.length, 'album') },
                 { id: 'artists' as Page, label: 'Artists', icon: Mic2, count: countLabel(artistNames.length, 'artist') },
@@ -5203,14 +5152,24 @@ useEffect(() => {
       >
         {mobileNavItems.map(item => {
           const Icon = item.icon;
-          const active = item.id === 'library'
-            ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
-            : page === item.id && !detail && !libraryOpen;
+          const active = item.id === 'search'
+            ? paletteOpen
+            : !paletteOpen && (
+                item.id === 'library'
+                  ? (libraryOpen && !detail) || (!detail && LIBRARY_PAGES.includes(page))
+                  : page === item.id && !detail && !libraryOpen
+              );
           return (
             <button
               key={item.id}
               className={`mobile-nav-item ${active ? 'active' : ''}`}
               onClick={() => {
+                if (item.id === 'search') {
+                  setPaletteOpen(true);
+                  setPaletteQuery('');
+                  return;
+                }
+                setPaletteOpen(false);
                 if (item.id === 'library') {
                   setDetail(null);
                   setLibraryOpen(true);
@@ -5225,6 +5184,7 @@ useEffect(() => {
               }}
               aria-label={item.label}
               aria-current={active ? 'page' : undefined}
+              data-testid={`mobile-nav-${item.id}`}
             >
               <Icon />
             </button>
