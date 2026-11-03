@@ -1,0 +1,144 @@
+.soap-bubble-material-scope {
+  position: relative;
+  display: contents;
+}
+
+.soap-bubble-surface,
+.soap-bubble-search {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 46px;
+  padding: 0 12px 0 14px;
+  border-radius: var(--sb-radius, 14px);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: rgba(14, 15, 20, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -1.5px 3px rgba(255, 255, 255, 0.14),
+    0 8px 24px rgba(0, 0, 0, 0.42);
+  -webkit-backdrop-filter: blur(18px) saturate(1.45);
+  backdrop-filter: blur(18px) saturate(1.45);
+  transition:
+    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.22s ease,
+    box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.soap-bubble-search:focus-within {
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    inset 0 -2px 4px rgba(255, 255, 255, 0.2),
+    0 10px 28px rgba(0, 0, 0, 0.52);
+}
+
+.soap-bubble-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
+  display: block;
+}
+
+/* Specular window highlight & thin-film rim backup layer so even if WebGL is throttled, the soap-film optics remain crisp */
+.soap-bubble-optics {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(
+      120% 180% at 14% 8%,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.08) 28%,
+      transparent 56%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.18) 0%,
+      transparent 32%,
+      transparent 74%,
+      rgba(255, 255, 255, 0.12) 100%
+    );
+  box-shadow:
+    inset 0 1.25px 1.5px rgba(255, 255, 255, 0.42),
+    inset 0 -1.25px 2px rgba(255, 255, 255, 0.18);
+}
+
+.soap-bubble-search-icon {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+  color: rgba(255, 255, 255, 0.72);
+  transform: translate3d(var(--sb-icon-x, 0px), var(--sb-icon-y, 0px), 0)
+    scale(var(--sb-icon-scale, 1));
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), color 0.18s ease;
+}
+
+.soap-bubble-search:focus-within .soap-bubble-search-icon {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.soap-bubble-search-input {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 14px !important;
+  font-weight: 450;
+  color: hsl(var(--foreground));
+  outline: none !important;
+}
+
+.soap-bubble-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.soap-bubble-search-addon {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+}
+
+.soap-bubble-button,
+.soap-bubble-icon-button {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--sb-radius, 14px);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  padding: 0.45em 1em;
+}
+
+.soap-bubble-icon-button {
+  width: 2.25em;
+  height: 2.25em;
+  padding: 0;
+  border-radius: 9999px;
+}

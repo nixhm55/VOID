@@ -7,6 +7,7 @@ import { resolveUniversalTrackLyrics } from './api/lyricsApi';
 import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery, fetchArtistTop100, getInitialArtistTop100, isCompoundArtistString, isValidArtistAvatarUrl, normalizeArtistIdentityKey, pickCanonicalArtistDisplayName, scoreArtistAvatarUrl, searchCanonicalArtists } from './api/artistCatalogApi';
 import { areSongsFuzzyDuplicates, cleanCanonicalTrackTitle, deduplicateTrackCollection, detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
 import { QualityBadge } from './components/QualityBadge';
+import { SoapBubbleMaterial, SoapBubbleSearch } from './components/soap-bubble';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
@@ -4629,10 +4630,33 @@ useEffect(() => {
               <div className="eyebrow">Discover</div>
               <h1 className="page-title">Search</h1>
             </div>
-            <div className="mobile-search-bar-wrap">
-              <Search size={17} className="mobile-search-bar-icon" aria-hidden="true" />
-              <input
-                className="palette-input mobile-search-page-input"
+            <SoapBubbleMaterial
+              backdrop={contentRef}
+              iridescence={0.5}
+              oilCoverage={0.73}
+              oilEdgeFade={2.33}
+              clearCenter={0.57}
+              seeThroughBend={0.37}
+              windowLength={1.3}
+              windowMargin={0.85}
+              windowBend={0.75}
+              windowSize={0.75}
+              windowWidth={0.8}
+              windowGradient={0.96}
+              windowHead={0.7}
+              windowTail={0.6}
+              glintSize={1.65}
+              glintIntensity={0}
+              glintDistance={-0.45}
+              glintHeight={0.65}
+              windowIntensity={0.85}
+              windowTwin={false}
+              bottomShadeColor="#ffffff"
+            >
+              <SoapBubbleSearch
+                radius={14}
+                wrapperClassName="mobile-search-bar-wrap"
+                inputClassName="palette-input mobile-search-page-input"
                 placeholder="Search for artists and music…"
                 value={paletteQuery}
                 onChange={event => setPaletteQuery(event.target.value)}
@@ -4645,18 +4669,20 @@ useEffect(() => {
                   }
                 }}
                 data-testid="input-mobile-search-page"
+                rightSlot={
+                  paletteQuery ? (
+                    <button
+                      type="button"
+                      className="icon-button mobile-search-clear-btn"
+                      onClick={() => setPaletteQuery('')}
+                      aria-label="Clear search"
+                    >
+                      <X size={15} />
+                    </button>
+                  ) : null
+                }
               />
-              {paletteQuery && (
-                <button
-                  type="button"
-                  className="icon-button mobile-search-clear-btn"
-                  onClick={() => setPaletteQuery('')}
-                  aria-label="Clear search"
-                >
-                  <X size={15} />
-                </button>
-              )}
-            </div>
+            </SoapBubbleMaterial>
 
             {paletteQuery.trim() && (
               <div className="palette-tabs mobile-search-tabs" role="tablist" aria-label="Search category">

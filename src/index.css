@@ -3640,6 +3640,35 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     background: #040406 !important;
     border: 1px solid rgba(255, 255, 255, 0.06) !important;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+    padding: 18px 16px !important;
+    gap: 14px !important;
+  }
+
+  .void-app .mood-copy {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  /* Keep mood text next to the vinyl CD ("Clear head, open window", etc.) on a single straight line */
+  .void-app .mood-copy h2 {
+    white-space: nowrap !important;
+    text-wrap: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: clamp(14.5px, 4.3vw, 18.5px) !important;
+    letter-spacing: -0.025em !important;
+    line-height: 1.15 !important;
+    margin: 6px 0 10px !important;
+    background-image: linear-gradient(
+      177deg,
+      hsl(var(--foreground) / .98) 0%,
+      hsl(var(--foreground) / .82) 48%,
+      hsl(var(--foreground) / .94) 100%
+    ) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
   }
 
   .void-app .mood-copy .mood-play-btn {
@@ -3649,7 +3678,7 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     color: rgba(255, 255, 255, 0.88) !important;
   }
 
-  /* Dedicated Mobile Search Page (full-page layout instead of floating capsule popup) */
+  /* Dedicated Mobile Search Page (full-page layout with rectangular SoapBubbleMaterial search bar) */
   .mobile-search-page {
     display: flex;
     flex-direction: column;
@@ -3669,15 +3698,8 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     width: 100%;
     height: 46px;
     padding: 0 12px 0 14px;
-    border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.11);
-    background: #08080b;
+    border-radius: 14px !important;
     box-sizing: border-box;
-  }
-
-  .mobile-search-bar-wrap:focus-within {
-    border-color: rgba(255, 255, 255, 0.24);
-    background: #0c0c10;
   }
 
   .mobile-search-bar-icon {
