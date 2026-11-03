@@ -8,10 +8,11 @@ import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery,
 import { areSongsFuzzyDuplicates, cleanCanonicalTrackTitle, deduplicateTrackCollection, detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
 import { QualityBadge } from './components/QualityBadge';
 import { SoapBubbleMaterial, SoapBubbleSearch } from './components/soap-bubble';
+import { LiquidGlassOrb, type LiquidGlassOrbState } from './components/liquid-glass-orb';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
-  Library as LibraryIcon, ListMusic, ListPlus, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
+  Library as LibraryIcon, ListMusic, ListPlus, Mic, Mic2, MoreHorizontal, Music2, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Search,
   Repeat, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TrendingUp, Volume1, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -1609,6 +1610,149 @@ useEffect(() => {
   const [artistViewTab, setArtistViewTab] = useState<'top100' | 'library'>('top100');
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [musicSearching, setMusicSearching] = useState(false);
+  const [voiceOrbOpen, setVoiceOrbOpen] = useState(false);
+  const [voiceOrbState, setVoiceOrbState] = useState<LiquidGlassOrbState>('listening');
+  const voiceAudioLevelRef = useRef<number>(0);
+  const speechRecRef = useRef<any>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micAudioCtxRef = useRef<AudioContext | null>(null);
+  const micRafRef = useRef<number>(0);
+  const voiceFinishTimerRef = useRef<number>(0);
+
+  const getLiveVoiceAudioLevel = useCallback(() => voiceAudioLevelRef.current, []);
+
+  const stopVoiceSearchResources = useCallback(() => {
+    if (voiceFinishTimerRef.current) {
+      window.clearTimeout(voiceFinishTimerRef.current);
+      voiceFinishTimerRef.current = 0;
+    }
+    if (micRafRef.current) {
+      window.cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = 0;
+    }
+    if (speechRecRef.current) {
+      try {
+        speechRecRef.current.onresult = null;
+        speechRecRef.current.onerror = null;
+        speechRecRef.current.onend = null;
+        speechRecRef.current.stop();
+      } catch {}
+      speechRecRef.current = null;
+    }
+    if (micStreamRef.current) {
+      try {
+        micStreamRef.current.getTracks().forEach(t => t.stop());
+      } catch {}
+      micStreamRef.current = null;
+    }
+    if (micAudioCtxRef.current) {
+      try {
+        void micAudioCtxRef.current.close();
+      } catch {}
+      micAudioCtxRef.current = null;
+    }
+    voiceAudioLevelRef.current = 0;
+  }, []);
+
+  const stopVoiceSearch = useCallback(() => {
+    stopVoiceSearchResources();
+    setVoiceOrbOpen(false);
+    setVoiceOrbState('idle');
+  }, [stopVoiceSearchResources]);
+
+  const startVoiceSearch = useCallback(() => {
+    stopVoiceSearchResources();
+    setVoiceOrbOpen(true);
+    setVoiceOrbState('listening');
+
+    // 1. Live Microphone Audio Envelope (0..1) via Web Audio API AnalyserNode
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then(stream => {
+          micStreamRef.current = stream;
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          if (!AudioCtx) return;
+          const ctx = new AudioCtx();
+          micAudioCtxRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.75;
+          source.connect(analyser);
+          const data = new Uint8Array(analyser.frequencyBinCount);
+          const pump = () => {
+            analyser.getByteFrequencyData(data);
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) sum += data[i];
+            const avg = sum / (data.length * 255);
+            voiceAudioLevelRef.current = Math.min(1, avg * 2.8);
+            micRafRef.current = window.requestAnimationFrame(pump);
+          };
+          micRafRef.current = window.requestAnimationFrame(pump);
+        })
+        .catch(() => {
+          // Fallback simulated voice envelope handled by LiquidGlassOrb
+        });
+    }
+
+    // 2. Live Speech-to-Text capture directly into paletteQuery
+    const SpeechRec =
+      typeof window !== 'undefined'
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : null;
+    if (SpeechRec) {
+      try {
+        const rec = new SpeechRec();
+        speechRecRef.current = rec;
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = 'en-US';
+
+        rec.onresult = (event: any) => {
+          let transcript = '';
+          let hasFinal = false;
+          for (let i = 0; i < event.results.length; i++) {
+            const res = event.results[i];
+            transcript += res[0]?.transcript || '';
+            if (res.isFinal) hasFinal = true;
+          }
+          const cleaned = transcript.trim();
+          if (cleaned) {
+            setPaletteQuery(cleaned);
+            setVoiceOrbState('listening');
+            if (voiceFinishTimerRef.current) {
+              window.clearTimeout(voiceFinishTimerRef.current);
+            }
+            voiceFinishTimerRef.current = window.setTimeout(() => {
+              setVoiceOrbState('searching');
+              window.setTimeout(() => {
+                setVoiceOrbState('success');
+                window.setTimeout(() => {
+                  stopVoiceSearchResources();
+                  setVoiceOrbOpen(false);
+                }, 550);
+              }, 850);
+            }, hasFinal ? 1100 : 1800);
+          }
+        };
+
+        rec.onerror = () => {
+          // Keep orb open so user can still see animation or speak/type
+        };
+
+        rec.start();
+      } catch {}
+    }
+  }, [stopVoiceSearchResources]);
+
+  const toggleVoiceSearch = useCallback(() => {
+    if (voiceOrbOpen) {
+      stopVoiceSearch();
+    } else {
+      startVoiceSearch();
+    }
+  }, [startVoiceSearch, stopVoiceSearch, voiceOrbOpen]);
 
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
@@ -1640,8 +1784,9 @@ useEffect(() => {
     } else {
       setHistoryExpanded(false);
       setPaletteTab('songs');
+      stopVoiceSearch();
     }
-  }, [paletteOpen, searchOpen]);
+  }, [paletteOpen, searchOpen, stopVoiceSearch]);
 
   useEffect(() => {
     const q = paletteQuery.trim();
@@ -4496,7 +4641,40 @@ useEffect(() => {
           </div>
           {!isMobileViewport && (
           <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button className="search-trigger" onClick={() => { setPaletteOpen(true); setPaletteQuery(''); }} aria-label="Search your library" data-testid="button-open-search"><Search size={14} /><span>Search library</span><kbd>⌘ K</kbd></button>
+            <div
+              className="search-trigger"
+              role="button"
+              tabIndex={0}
+              onClick={() => { stopVoiceSearch(); setPaletteOpen(true); setPaletteQuery(''); }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  stopVoiceSearch();
+                  setPaletteOpen(true);
+                  setPaletteQuery('');
+                }
+              }}
+              aria-label="Search your library"
+              data-testid="button-open-search"
+            >
+              <Search size={14} />
+              <span>Search library</span>
+              <button
+                type="button"
+                className="search-trigger-mic-btn"
+                onClick={event => {
+                  event.stopPropagation();
+                  setPaletteQuery('');
+                  setPaletteOpen(true);
+                  startVoiceSearch();
+                }}
+                aria-label="Voice search"
+                title="Voice search"
+                data-testid="button-topbar-voice-search"
+              >
+                <Mic size={13.5} strokeWidth={1.8} />
+              </button>
+            </div>
 
             {/* Phones get the compact add action beside search; the desktop button below stays as it is. */}
             <button className="icon-button mobile-add-music" onClick={openImport} disabled={importing} aria-label="Add music" title="Add music" data-testid="button-add-music-compact"><Plus /></button>
@@ -4670,16 +4848,28 @@ useEffect(() => {
                 }}
                 data-testid="input-mobile-search-page"
                 rightSlot={
-                  paletteQuery ? (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    {paletteQuery && (
+                      <button
+                        type="button"
+                        className="icon-button mobile-search-clear-btn"
+                        onClick={() => setPaletteQuery('')}
+                        aria-label="Clear search"
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
                     <button
                       type="button"
-                      className="icon-button mobile-search-clear-btn"
-                      onClick={() => setPaletteQuery('')}
-                      aria-label="Clear search"
+                      className={`icon-button palette-mic-btn${voiceOrbOpen ? ' is-active' : ''}`}
+                      onClick={() => toggleVoiceSearch()}
+                      aria-label={voiceOrbOpen ? 'Stop voice search' : 'Start voice search'}
+                      title={voiceOrbOpen ? 'Stop voice search' : 'Voice search'}
+                      data-testid="button-mobile-voice-search"
                     >
-                      <X size={15} />
+                      <Mic size={15} strokeWidth={1.8} />
                     </button>
-                  ) : null
+                  </div>
                 }
               />
             </SoapBubbleMaterial>
@@ -4707,7 +4897,50 @@ useEffect(() => {
               </div>
             )}
 
-            <div className="mobile-search-results">
+            <div className={`mobile-search-results${voiceOrbOpen ? ' is-voice-orb-open' : ''}`}>
+              {voiceOrbOpen ? (
+                <div className="palette-voice-orb-stage" onClick={() => stopVoiceSearch()}>
+                  <LiquidGlassOrb
+                    baseColor="#ffffff"
+                    colorA="#000000"
+                    colorB="#4d4d4d"
+                    colorC="#a9a9a9"
+                    seed={145}
+                    startTime={18}
+                    speed={1.5}
+                    distortion={0.8}
+                    clusterCount={7.2}
+                    clusterIntensity={3}
+                    clusterSize={22.5}
+                    scale={0.23}
+                    spotSize={1.15}
+                    rotation={0}
+                    softness={0.31}
+                    relief={2.94}
+                    refraction={0.65}
+                    roughness={0}
+                    reflection={1.3}
+                    caustics={0}
+                    dispersion={1}
+                    colorDistribution={0}
+                    grain={0.3}
+                    grainSize={1}
+                    paused={false}
+                    animateDistortion={true}
+                    grainMode="fine"
+                    flowType="drift"
+                    state={voiceOrbState}
+                    thinkingAnimation="ripples"
+                    searchingAnimation="lens"
+                    preserveWhites={true}
+                    animateEntrance={true}
+                    size={250}
+                    audioLevel={0.55}
+                    getAudioLevel={getLiveVoiceAudioLevel}
+                  />
+                </div>
+              ) : (
+                <>
               {paletteTab === 'songs' && allSearchResults.map(track => {
                 const localQuality = getTrackQualityBadge(track);
                 return (
@@ -4934,6 +5167,8 @@ useEffect(() => {
                 <div className="crumb" style={{ padding: '14px 4px' }}>
                   Search your local songs and connected music providers.
                 </div>
+              )}
+                </>
               )}
             </div>
           </div>}
@@ -5647,26 +5882,42 @@ useEffect(() => {
       <button className="import-option" onClick={() => { setImportMenu(false); fileInput.current?.click(); }} data-testid="button-add-from-files"><span className="import-icon"><FileAudio /></span><span className="import-copy"><strong>Add from Files</strong><span>Pick individual songs from your Mac.</span></span></button>
       <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
     </div></div>}
-    {paletteOpen && !isMobileViewport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPaletteOpen(false); }}>
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Search your library">
-        <input
-          autoFocus
-          className="palette-input"
-          placeholder="Search for artists and music…"
-          value={paletteQuery}
-          onChange={event => setPaletteQuery(event.target.value)}
-          onKeyDown={event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            event.stopPropagation();
-            if (paletteQuery.trim()) {
-              handleSaveHistory(paletteQuery);
-            }
-          }}
-          data-testid="input-search-palette"
-        />
+    {paletteOpen && !isMobileViewport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) { stopVoiceSearch(); setPaletteOpen(false); } }}>
+      <div className={`palette${voiceOrbOpen ? ' is-voice-orb-open' : ''}`} role="dialog" aria-modal="true" aria-label="Search your library">
+        <div className="palette-input-row">
+          <input
+            autoFocus
+            className="palette-input"
+            placeholder="Search for artists and music…"
+            value={paletteQuery}
+            onChange={event => setPaletteQuery(event.target.value)}
+            onKeyDown={event => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (voiceOrbOpen) stopVoiceSearch();
+              if (paletteQuery.trim()) {
+                handleSaveHistory(paletteQuery);
+              }
+            }}
+            data-testid="input-search-palette"
+          />
+          <button
+            type="button"
+            className={`icon-button palette-mic-btn${voiceOrbOpen ? ' is-active' : ''}`}
+            onClick={event => {
+              event.stopPropagation();
+              toggleVoiceSearch();
+            }}
+            aria-label={voiceOrbOpen ? 'Stop voice search' : 'Voice search'}
+            title={voiceOrbOpen ? 'Stop voice search' : 'Voice search'}
+            data-testid="button-palette-voice-search"
+          >
+            <Mic size={15} strokeWidth={1.8} />
+          </button>
+        </div>
 
-        {paletteQuery.trim() && (
+        {!voiceOrbOpen && paletteQuery.trim() && (
           <div className="palette-tabs" role="tablist" aria-label="Search category">
             <button
               type="button"
@@ -5689,8 +5940,54 @@ useEffect(() => {
           </div>
         )}
 
-        <div className="palette-results">
-
+        <div className={`palette-results${voiceOrbOpen ? ' is-voice-orb-open' : ''}`}>
+          {voiceOrbOpen ? (
+            <div
+              className="palette-voice-orb-stage"
+              onClick={() => stopVoiceSearch()}
+              title="Click to finish voice search"
+            >
+              <LiquidGlassOrb
+                baseColor="#ffffff"
+                colorA="#000000"
+                colorB="#4d4d4d"
+                colorC="#a9a9a9"
+                seed={145}
+                startTime={18}
+                speed={1.5}
+                distortion={0.8}
+                clusterCount={7.2}
+                clusterIntensity={3}
+                clusterSize={22.5}
+                scale={0.23}
+                spotSize={1.15}
+                rotation={0}
+                softness={0.31}
+                relief={2.94}
+                refraction={0.65}
+                roughness={0}
+                reflection={1.3}
+                caustics={0}
+                dispersion={1}
+                colorDistribution={0}
+                grain={0.3}
+                grainSize={1}
+                paused={false}
+                animateDistortion={true}
+                grainMode="fine"
+                flowType="drift"
+                state={voiceOrbState}
+                thinkingAnimation="ripples"
+                searchingAnimation="lens"
+                preserveWhites={true}
+                animateEntrance={true}
+                size={250}
+                audioLevel={0.55}
+                getAudioLevel={getLiveVoiceAudioLevel}
+              />
+            </div>
+          ) : (
+            <>
           {paletteTab === 'songs' && allSearchResults.map(track => {
             const localQuality = getTrackQualityBadge(track);
             return (
@@ -5934,8 +6231,8 @@ useEffect(() => {
               Search your local songs and connected music providers.
             </div>
           )}
-
-
+            </>
+          )}
         </div>
       </div>
     </div>}
