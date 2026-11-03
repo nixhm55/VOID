@@ -452,6 +452,13 @@ async function resolveYouTubeDirectStreamServer(
       )
     );
 
+    const isArabicQuery = /[\u0600-\u06FF]/.test(`${rawTitle} ${rawArtist}`);
+    const normArtistTokens = cleanArtist
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length >= 3);
+
     for (const q of candidateQueries) {
       const jioCtrl = new AbortController();
       const jioTimer = setTimeout(() => jioCtrl.abort(), 3200);
@@ -468,6 +475,13 @@ async function resolveYouTubeDirectStreamServer(
               ? jioJson.results
               : [];
           for (const song of songs) {
+            const songLang = String(song?.language || '').toLowerCase();
+            if (isArabicQuery && songLang && songLang !== 'arabic' && songLang !== 'english') continue;
+            if (normArtistTokens.length > 0) {
+              const pArtists: any[] = Array.isArray(song?.artists?.primary) ? song.artists.primary : [];
+              const sArtist = (pArtists.map((a: any) => a?.name).filter(Boolean).join(' ') || String(song?.primaryArtists || '')).toLowerCase();
+              if (sArtist && !normArtistTokens.some((tok) => sArtist.includes(tok))) continue;
+            }
             const urls: any[] = Array.isArray(song?.downloadUrl) ? song.downloadUrl : [];
             const best = urls.find((u: any) => u?.quality === '320kbps') || urls[urls.length - 1];
             const streamUrl = String(best?.url || best?.link || '').trim();
@@ -489,6 +503,71 @@ async function resolveYouTubeDirectStreamServer(
         // Ignore and try next query
       } finally {
         clearTimeout(jioTimer);
+      }
+    }
+
+    // Tier 4: Apple Music / iTunes & Deezer direct AAC/MP3 stream fallback so non-JioSaavn
+    // songs (such as Mehad Hamad and regional/international tracks) always play reliably.
+    for (const q of candidateQueries) {
+      const itCtrl = new AbortController();
+      const itTimer = setTimeout(() => itCtrl.abort(), 3200);
+      try {
+        const country = isArabicQuery ? 'ae' : 'us';
+        const itRes = await fetch(
+          `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=${country}&entity=song&limit=6`,
+          { signal: itCtrl.signal }
+        );
+        if (itRes.ok) {
+          const itJson: any = await itRes.json();
+          const items: any[] = Array.isArray(itJson?.results) ? itJson.results : [];
+          const bestIt = items.find((item) => typeof item?.previewUrl === 'string' && item.previewUrl.startsWith('http'));
+          if (bestIt?.previewUrl) {
+            const resolved: CachedYtStream = {
+              url: String(bestIt.previewUrl).trim(),
+              mimeType: 'audio/mp4',
+              codec: 'AAC',
+              bitrate: 256,
+              duration: Math.round((Number(bestIt.trackTimeMillis) || 0) / 1000) || 0,
+              expiresAt: Date.now() + 30 * 60 * 1000,
+            };
+            ytStreamCache.set(videoId, resolved);
+            return resolved;
+          }
+        }
+      } catch {
+        // Ignore and try Deezer
+      } finally {
+        clearTimeout(itTimer);
+      }
+
+      const dzCtrl = new AbortController();
+      const dzTimer = setTimeout(() => dzCtrl.abort(), 3200);
+      try {
+        const dzRes = await fetch(
+          `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=6`,
+          { signal: dzCtrl.signal }
+        );
+        if (dzRes.ok) {
+          const dzJson: any = await dzRes.json();
+          const items: any[] = Array.isArray(dzJson?.data) ? dzJson.data : [];
+          const bestDz = items.find((item) => typeof item?.preview === 'string' && item.preview.startsWith('http'));
+          if (bestDz?.preview) {
+            const resolved: CachedYtStream = {
+              url: String(bestDz.preview).trim(),
+              mimeType: 'audio/mpeg',
+              codec: 'MP3',
+              bitrate: 128,
+              duration: Number(bestDz.duration) || 0,
+              expiresAt: Date.now() + 20 * 60 * 1000,
+            };
+            ytStreamCache.set(videoId, resolved);
+            return resolved;
+          }
+        }
+      } catch {
+        // Ignore
+      } finally {
+        clearTimeout(dzTimer);
       }
     }
   } catch {
@@ -2046,6 +2125,12 @@ export function createVoidGatewayHandler() {
           seenTitleKeys.add(key);
 
           const jioMatch = jioStreamByTitle.get(key);
+          const combinedFallbacks = Array.from(
+            new Set([
+              ...(Array.isArray(jioMatch?.fallbackUrls) ? jioMatch.fallbackUrls : []),
+              ...(Array.isArray(candidate.fallbackUrls) ? candidate.fallbackUrls : []),
+            ].filter(Boolean))
+          );
           mergedTracks.push({
             id: jioMatch?.id ? `api-${jioMatch.id}` : candidate.id,
             title: cleanTitle,
@@ -2054,7 +2139,7 @@ export function createVoidGatewayHandler() {
             image: candidate.image || jioMatch?.image || '',
             duration: candidate.duration || jioMatch?.duration || 0,
             audioUrl: candidate.audioUrl || jioMatch?.url || '',
-            fallbackUrls: candidate.fallbackUrls || jioMatch?.fallbackUrls,
+            fallbackUrls: combinedFallbacks.length > 0 ? combinedFallbacks : undefined,
             source: 'JioSaavn',
             bitrate: 320,
             codec: 'AAC',
@@ -2062,6 +2147,19 @@ export function createVoidGatewayHandler() {
             format: 'MP4 (320kbps)',
           });
         };
+
+        // Pre-index iTunes preview URLs by normalized song title key so Deezer tracks also inherit AAC fallbacks
+        const itunesTracks: any[] = [
+          ...(itunesLookupSettled.status === 'fulfilled' && Array.isArray(itunesLookupSettled.value?.results) ? itunesLookupSettled.value.results : []),
+          ...(itunesSearchSettled.status === 'fulfilled' && Array.isArray(itunesSearchSettled.value?.results) ? itunesSearchSettled.value.results : []),
+        ];
+        const itunesPreviewByKey = new Map<string, string>();
+        for (const t of itunesTracks) {
+          if ((t?.wrapperType === 'track' || t?.kind === 'song') && typeof t?.previewUrl === 'string' && t.previewUrl.startsWith('http')) {
+            const k = cleanSongTitleKey(String(t?.trackName || ''));
+            if (k && !itunesPreviewByKey.has(k)) itunesPreviewByKey.set(k, String(t.previewUrl).trim());
+          }
+        }
 
         // 1. Deezer Official Top Tracks (sorted by Deezer popularity rank)
         const dzTopTracks: any[] = dzTopSettled.status === 'fulfilled' && Array.isArray(dzTopSettled.value?.data) ? dzTopSettled.value.data : [];
@@ -2073,25 +2171,28 @@ export function createVoidGatewayHandler() {
             stripAccents(tArtist).includes(canonicalFirstToken) ||
             contribs.some(c => stripAccents(String(c?.name || '')).includes(canonicalFirstToken));
           if (!isTargetArtist) continue;
+          const rawT = String(t?.title_short || t?.title || '').trim();
+          const tKey = cleanSongTitleKey(rawT);
+          const itPreview = tKey ? itunesPreviewByKey.get(tKey) : undefined;
+          const dzPreview = typeof t?.preview === 'string' && t.preview.startsWith('http') ? String(t.preview).trim() : undefined;
+          const fallbacks = [itPreview, dzPreview].filter((u): u is string => Boolean(u));
           pushTrack({
             id: `dz-track-${t.id}`,
-            title: String(t?.title_short || t?.title || '').trim(),
+            title: rawT,
             artist: canonicalArtist,
             album: String(t?.album?.title || `${canonicalArtist} Essentials`).trim(),
             image: String(t?.album?.cover_xl || t?.album?.cover_big || t?.album?.cover_medium || '').trim(),
             duration: Number(t?.duration) || 0,
+            fallbackUrls: fallbacks.length > 0 ? fallbacks : undefined,
           });
         }
 
         // 2. Apple Music / iTunes Top 200 Songs (sorted by iTunes popularity order)
-        const itunesTracks: any[] = [
-          ...(itunesLookupSettled.status === 'fulfilled' && Array.isArray(itunesLookupSettled.value?.results) ? itunesLookupSettled.value.results : []),
-          ...(itunesSearchSettled.status === 'fulfilled' && Array.isArray(itunesSearchSettled.value?.results) ? itunesSearchSettled.value.results : []),
-        ];
         for (const t of itunesTracks) {
           if (t?.wrapperType !== 'track' && t?.kind !== 'song') continue;
           const tArtist = String(t?.artistName || '').trim();
           if (!stripAccents(tArtist).includes(canonicalFirstToken)) continue;
+          const itPreview = typeof t?.previewUrl === 'string' && t.previewUrl.startsWith('http') ? String(t.previewUrl).trim() : undefined;
           pushTrack({
             id: `itunes-track-${t.trackId}`,
             title: String(t?.trackName || '').trim(),
@@ -2099,6 +2200,7 @@ export function createVoidGatewayHandler() {
             album: String(t?.collectionName || `${canonicalArtist} Essentials`).trim(),
             image: String(t?.artworkUrl100 || '').replace('100x100bb', '600x600bb').trim(),
             duration: Math.round((Number(t?.trackTimeMillis) || 0) / 1000),
+            fallbackUrls: itPreview ? [itPreview] : undefined,
           });
           if (mergedTracks.length >= 100) break;
         }

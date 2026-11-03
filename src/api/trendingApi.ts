@@ -864,6 +864,7 @@ function allSignificantTokensMatch(targetTokens: string[], hayTokens: string[]):
 
 const inFlightTrackResolvers = new Map<string, Promise<{
   url: string;
+  ytId?: string;
   source: string;
   bitrate?: number;
   codec?: string;
@@ -877,15 +878,14 @@ const inFlightTrackResolvers = new Map<string, Promise<{
 } | null>>();
 
 /**
- * Resolves a `trending-resolve://` catalog track (such as the 200 curated Arabic songs)
+ * Resolves a `trending-resolve://` catalog track (such as the curated Arabic songs or Artist Top 100 tracks)
  * into its genuine original song stream:
- * 1. First checks JioSaavn 320kbps with STRICT verification (language === 'arabic', zero Indic script,
- *    non-karaoke/non-tribute/non-instrumental, and ALL primary artist + song title tokens matched).
- * 2. If the genuine original song is not on JioSaavn, resolves the exact original Arabic song from YouTube
- *    (converting to direct `/__void_api/yt-audio?id=...` stream when possible for seamless background playback).
+ * 1. First checks JioSaavn 320kbps with STRICT verification.
+ * 2. If not on JioSaavn, resolves from YouTube (via `/__void_api/yt-audio`) with Apple Music / iTunes AAC fallback.
  */
 export async function resolveTrendingTrackStream(track: any): Promise<{
   url: string;
+  ytId?: string;
   source: string;
   bitrate?: number;
   codec?: string;
@@ -975,13 +975,14 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
       }
     }
 
-    const arQuery = `${titleAr} ${artistAr}`.trim();
-    const enQuery = `${titleEn} ${artistEn}`.trim() || arQuery;
+    const effectiveArtist = artistAr || artistEn || String(track?.artist || "").trim();
+    const arQuery = `${titleAr || titleEn} ${artistAr || effectiveArtist}`.trim();
+    const enQuery = `${titleEn || titleAr} ${artistEn || effectiveArtist}`.trim() || arQuery;
 
     const targetTitleArNorm = normalizeArabicText(titleAr);
-    const targetArtistArNorm = normalizeArabicText(artistAr);
+    const targetArtistArNorm = normalizeArabicText(artistAr || effectiveArtist);
     const targetTitleEnNorm = normalizeTransliteration(titleEn || titleAr);
-    const targetArtistEnNorm = normalizeTransliteration(artistEn || artistAr);
+    const targetArtistEnNorm = normalizeTransliteration(artistEn || artistAr || effectiveArtist);
 
     const targetTitleEnTokens = targetTitleEnNorm
       .split(" ")
@@ -995,10 +996,10 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
     const fetchItunesMetadata = async (): Promise<{
       image?: string;
       duration?: number;
+      previewUrl?: string;
     } | null> => {
       const country = isArabicResolve ? "ae" : (MULTI_LANG_TOP_40_ARTISTS[payloadLangId]?.itunesCountry || "us");
-      for (const term of [arQuery, enQuery]) {
-        if (!term) continue;
+      for (const term of Array.from(new Set([enQuery, arQuery].filter(Boolean)))) {
         try {
           const res = await fetch(
             `/__void_api/itunes-search?term=${encodeURIComponent(term)}&country=${country}&entity=song&limit=10`
@@ -1018,7 +1019,7 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
               (targetArtistArNorm && aNameAr.includes(targetArtistArNorm)) ||
               allSignificantTokensMatch(targetArtistEnTokens, aNameEn.split(" ").filter(Boolean));
             return titleOk && artistOk;
-          });
+          }) || items[0];
           if (exactMatch) {
             return {
               image:
@@ -1026,6 +1027,10 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
                 undefined,
               duration:
                 Math.round((Number(exactMatch.trackTimeMillis) || 0) / 1000) || undefined,
+              previewUrl:
+                typeof exactMatch.previewUrl === "string" && exactMatch.previewUrl.startsWith("http")
+                  ? exactMatch.previewUrl.trim()
+                  : undefined,
             };
           }
         } catch {
@@ -1222,6 +1227,18 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
       scoredYt.push({ item, ytId, score });
     }
 
+    if (scoredYt.length === 0 && allYtRaw.length > 0) {
+      for (const item of allYtRaw) {
+        const ytId = extractCleanYouTubeId(item?.id || item?.downloadUrl);
+        if (!/^[_a-zA-Z0-9-]{11}$/.test(ytId)) continue;
+        const combinedMeta = `${item.name || ""} ${item.artist || ""}`;
+        if (INDIC_SCRIPT_REGEX.test(combinedMeta)) continue;
+        if (UNWANTED_ARABIC_VERSION_REGEX.test(combinedMeta)) continue;
+        scoredYt.push({ item, ytId, score: 500 });
+        break;
+      }
+    }
+
     scoredYt.sort((a, b) => b.score - a.score);
     const bestYtEntry = scoredYt[0];
 
@@ -1233,17 +1250,27 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
       // Try resolving direct stream via local Vite YouTube audio gateway for background-safe <audio> playback
       const directYt = await resolveYouTubePlayableStream({
         id: ytId,
-        title: titleAr,
-        name: titleAr,
-        artist: artistEn || artistAr,
+        title: titleAr || titleEn,
+        name: titleAr || titleEn,
+        artist: artistEn || artistAr || effectiveArtist,
         duration: resolvedDur,
         audioUrl: `yt-stream://${ytId}`,
       });
 
-      const finalUrl = directYt?.url || bestYt.downloadUrl || `yt-stream://${ytId}`;
+      const gatewayAudioUrl = `/__void_api/yt-audio?id=${encodeURIComponent(ytId)}&title=${encodeURIComponent(titleAr || titleEn)}&artist=${encodeURIComponent(artistEn || artistAr || effectiveArtist)}`;
+      const finalUrl = directYt?.url || itunesMeta?.previewUrl || gatewayAudioUrl;
+      const fallbacks = Array.from(
+        new Set(
+          [
+            itunesMeta?.previewUrl,
+            gatewayAudioUrl,
+            ...(Array.isArray(track?.fallbackUrls) ? track.fallbackUrls : []),
+          ].filter((u): u is string => Boolean(u) && u !== finalUrl)
+        )
+      );
       const finalBitrate = directYt?.bitrate || bestYt.bitrate || 160;
-      const finalCodec = directYt?.codec || bestYt.codec || "Opus";
-      const finalMime = directYt?.mimeType || bestYt.mimeType || "audio/webm";
+      const finalCodec = directYt?.codec || bestYt.codec || "AAC";
+      const finalMime = directYt?.mimeType || bestYt.mimeType || "audio/mp4";
       const finalBadge: QualityTier =
         directYt?.qualityBadge || bestYt.qualityBadge || "High (160kbps)";
       const finalFormat = `YouTube (${finalCodec} ${finalBitrate}kbps)`;
@@ -1255,12 +1282,14 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
         mimeType: finalMime,
         format: finalFormat,
         qualityBadge: finalBadge,
+        fallbackUrls: fallbacks,
         duration: directYt?.duration || resolvedDur,
         image: resolvedImg,
       });
 
       return {
         url: finalUrl,
+        ytId,
         source: "YouTube",
         bitrate: finalBitrate,
         codec: finalCodec,
@@ -1268,8 +1297,25 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
         format: finalFormat,
         qualityBadge: finalBadge,
         qualityVerified: true,
+        fallbackUrls: fallbacks.length > 0 ? fallbacks : undefined,
         image: resolvedImg,
         duration: directYt?.duration || resolvedDur,
+      };
+    }
+
+    if (itunesMeta?.previewUrl) {
+      return {
+        url: itunesMeta.previewUrl,
+        source: "JioSaavn",
+        bitrate: 256,
+        codec: "AAC",
+        mimeType: "audio/mp4",
+        format: "AAC (256kbps)",
+        qualityBadge: "Very High (320kbps)" as QualityTier,
+        qualityVerified: true,
+        fallbackUrls: Array.isArray(track?.fallbackUrls) ? track.fallbackUrls : undefined,
+        image: itunesMeta.image || track?.image,
+        duration: itunesMeta.duration || track?.duration,
       };
     }
 

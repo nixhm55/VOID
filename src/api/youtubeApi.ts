@@ -40,8 +40,8 @@ export function extractCleanYouTubeId(raw: unknown): string {
   const rawStr = String(raw ?? "").trim();
   if (!rawStr) return "";
 
-  // First check if it's a URL or explicit yt-stream:// / yt-audio?id= URI
-  const urlMatch = rawStr.match(/(?:v=|youtu\.be\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
+  // First check if it's a URL or explicit yt-stream:// / yt-audio?id= / stream?id= URI
+  const urlMatch = rawStr.match(/(?:[?&](?:v|id|videoId)=|youtu\.be\/|\/stream\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
   if (urlMatch && !SYNTHETIC_CATALOG_ID_REGEX.test(urlMatch[1])) {
     return urlMatch[1];
   }
@@ -55,23 +55,26 @@ export function extractCleanYouTubeId(raw: unknown): string {
 
 export function extractYouTubeIdFromTrack(track: any): string {
   if (!track) return "";
+  if (typeof track.ytId === "string" && isStrict11CharYouTubeId(track.ytId.trim())) {
+    return track.ytId.trim();
+  }
   const audioUrl = String(track.audioUrl || track.downloadUrl || track.src || "").trim();
 
   // If the track already has a direct non-YouTube HTTP stream (such as JioSaavn saavncdn.com),
-  // it is NOT a YouTube track unless its stream URL explicitly points to yt-stream / yt-audio.
+  // it is NOT a YouTube track unless its stream URL explicitly points to yt-stream / yt-audio / void-backend.
   if (
     /^https?:\/\//i.test(audioUrl) &&
-    !/youtube\.com|youtu\.be|yt-audio|yt-stream/i.test(audioUrl) &&
+    !/youtube\.com|youtu\.be|yt-audio|yt-stream|void-backend/i.test(audioUrl) &&
     String(track.source || "").toLowerCase() === "jiosaavn"
   ) {
     return "";
   }
 
-  const candidates = [track.audioUrl, track.downloadUrl, track.src, track.id];
+  const candidates = [track.ytId, track.audioUrl, track.downloadUrl, track.src, track.id];
   for (const candidate of candidates) {
     const rawStr = String(candidate ?? "").trim();
     if (!rawStr) continue;
-    const urlMatch = rawStr.match(/(?:v=|youtu\.be\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
+    const urlMatch = rawStr.match(/(?:[?&](?:v|id|videoId)=|youtu\.be\/|\/stream\/|yt-stream:\/\/|yt-audio\?id=)([\w-]{11})/);
     if (urlMatch && isStrict11CharYouTubeId(urlMatch[1])) {
       return urlMatch[1];
     }

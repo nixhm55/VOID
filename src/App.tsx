@@ -2713,8 +2713,15 @@ useEffect(() => {
       if (resolvedTrending?.url) {
         const resolvedCover = resolvedTrending.image || getStickyCoverUrl(resolvedTrending) || playableTrack.image;
         if (resolvedCover) rememberStickyCover(playableTrack, resolvedCover);
+        const mergedFallbacks = Array.from(
+          new Set([
+            ...(Array.isArray(resolvedTrending.fallbackUrls) ? resolvedTrending.fallbackUrls : []),
+            ...(Array.isArray(playableTrack.fallbackUrls) ? playableTrack.fallbackUrls : []),
+          ].filter(Boolean))
+        );
         playableTrack = {
           ...playableTrack,
+          ytId: resolvedTrending.ytId || (playableTrack as any).ytId,
           audioUrl: resolvedTrending.url,
           downloadUrl: resolvedTrending.url,
           src: resolvedTrending.url,
@@ -2725,9 +2732,18 @@ useEffect(() => {
           format: resolvedTrending.format ?? 'MP4 (320kbps)',
           qualityBadge: resolvedTrending.qualityBadge ?? 'Very High (320kbps)',
           qualityVerified: true,
-          fallbackUrls: resolvedTrending.fallbackUrls,
+          fallbackUrls: mergedFallbacks.length > 0 ? mergedFallbacks : undefined,
           image: resolvedCover,
           duration: resolvedTrending.duration || playableTrack.duration || 0,
+        };
+        setStreamingTrack(playableTrack);
+      } else if (Array.isArray(playableTrack.fallbackUrls) && playableTrack.fallbackUrls.length > 0) {
+        const firstFallback = playableTrack.fallbackUrls[0];
+        playableTrack = {
+          ...playableTrack,
+          audioUrl: firstFallback,
+          downloadUrl: firstFallback,
+          src: firstFallback,
         };
         setStreamingTrack(playableTrack);
       }
@@ -4600,7 +4616,7 @@ useEffect(() => {
               <Search size={17} className="mobile-search-bar-icon" aria-hidden="true" />
               <input
                 className="palette-input mobile-search-page-input"
-                placeholder="Search your music…"
+                placeholder="Search for artists and music…"
                 value={paletteQuery}
                 onChange={event => setPaletteQuery(event.target.value)}
                 onKeyDown={event => {
@@ -5593,7 +5609,7 @@ useEffect(() => {
         <input
           autoFocus
           className="palette-input"
-          placeholder="Search your music…"
+          placeholder="Search for artists and music…"
           value={paletteQuery}
           onChange={event => setPaletteQuery(event.target.value)}
           onKeyDown={event => {

@@ -26,7 +26,7 @@ export interface CanonicalArtistProfile {
   itunesId?: number;
 }
 
-const ARTIST_TOP100_CACHE_PREFIX = 'void-artist-top100-v2:';
+const ARTIST_TOP100_CACHE_PREFIX = 'void-artist-top100-v3:';
 const memoryArtistSearchCache = new Map<string, CanonicalArtistProfile[]>();
 const memoryArtistTop100Cache = new Map<string, TrendingTrackItem[]>();
 
@@ -455,7 +455,9 @@ export async function fetchArtistTop100(
             !item.audioUrl.includes('dzcdn.net');
 
           const resolvePayload = JSON.stringify({
+            titleAr: cleanTitle,
             titleEn: cleanTitle,
+            artistAr: item.artist || cleanArtist,
             artistEn: item.artist || cleanArtist,
           });
           const streamUrl = hasDirectStream
