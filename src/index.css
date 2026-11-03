@@ -3507,45 +3507,25 @@ html:not(.dark) .cover-mini, html:not(.dark) .cover-large { background: linear-g
     padding-top: 0 !important;
   }
 
-  /* Consistent 2-line mobile Home greeting across all phones (white top line + warm red bottom line) */
+  /* Consistent 2-line mobile Home greeting matching Desktop .glass-ink typography & gradient */
   .welcome .greeting-title {
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: flex-start !important;
+    display: inline-block !important;
     font-size: clamp(26px, 7.8vw, 32px) !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.03em !important;
     line-height: 1.12 !important;
-    background-image: none !important;
-    color: hsl(var(--foreground)) !important;
-    -webkit-text-fill-color: initial !important;
-  }
-
-  .welcome .greeting-title .greeting-line-top {
-    display: block;
-    white-space: nowrap;
     background-image: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.98) 0%,
-      rgba(242, 232, 236, 0.88) 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-  }
-
-  .welcome .greeting-title .greeting-line-bottom {
-    display: block;
-    white-space: nowrap;
-    background-image: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--orb-1, hsl(348 88% 58%)) 74%, #ffffff) 0%,
-      var(--orb-1, hsl(348 88% 58%)) 65%,
-      color-mix(in srgb, var(--orb-1, hsl(348 88% 58%)) 88%, #ffffff) 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
+      177deg,
+      hsl(var(--foreground) / .97) 0%,
+      hsl(var(--foreground) / .72) 33%,
+      color-mix(in srgb, hsl(350 48% 30%) 88%, hsl(var(--foreground) / .14)) 55%,
+      hsl(var(--foreground) / .93) 100%
+    ) !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    filter: drop-shadow(0 1px 1px hsl(0 0% 0% / .26)) !important;
   }
 
   /* Mobile Bottom Navigation: symmetrical icons including Search in 2nd slot */

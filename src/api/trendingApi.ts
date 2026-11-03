@@ -1258,11 +1258,10 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
       });
 
       const gatewayAudioUrl = `/__void_api/yt-audio?id=${encodeURIComponent(ytId)}&title=${encodeURIComponent(titleAr || titleEn)}&artist=${encodeURIComponent(artistEn || artistAr || effectiveArtist)}`;
-      const finalUrl = directYt?.url || itunesMeta?.previewUrl || gatewayAudioUrl;
+      const finalUrl = directYt?.url || gatewayAudioUrl;
       const fallbacks = Array.from(
         new Set(
           [
-            itunesMeta?.previewUrl,
             gatewayAudioUrl,
             ...(Array.isArray(track?.fallbackUrls) ? track.fallbackUrls : []),
           ].filter((u): u is string => Boolean(u) && u !== finalUrl)
@@ -1300,22 +1299,6 @@ export async function resolveTrendingTrackStream(track: any): Promise<{
         fallbackUrls: fallbacks.length > 0 ? fallbacks : undefined,
         image: resolvedImg,
         duration: directYt?.duration || resolvedDur,
-      };
-    }
-
-    if (itunesMeta?.previewUrl) {
-      return {
-        url: itunesMeta.previewUrl,
-        source: "JioSaavn",
-        bitrate: 256,
-        codec: "AAC",
-        mimeType: "audio/mp4",
-        format: "AAC (256kbps)",
-        qualityBadge: "Very High (320kbps)" as QualityTier,
-        qualityVerified: true,
-        fallbackUrls: Array.isArray(track?.fallbackUrls) ? track.fallbackUrls : undefined,
-        image: itunesMeta.image || track?.image,
-        duration: itunesMeta.duration || track?.duration,
       };
     }
 

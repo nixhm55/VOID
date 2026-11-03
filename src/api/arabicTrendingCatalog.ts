@@ -1792,35 +1792,6 @@ export async function resolveArabicYouTubeFallback(track: any): Promise<{
     }
   }
 
-  // Fallback to iTunes AAC stream if YouTube search backend timed out
-  try {
-    const country = isArabicTrack ? "ae" : "us";
-    const res = await fetch(
-      `/__void_api/itunes-search?term=${encodeURIComponent(`${title} ${artistEn || artistAr}`.trim())}&country=${country}&entity=song&limit=6`
-    );
-    if (res.ok) {
-      const data = await res.json();
-      const items: any[] = Array.isArray(data?.results) ? data.results : [];
-      const match = items.find((it) => typeof it?.previewUrl === "string" && it.previewUrl.startsWith("http"));
-      if (match?.previewUrl) {
-        return {
-          url: String(match.previewUrl).trim(),
-          ytId: "",
-          source: "JioSaavn",
-          bitrate: 256,
-          codec: "AAC",
-          mimeType: "audio/mp4",
-          format: "AAC (256kbps)",
-          qualityBadge: "Very High (320kbps)",
-          image: track?.image || String(match.artworkUrl100 || "").replace("100x100bb", "600x600bb"),
-          duration: Math.round((Number(match.trackTimeMillis) || 0) / 1000) || track?.duration,
-        };
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-
   return null;
 }
 

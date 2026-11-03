@@ -3703,6 +3703,7 @@ useEffect(() => {
   }, [artistTopTracks, detail?.kind, downloadedTracks, tracks]);
 
   const [artistTopExpanded, setArtistTopExpanded] = useState(false);
+  const [jumpBackExpanded, setJumpBackExpanded] = useState(false);
 
   const displayedArtistTopTracks = useMemo(() => {
     if (detail?.kind !== 'artist') return [];
@@ -3904,6 +3905,7 @@ useEffect(() => {
     setSelectionMode(false);
     setSelectedSongIds([]);
     setArtistTopExpanded(false);
+    setJumpBackExpanded(false);
     if (page !== 'trending') {
       setActiveTrendingLangId(null);
       setTrendingQuery('');
@@ -3918,6 +3920,7 @@ useEffect(() => {
     setSelectionMode(false);
     setSelectedSongIds([]);
     setArtistTopExpanded(false);
+    setJumpBackExpanded(false);
     setActiveTrendingLangId(null);
     try { sessionStorage.removeItem('void-active-trending-lang'); } catch {}
     setTrendingQuery('');
@@ -4537,8 +4540,9 @@ useEffect(() => {
                 <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">
                   {isMobileViewport ? (
                     <>
-                      <span className="greeting-line-top">{mobileGreetings[Math.floor(greetingHour / 2)]?.[0] ?? greetings[Math.floor(greetingHour / 2)]}</span>
-                      <span className="greeting-line-bottom">{mobileGreetings[Math.floor(greetingHour / 2)]?.[1] ?? ''}</span>
+                      {mobileGreetings[Math.floor(greetingHour / 2)]?.[0] ?? greetings[Math.floor(greetingHour / 2)]}
+                      <br />
+                      {mobileGreetings[Math.floor(greetingHour / 2)]?.[1] ?? ''}
                     </>
                   ) : (
                     greetings[Math.floor(greetingHour / 2)]
@@ -4570,9 +4574,22 @@ useEffect(() => {
   <div className="home-section">
     <DgReveal dir="left" className="section-heading">
       <h2>{hasPlayed ? 'Jump back in' : 'Start listening'}</h2>
+      {isMobileViewport && jumpBack.length > 2 && (
+        <button
+          type="button"
+          className={`icon-button search-history-more-btn${jumpBackExpanded ? ' is-expanded' : ''}`}
+          onClick={() => setJumpBackExpanded(prev => !prev)}
+          aria-label={jumpBackExpanded ? 'Show fewer songs' : 'Show more songs'}
+          aria-expanded={jumpBackExpanded}
+          title={jumpBackExpanded ? 'Show less' : 'Show more'}
+          data-testid="button-toggle-jump-back"
+        >
+          <ChevronDown size={15} strokeWidth={1.85} />
+        </button>
+      )}
     </DgReveal>
     <div className="jump-grid">
-      {jumpBack.map((track, i) => (
+      {(isMobileViewport && !jumpBackExpanded ? jumpBack.slice(0, 2) : jumpBack).map((track, i) => (
         <DgReveal key={track.id} dir="left" index={i}>
           <button
             className="jump-tile"

@@ -16,6 +16,12 @@ import {
   detectTrackQuality,
 } from './quality';
 import { type TrendingTrackItem } from './trendingApi';
+import {
+  TOP_40_ARABIC_ARTISTS,
+  normalizeArabicText,
+  normalizeLatinArtistOrTitle,
+} from './arabicTrendingCatalog';
+import { MULTI_LANG_TOP_40_ARTISTS } from './multiLangTrendingCatalog';
 
 export interface CanonicalArtistProfile {
   id: string;
@@ -26,7 +32,8 @@ export interface CanonicalArtistProfile {
   itunesId?: number;
 }
 
-const ARTIST_TOP100_CACHE_PREFIX = 'void-artist-top100-v3:';
+const ARTIST_TOP100_CACHE_PREFIX = 'void-artist-top100-v5:';
+const JIOSAAVN_API_BASE = 'https://elitejiosaavn-api.vercel.app/api';
 const memoryArtistSearchCache = new Map<string, CanonicalArtistProfile[]>();
 const memoryArtistTop100Cache = new Map<string, TrendingTrackItem[]>();
 
@@ -376,6 +383,26 @@ export async function searchCanonicalArtists(
   return [];
 }
 
+function isVerifiedFullJioSaavnItem(item: any): boolean {
+  const url = String(item?.audioUrl || item?.downloadUrl || item?.src || '').trim();
+  if (!url.startsWith('http')) return false;
+  if (
+    url.startsWith('trending-resolve://') ||
+    url.startsWith('yt-stream://') ||
+    url.includes('/__void_api/yt-audio') ||
+    url.includes('itunes.apple.com') ||
+    url.includes('mzstatic.com') ||
+    url.includes('dzcdn.net')
+  ) {
+    return false;
+  }
+  const source = String(item?.source || 'JioSaavn').toLowerCase();
+  if (source.includes('youtube')) return false;
+  const duration = Number(item?.duration) || 0;
+  if (duration > 0 && duration < 60) return false;
+  return true;
+}
+
 function readCachedArtistTop100(artistName: string): TrendingTrackItem[] | null {
   const key = normalizeArtistIdentityKey(artistName);
   if (memoryArtistTop100Cache.has(key)) {
@@ -386,7 +413,9 @@ function readCachedArtistTop100(artistName: string): TrendingTrackItem[] | null 
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed?.items) && parsed.items.length >= 1) {
-      const deduped = deduplicateTrackCollection(parsed.items as TrendingTrackItem[], {
+      const validOnly = (parsed.items as TrendingTrackItem[]).filter(isVerifiedFullJioSaavnItem);
+      if (validOnly.length === 0) return null;
+      const deduped = deduplicateTrackCollection(validOnly, {
         ignoreArtist: true,
         cleanTitles: true,
       }).map((item, idx) => ({
@@ -403,12 +432,14 @@ function readCachedArtistTop100(artistName: string): TrendingTrackItem[] | null 
 }
 
 function writeCachedArtistTop100(artistName: string, items: TrendingTrackItem[]): void {
+  const validOnly = items.filter(isVerifiedFullJioSaavnItem);
+  if (validOnly.length === 0) return;
   const key = normalizeArtistIdentityKey(artistName);
-  memoryArtistTop100Cache.set(key, items);
+  memoryArtistTop100Cache.set(key, validOnly);
   try {
     localStorage.setItem(
       ARTIST_TOP100_CACHE_PREFIX + key,
-      JSON.stringify({ updatedAt: Date.now(), items })
+      JSON.stringify({ updatedAt: Date.now(), items: validOnly })
     );
   } catch {
     /* ignore storage quota */
@@ -419,10 +450,227 @@ export function getInitialArtistTop100(artistName: string): TrendingTrackItem[] 
   return readCachedArtistTop100(artistName) || [];
 }
 
+function decodeHtmlEntities(input: string): string {
+  return String(input || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .trim();
+}
+
+function normalizePhoneticArtistMatch(input: string): string {
+  return normalizeLatinArtistOrTitle(input)
+    .replace(/\b(mehad|mihed|maihad|mihad|mahad)\b/g, 'mehad')
+    .replace(/\b(hamad|hamed|ahmed|ahmad)\b/g, 'hamad')
+    .replace(/\b(ilaiyaraaja|ilayaraja)\b/g, 'ilaiyaraaja')
+    .trim();
+}
+
+async function fetchDirectJioSaavnArtistSongsClient(
+  rawArtistName: string,
+  signal?: AbortSignal
+): Promise<TrendingTrackItem[]> {
+  const parts = String(rawArtistName || '')
+    .split(/\s*[·|]\s*/)
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  const matchedArabicSeed = TOP_40_ARABIC_ARTISTS.find(seed => {
+    const seedAr = normalizeArabicText(seed.artistAr);
+    const seedEn = normalizePhoneticArtistMatch(seed.artistEn);
+    const seedAliases = seed.aliasesEn.map(normalizePhoneticArtistMatch);
+    return parts.some(p => {
+      const pAr = normalizeArabicText(p);
+      const pEn = normalizePhoneticArtistMatch(p);
+      return (pAr && seedAr && pAr === seedAr) || (pEn && (pEn === seedEn || seedAliases.includes(pEn)));
+    });
+  });
+
+  const extraAliases: string[] = [];
+  if (matchedArabicSeed) {
+    extraAliases.push(matchedArabicSeed.artistEn, matchedArabicSeed.artistAr, ...matchedArabicSeed.aliasesEn);
+    if (normalizePhoneticArtistMatch(matchedArabicSeed.artistEn) === 'mehad hamad') {
+      extraAliases.push('Mihed Hamad', 'Maihad Hamad', 'Mihad Hamad');
+    }
+  }
+
+  for (const config of Object.values(MULTI_LANG_TOP_40_ARTISTS)) {
+    for (const seed of config.artists) {
+      const seedNorm = normalizePhoneticArtistMatch(seed.name);
+      const aliasNorms = (seed.aliases || []).map(normalizePhoneticArtistMatch);
+      if (parts.some(p => {
+        const pNorm = normalizePhoneticArtistMatch(p);
+        return pNorm && (pNorm === seedNorm || aliasNorms.includes(pNorm));
+      })) {
+        extraAliases.push(seed.name, ...(seed.aliases || []));
+      }
+    }
+  }
+
+  const allAliases = Array.from(
+    new Set(
+      [
+        ...extraAliases,
+        ...parts,
+        ...parts.map(p => p.replace(/\.\s*/g, ' ').replace(/\s+/g, ' ').trim()),
+        ...parts.map(p => p.replace(/\./g, '').replace(/\s+/g, ' ').trim()),
+      ].filter(Boolean)
+    )
+  );
+
+  const displayArtist =
+    matchedArabicSeed?.artistEn ||
+    allAliases.find(a => /[A-Za-z]/.test(a) && !/[\u0600-\u06FF]/.test(a)) ||
+    parts[0] ||
+    rawArtistName;
+
+  const isArabicArtist =
+    Boolean(matchedArabicSeed) || allAliases.some(a => /[\u0600-\u06FF]/.test(a));
+
+  const targetArList = Array.from(
+    new Set(allAliases.filter(a => /[\u0600-\u06FF]/.test(a)).map(normalizeArabicText).filter(Boolean))
+  );
+  const targetEnList = Array.from(
+    new Set(allAliases.map(normalizePhoneticArtistMatch).filter(Boolean))
+  );
+
+  const doesJioSongMatch = (song: any): boolean => {
+    const pList: any[] = Array.isArray(song?.artists?.primary) ? song.artists.primary : [];
+    const aList: any[] = Array.isArray(song?.artists?.all) ? song.artists.all : [];
+    const combinedNames = [
+      ...pList.map(a => decodeHtmlEntities(String(a?.name || ''))),
+      ...aList.map(a => decodeHtmlEntities(String(a?.name || ''))),
+      ...String(song?.primaryArtists || '').split(',').map(s => decodeHtmlEntities(s)),
+    ].filter(Boolean);
+
+    return combinedNames.some(cand => {
+      const cAr = normalizeArabicText(cand);
+      for (const tAr of targetArList) {
+        if (tAr.length >= 3 && cAr.includes(tAr)) return true;
+        const tTokens = tAr.split(' ').filter(w => w.length >= 2);
+        const cTokens = cAr.split(' ').filter(w => w.length >= 2);
+        if (tTokens.length >= 2 && tTokens.every(t => cTokens.includes(t))) return true;
+      }
+      const cEn = normalizePhoneticArtistMatch(cand);
+      if (!cEn) return false;
+      const cEnTokens = cEn.split(' ').filter(Boolean);
+      for (const tEn of targetEnList) {
+        if (!tEn) continue;
+        if (cEn === tEn || cEn.includes(tEn)) return true;
+        const tEnTokens = tEn.split(' ').filter(w => w.length >= 2);
+        if (tEnTokens.length >= 2 && tEnTokens.every(t => cEnTokens.includes(t))) return true;
+        if (tEnTokens.length === 1 && tEnTokens[0].length >= 3 && cEnTokens.includes(tEnTokens[0])) return true;
+      }
+      return false;
+    });
+  };
+
+  const searchQueries = Array.from(
+    new Set([displayArtist, ...allAliases].filter(q => q.length >= 2))
+  ).slice(0, 5);
+
+  const pageTasks: Promise<any[]>[] = [];
+  searchQueries.forEach((q, idx) => {
+    const pages = idx < 2 ? [1, 2, 3] : [1];
+    for (const page of pages) {
+      pageTasks.push(
+        fetch(`${JIOSAAVN_API_BASE}/search/songs?query=${encodeURIComponent(q)}&page=${page}&limit=40`, {
+          signal,
+        })
+          .then(r => (r.ok ? r.json() : null))
+          .then(json =>
+            Array.isArray(json?.data?.results)
+              ? json.data.results
+              : Array.isArray(json?.results)
+                ? json.results
+                : []
+          )
+          .catch(() => [])
+      );
+    }
+  });
+
+  const settledPages = await Promise.allSettled(pageTasks);
+  const rawSongs = settledPages.flatMap(s => (s.status === 'fulfilled' ? s.value : []));
+  rawSongs.sort((a, b) => (Number(b?.playCount) || 0) - (Number(a?.playCount) || 0));
+
+  const seenIds = new Set<string>();
+  const out: TrendingTrackItem[] = [];
+
+  for (const song of rawSongs) {
+    const rawId = String(song?.id || '').trim();
+    if (!rawId || seenIds.has(rawId)) continue;
+    seenIds.add(rawId);
+
+    const duration = Number(song?.duration) || 0;
+    if (duration < 60 || duration > 1200) continue;
+
+    if (!doesJioSongMatch(song)) continue;
+
+    const songLang = String(song?.language || '').toLowerCase().trim();
+    const rawTitle = decodeHtmlEntities(String(song?.name || song?.title || ''));
+    const rawAlbum = decodeHtmlEntities(String(song?.album?.name || ''));
+    if (isArabicArtist) {
+      if (/[\u0900-\u0D7F]/.test(`${rawTitle} ${rawAlbum}`)) continue;
+      if (songLang && songLang !== 'arabic' && songLang !== 'english' && songLang !== 'unknown') continue;
+    }
+
+    const cleanTitle = cleanCanonicalTrackTitle(rawTitle);
+    if (!cleanTitle) continue;
+    if (/\b(?:karaoke|tribute|ringtone|8d audio|instrumental version|made famous by|in the style of)\b/i.test(`${cleanTitle} ${rawAlbum}`)) {
+      continue;
+    }
+
+    const urls: any[] = Array.isArray(song?.downloadUrl) ? song.downloadUrl : [];
+    const best = urls.find(u => u?.quality === '320kbps') || urls[urls.length - 1];
+    const bestUrl = String(best?.url || best?.link || '').trim();
+    if (!bestUrl.startsWith('http')) continue;
+
+    const fallbacks = urls
+      .map(u => String(u?.url || u?.link || '').trim())
+      .filter(u => u.startsWith('http') && u !== bestUrl);
+
+    const imgs: any[] = Array.isArray(song?.image) ? song.image : [];
+    const bestImg = String(
+      imgs.find(i => i?.quality === '500x500')?.url || imgs[imgs.length - 1]?.url || ''
+    ).trim();
+
+    const idx = out.length;
+    out.push({
+      id: `api-${rawId}`,
+      title: cleanTitle,
+      name: cleanTitle,
+      artist: displayArtist,
+      album: cleanCanonicalTrackTitle(rawAlbum || `${displayArtist} Essentials`),
+      fileName: `${cleanTitle}.m4a`,
+      fileSize: 0,
+      importedAt: Date.now() - idx * 1000,
+      audioUrl: bestUrl,
+      downloadUrl: bestUrl,
+      src: bestUrl,
+      image: bestImg,
+      duration,
+      source: 'JioSaavn',
+      qualityBadge: 'Very High (320kbps)',
+      bitrate: 320,
+      codec: 'AAC',
+      mimeType: 'audio/mp4',
+      format: 'MP4 (320kbps)',
+      qualityVerified: true,
+      fallbackUrls: fallbacks.length > 0 ? fallbacks : undefined,
+      trendingRank: idx + 1,
+      trendingScore: 1000 - idx * 5,
+    });
+  }
+
+  return out;
+}
+
 /**
- * Fetches an artist's Top Songs ranked by real global popularity across
- * Deezer Top Artist Chart, Apple Music / iTunes Top Songs, and JioSaavn 320kbps Catalog,
- * applying strict fuzzy song deduplication and movie-tag stripping.
+ * Fetches an artist's Top Songs strictly from verified full-length JioSaavn 320kbps streams
+ * (never 30-second previews, never YouTube), ranked by global popularity and play count.
  */
 export async function fetchArtistTop100(
   artistName: string,
@@ -433,82 +681,92 @@ export async function fetchArtistTop100(
   if (!cleanArtist) return [];
 
   const cached = readCachedArtistTop100(cleanArtist);
-  if (cached && cached.length > 0 && onPartial) {
+  if (cached && cached.length >= 15 && onPartial) {
     onPartial(cached);
   }
 
   try {
-    const res = await fetch(
-      `/__void_api/artist-top100?artist=${encodeURIComponent(cleanArtist)}`,
-      { signal }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data?.items) && data.items.length > 0) {
-        const rawMapped: TrendingTrackItem[] = data.items.map((item: any, idx: number) => {
-          const cleanTitle = cleanCanonicalTrackTitle(String(item.title || 'Untitled'));
-          const hasDirectStream =
-            typeof item.audioUrl === 'string' &&
-            item.audioUrl.startsWith('http') &&
-            !item.audioUrl.includes('itunes.apple.com') &&
-            !item.audioUrl.includes('mzstatic.com') &&
-            !item.audioUrl.includes('dzcdn.net');
+    const [gatewaySettled, directJioSettled] = await Promise.allSettled([
+      fetch(`/__void_api/artist-top100?artist=${encodeURIComponent(cleanArtist)}`, { signal }).then(
+        r => (r.ok ? r.json() : null)
+      ),
+      fetchDirectJioSaavnArtistSongsClient(cleanArtist, signal),
+    ]);
 
-          const resolvePayload = JSON.stringify({
-            titleAr: cleanTitle,
-            titleEn: cleanTitle,
-            artistAr: item.artist || cleanArtist,
-            artistEn: item.artist || cleanArtist,
-          });
-          const streamUrl = hasDirectStream
-            ? item.audioUrl
-            : `trending-resolve://${encodeURIComponent(resolvePayload)}`;
+    const combinedCandidates: TrendingTrackItem[] = [];
 
-          const qualityBadge: QualityTier = hasDirectStream
-            ? detectTrackQuality(streamUrl, item.format || 'AAC', item.bitrate || 320, {
-                codecHint: item.codec || 'AAC',
-                mimeTypeHint: item.mimeType || 'audio/mp4',
-                providerVerified: true,
-                sourceHint: item.source || 'JioSaavn',
-              })
-            : 'Very High (320kbps)';
+    if (gatewaySettled.status === 'fulfilled' && Array.isArray(gatewaySettled.value?.items)) {
+      for (let idx = 0; idx < gatewaySettled.value.items.length; idx++) {
+        const item = gatewaySettled.value.items[idx];
+        const streamUrl = String(item?.audioUrl || '').trim();
+        const duration = Number(item?.duration) || 0;
+        if (
+          !streamUrl.startsWith('http') ||
+          streamUrl.includes('itunes.apple.com') ||
+          streamUrl.includes('mzstatic.com') ||
+          streamUrl.includes('dzcdn.net') ||
+          duration < 60
+        ) {
+          continue;
+        }
+        const cleanTitle = cleanCanonicalTrackTitle(String(item.title || 'Untitled'));
+        const qualityBadge: QualityTier = detectTrackQuality(
+          streamUrl,
+          item.format || 'AAC',
+          item.bitrate || 320,
+          {
+            codecHint: item.codec || 'AAC',
+            mimeTypeHint: item.mimeType || 'audio/mp4',
+            providerVerified: true,
+            sourceHint: 'JioSaavn',
+          }
+        );
 
-          return {
-            id: String(item.id || `artist-top:${normalizeArtistIdentityKey(cleanArtist)}:${idx + 1}`),
-            title: cleanTitle,
-            name: cleanTitle,
-            artist: String(item.artist || cleanArtist),
-            album: cleanCanonicalTrackTitle(String(item.album || `${cleanArtist} Essentials`)),
-            fileName: `${cleanTitle}.m4a`,
-            fileSize: 0,
-            importedAt: Date.now() - idx * 1000,
-            audioUrl: streamUrl,
-            downloadUrl: streamUrl,
-            src: streamUrl,
-            image: String(item.image || ''),
-            duration: Number(item.duration) || 0,
-            source: String(item.source || 'JioSaavn'),
-            qualityBadge,
-            bitrate: Number(item.bitrate) || 320,
-            codec: String(item.codec || 'AAC'),
-            mimeType: String(item.mimeType || 'audio/mp4'),
-            format: String(item.format || 'MP4 (320kbps)'),
-            qualityVerified: true,
-            fallbackUrls: Array.isArray(item.fallbackUrls) ? item.fallbackUrls : undefined,
-            trendingRank: idx + 1,
-            trendingScore: 1000 - idx * 5,
-          };
+        combinedCandidates.push({
+          id: String(item.id || `artist-top:${normalizeArtistIdentityKey(cleanArtist)}:${idx + 1}`),
+          title: cleanTitle,
+          name: cleanTitle,
+          artist: String(item.artist || cleanArtist),
+          album: cleanCanonicalTrackTitle(String(item.album || `${cleanArtist} Essentials`)),
+          fileName: `${cleanTitle}.m4a`,
+          fileSize: 0,
+          importedAt: Date.now() - idx * 1000,
+          audioUrl: streamUrl,
+          downloadUrl: streamUrl,
+          src: streamUrl,
+          image: String(item.image || ''),
+          duration,
+          source: 'JioSaavn',
+          qualityBadge,
+          bitrate: Number(item.bitrate) || 320,
+          codec: String(item.codec || 'AAC'),
+          mimeType: String(item.mimeType || 'audio/mp4'),
+          format: String(item.format || 'MP4 (320kbps)'),
+          qualityVerified: true,
+          fallbackUrls: Array.isArray(item.fallbackUrls) ? item.fallbackUrls : undefined,
+          trendingRank: idx + 1,
+          trendingScore: 1000 - idx * 5,
         });
+      }
+    }
 
-        const mapped = deduplicateTrackCollection(rawMapped, {
-          ignoreArtist: true,
-          cleanTitles: true,
-        }).map((item, idx) => ({
+    if (directJioSettled.status === 'fulfilled' && Array.isArray(directJioSettled.value)) {
+      combinedCandidates.push(...directJioSettled.value);
+    }
+
+    if (combinedCandidates.length > 0) {
+      const mapped = deduplicateTrackCollection(combinedCandidates, {
+        ignoreArtist: true,
+        cleanTitles: true,
+      })
+        .filter(isVerifiedFullJioSaavnItem)
+        .map((item, idx) => ({
           ...item,
           trendingRank: idx + 1,
           trendingScore: 1000 - idx * 5,
         }));
 
+      if (mapped.length > 0) {
         writeCachedArtistTop100(cleanArtist, mapped);
         if (!signal?.aborted && onPartial) {
           onPartial(mapped);

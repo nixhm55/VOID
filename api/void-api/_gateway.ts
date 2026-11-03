@@ -505,71 +505,6 @@ async function resolveYouTubeDirectStreamServer(
         clearTimeout(jioTimer);
       }
     }
-
-    // Tier 4: Apple Music / iTunes & Deezer direct AAC/MP3 stream fallback so non-JioSaavn
-    // songs (such as Mehad Hamad and regional/international tracks) always play reliably.
-    for (const q of candidateQueries) {
-      const itCtrl = new AbortController();
-      const itTimer = setTimeout(() => itCtrl.abort(), 3200);
-      try {
-        const country = isArabicQuery ? 'ae' : 'us';
-        const itRes = await fetch(
-          `https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=${country}&entity=song&limit=6`,
-          { signal: itCtrl.signal }
-        );
-        if (itRes.ok) {
-          const itJson: any = await itRes.json();
-          const items: any[] = Array.isArray(itJson?.results) ? itJson.results : [];
-          const bestIt = items.find((item) => typeof item?.previewUrl === 'string' && item.previewUrl.startsWith('http'));
-          if (bestIt?.previewUrl) {
-            const resolved: CachedYtStream = {
-              url: String(bestIt.previewUrl).trim(),
-              mimeType: 'audio/mp4',
-              codec: 'AAC',
-              bitrate: 256,
-              duration: Math.round((Number(bestIt.trackTimeMillis) || 0) / 1000) || 0,
-              expiresAt: Date.now() + 30 * 60 * 1000,
-            };
-            ytStreamCache.set(videoId, resolved);
-            return resolved;
-          }
-        }
-      } catch {
-        // Ignore and try Deezer
-      } finally {
-        clearTimeout(itTimer);
-      }
-
-      const dzCtrl = new AbortController();
-      const dzTimer = setTimeout(() => dzCtrl.abort(), 3200);
-      try {
-        const dzRes = await fetch(
-          `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=6`,
-          { signal: dzCtrl.signal }
-        );
-        if (dzRes.ok) {
-          const dzJson: any = await dzRes.json();
-          const items: any[] = Array.isArray(dzJson?.data) ? dzJson.data : [];
-          const bestDz = items.find((item) => typeof item?.preview === 'string' && item.preview.startsWith('http'));
-          if (bestDz?.preview) {
-            const resolved: CachedYtStream = {
-              url: String(bestDz.preview).trim(),
-              mimeType: 'audio/mpeg',
-              codec: 'MP3',
-              bitrate: 128,
-              duration: Number(bestDz.duration) || 0,
-              expiresAt: Date.now() + 20 * 60 * 1000,
-            };
-            ytStreamCache.set(videoId, resolved);
-            return resolved;
-          }
-        }
-      } catch {
-        // Ignore
-      } finally {
-        clearTimeout(dzTimer);
-      }
-    }
   } catch {
     // Ignore
   }
@@ -1972,7 +1907,7 @@ export function createVoidGatewayHandler() {
       return;
     }
 
-    // 9. Artist Top Songs Aggregator (Deezer Top 100 + Apple Music/iTunes 200 + JioSaavn 320kbps with Global Fuzzy Deduplication)
+    // 9. Artist Top Songs Aggregator (Strictly Verified Full-Length JioSaavn 320kbps Songs Only)
     if (parsed.pathname === '/__void_api/artist-top100') {
       const artistQuery = parsed.searchParams.get('artist')?.trim() || '';
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -1985,6 +1920,99 @@ export function createVoidGatewayHandler() {
 
       const stripAccents = (s: string) =>
         String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+      const normalizeArabic = (s: string) =>
+        String(s || '')
+          .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+          .replace(/[أإآٱ]/g, 'ا')
+          .replace(/ة/g, 'ه')
+          .replace(/ى/g, 'ي')
+          .replace(/ؤ/g, 'و')
+          .replace(/ئ/g, 'ي')
+          .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+      const normalizePhoneticArtist = (s: string) =>
+        stripAccents(s)
+          .replace(/\b([a-z])\.\s*(?=[a-z]\.)/g, '$1')
+          .replace(/\b([a-z])\.\s+/g, '$1 ')
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .replace(/\b(el|al)\b/g, ' ')
+          .replace(/\b(mehad|mihed|maihad|mihad|mahad)\b/g, 'mehad')
+          .replace(/\b(hamad|hamed|ahmed|ahmad)\b/g, 'hamad')
+          .replace(/\b(mohammed|mohamed|muhammad|mohamad)\b/g, 'mohamed')
+          .replace(/\b(hussain|hussein|hosein)\b/g, 'hussain')
+          .replace(/\b(rashed|rashid)\b/g, 'rashid')
+          .replace(/\b(majed|majid|majeed)\b/g, 'majed')
+          .replace(/\b(abdul\s+majed|abdel\s+majed|abdulmajeed|abdelmajeed|abdulmajid)\b/g, 'abdulmajed')
+          .replace(/\b(abdu|abdo|abdou)\b/g, 'abdu')
+          .replace(/\b(abdullah|abdallah)\b/g, 'abdullah')
+          .replace(/\b(kfoury|kafoury|kfouri)\b/g, 'kfoury')
+          .replace(/\b(kazem|kadim|kadhem|kathem)\b/g, 'kadim')
+          .replace(/\b(saher|sahir)\b/g, 'sahir')
+          .replace(/\b(assala|asala|assalah)\b/g, 'assala')
+          .replace(/\b(balqees|balqis)\b/g, 'balqees')
+          .replace(/\b(zeytoun|zaitoun)\b/g, 'zeytoun')
+          .replace(/\b(nabeel|nabil)\b/g, 'nabil')
+          .replace(/\b(fouad|fuad)\b/g, 'fouad')
+          .replace(/\b(saqer|sager|saqr)\b/g, 'saqer')
+          .replace(/\b(rowaished|ruwaished)\b/g, 'rowaished')
+          .replace(/\b(mohandis|muhandis|mohandes)\b/g, 'mohandis')
+          .replace(/\b(menhali|minhali)\b/g, 'menhali')
+          .replace(/\b(kubaisi|kobaisi)\b/g, 'kubaisi')
+          .replace(/\b(shuaibi|shuaiby)\b/g, 'shuaibi')
+          .replace(/\b(bahaa|baha)\b/g, 'bahaa')
+          .replace(/\b(namira|namera)\b/g, 'namira')
+          .replace(/\b(diyab|diab)\b/g, 'diab')
+          .replace(/\b(hosny|hosni)\b/g, 'hosny')
+          .replace(/\b(kuwaitia|kuwaitiya)\b/g, 'kuwaitia')
+          .replace(/\b(ilaiyaraaja|ilayaraja)\b/g, 'ilaiyaraaja')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const BILINGUAL_ARTIST_ALIASES: Array<{ ar: string; en: string; aliases: string[] }> = [
+        { ar: 'عمرو دياب', en: 'Amr Diab', aliases: ['Amr Diab', 'Amr Diyab'] },
+        { ar: 'ميحد حمد', en: 'Mehad Hamad', aliases: ['Mehad Hamad', 'Mihed Hamad', 'Maihad Hamad', 'Mihad Hamad', 'Mahad Ahmed', 'Mahad Hamad'] },
+        { ar: 'حسين الجسمي', en: 'Hussain Al Jassmi', aliases: ['Hussain Al Jassmi', 'Hussein Al Jassmi', 'Hussain Aljassmi'] },
+        { ar: 'راشد الماجد', en: 'Rashid Al Majed', aliases: ['Rashid Al Majed', 'Rashed Al Majid', 'Rashed Al Majed', 'Rashid Al Majid'] },
+        { ar: 'عبد المجيد عبدالله', en: 'Abdul Majeed Abdullah', aliases: ['Abdul Majeed Abdullah', 'Abdulmajeed Abdullah'] },
+        { ar: 'محمد عبده', en: 'Mohammed Abdu', aliases: ['Mohammed Abdu', 'Mohamed Abdu', 'Mohammad Abdu'] },
+        { ar: 'الشامي', en: 'Al Shami', aliases: ['Al Shami', 'Alshami'] },
+        { ar: 'عيضة المنهالي', en: 'Eida Al Menhali', aliases: ['Eida Al Menhali', 'Aida Al Menhali'] },
+        { ar: 'ماجد المهندس', en: 'Majid Al Mohandis', aliases: ['Majid Al Mohandis', 'Majid Al Muhandis', 'Majed Al Mohandes'] },
+        { ar: 'نانسي عجرم', en: 'Nancy Ajram', aliases: ['Nancy Ajram'] },
+        { ar: 'إليسا', en: 'Elissa', aliases: ['Elissa'] },
+        { ar: 'شيرين عبدالوهاب', en: 'Sherine', aliases: ['Sherine', 'Sherine Abdel Wahab', 'Sherine Abdelwahab'] },
+        { ar: 'محمد عساف', en: 'Mohammed Assaf', aliases: ['Mohammed Assaf', 'Mohamed Assaf', 'Mohammad Assaf'] },
+        { ar: 'أحلام', en: 'Ahlam', aliases: ['Ahlam', 'Ahlam Alshamsi', 'Ahlam Al Shamsi'] },
+        { ar: 'عايض', en: 'Ayed', aliases: ['Ayed', 'Ayed Yousef'] },
+        { ar: 'نوال الكويتية', en: 'Nawal El Kuwaitia', aliases: ['Nawal El Kuwaitia', 'Nawal Al Kuwaitia'] },
+        { ar: 'فهد الكبيسي', en: 'Fahad Al Kubaisi', aliases: ['Fahad Al Kubaisi', 'Fahad Alkubaisi'] },
+        { ar: 'أحمد سعد', en: 'Ahmed Saad', aliases: ['Ahmed Saad', 'Ahmad Saad'] },
+        { ar: 'تامر حسني', en: 'Tamer Hosny', aliases: ['Tamer Hosny', 'Tamer Hosni'] },
+        { ar: 'أصالة نصري', en: 'Assala', aliases: ['Assala', 'Assala Nasri', 'Asala', 'Asala Nasri'] },
+        { ar: 'كاظم الساهر', en: 'Kadim Al Sahir', aliases: ['Kadim Al Sahir', 'Kazem El Saher', 'Kadhem Al Saher', 'Kazem Al Saher'] },
+        { ar: 'رابح صقر', en: 'Rabeh Saqer', aliases: ['Rabeh Saqer', 'Rabeh Sager'] },
+        { ar: 'عبدالله الرويشد', en: 'Abdullah Al Rowaished', aliases: ['Abdullah Al Rowaished', 'Abdallah Al Rowaished'] },
+        { ar: 'نبيل شعيل', en: 'Nabil Shuail', aliases: ['Nabil Shuail', 'Nabeel Shuail'] },
+        { ar: 'بلقيس', en: 'Balqees', aliases: ['Balqees', 'Balqees Fathi', 'Balqis'] },
+        { ar: 'سعد لمجرد', en: 'Saad Lamjarred', aliases: ['Saad Lamjarred'] },
+        { ar: 'وائل كفوري', en: 'Wael Kfoury', aliases: ['Wael Kfoury'] },
+        { ar: 'ناصيف زيتون', en: 'Nassif Zeytoun', aliases: ['Nassif Zeytoun', 'Nassif Zaitoun'] },
+        { ar: 'فؤاد عبدالواحد', en: 'Fouad Abdulwahed', aliases: ['Fouad Abdulwahed', 'Fuad Abdulwahed'] },
+        { ar: 'داليا مبارك', en: 'Dalia Mubarak', aliases: ['Dalia Mubarak'] },
+        { ar: 'رحمة رياض', en: 'Rahma Riad', aliases: ['Rahma Riad', 'Rahma Riyad'] },
+        { ar: 'سيف نبيل', en: 'Saif Nabeel', aliases: ['Saif Nabeel', 'Saif Nabil'] },
+        { ar: 'مروان عبدالحميد', en: 'Saint Levant', aliases: ['Saint Levant', 'Marwan Abdelhamid'] },
+        { ar: 'إليانا', en: 'Elyanna', aliases: ['Elyanna'] },
+        { ar: 'بهاء سلطان', en: 'Bahaa Sultan', aliases: ['Bahaa Sultan', 'Baha Sultan'] },
+        { ar: 'حمزة نمرة', en: 'Hamza Namira', aliases: ['Hamza Namira', 'Hamza Namera'] },
+        { ar: 'محمد حماقي', en: 'Mohamed Hamaki', aliases: ['Mohamed Hamaki', 'Mohammed Hamaki', 'Hamaki'] },
+        { ar: 'أصيل أبوبكر', en: 'Aseel Abu Bakr', aliases: ['Aseel Abu Bakr', 'Aseel Abubakr'] },
+        { ar: 'بدر الشعيبي', en: 'Bader Al Shuaibi', aliases: ['Bader Al Shuaibi', 'Badr Al Shuaibi'] },
+        { ar: 'هند البحرينية', en: 'Hind Al Bahrainia', aliases: ['Hind Al Bahrainia'] },
+      ];
+
       const cleanCanonicalSongTitle = (rawTitle: string): string => {
         let cleaned = String(rawTitle || '')
           .replace(/&quot;/g, '"')
@@ -2023,10 +2051,13 @@ export function createVoidGatewayHandler() {
         /\b(?:karaoke|tribute|ringtone|8d audio|instrumental version|made famous by|in the style of|lullaby|workout|megamix)\b/i.test(`${title} ${album}`);
 
       try {
-        // Step A: Find canonical artist on Deezer and iTunes (prioritizing valid high-res avatar + fan count)
+        const queryParts = artistQuery.split(/\s*[·|]\s*/).map(p => p.trim()).filter(Boolean);
+        const primaryQuery = queryParts[0] || artistQuery;
+
+        // Step A: Find canonical artist on Deezer and iTunes
         const [dzArtistRes, itunesArtistRes] = await Promise.allSettled([
-          fetch(`https://api.deezer.com/search/artist?q=${encodeURIComponent(artistQuery)}&limit=5`).then(r => r.ok ? r.json() : null),
-          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistQuery)}&entity=musicArtist&limit=5`).then(r => r.ok ? r.json() : null),
+          fetch(`https://api.deezer.com/search/artist?q=${encodeURIComponent(primaryQuery)}&limit=5`).then(r => r.ok ? r.json() : null),
+          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(primaryQuery)}&entity=musicArtist&limit=5`).then(r => r.ok ? r.json() : null),
         ]);
 
         const dzArtists: any[] = dzArtistRes.status === 'fulfilled' && Array.isArray(dzArtistRes.value?.data) ? dzArtistRes.value.data : [];
@@ -2042,30 +2073,169 @@ export function createVoidGatewayHandler() {
         )[0];
         const bestItunesArtist = itunesArtists[0];
 
-        const canonicalArtist = String(bestDzArtist?.name || bestItunesArtist?.artistName || artistQuery).trim();
-        const canonicalTokens = stripAccents(canonicalArtist).replace(/[^a-z0-9\u0600-\u0D7F]+/g, ' ').split(/\s+/).filter(Boolean);
-        const canonicalFirstToken = [...canonicalTokens].sort((a, b) => b.length - a.length)[0] || canonicalTokens[0] || '';
+        const rawCandidateNames = Array.from(
+          new Set(
+            [
+              ...queryParts,
+              String(bestDzArtist?.name || '').trim(),
+              String(bestItunesArtist?.artistName || '').trim(),
+              artistQuery,
+            ].filter(Boolean)
+          )
+        );
+
+        const matchedBilingual = BILINGUAL_ARTIST_ALIASES.find(entry => {
+          const entryAr = normalizeArabic(entry.ar);
+          const entryEn = normalizePhoneticArtist(entry.en);
+          const entryAliases = entry.aliases.map(normalizePhoneticArtist);
+          return rawCandidateNames.some(cand => {
+            const cAr = normalizeArabic(cand);
+            const cEn = normalizePhoneticArtist(cand);
+            return (cAr && entryAr && cAr === entryAr) || (cEn && (cEn === entryEn || entryAliases.includes(cEn)));
+          });
+        });
+
+        const allArtistAliases = Array.from(
+          new Set(
+            [
+              ...(matchedBilingual ? [matchedBilingual.en, matchedBilingual.ar, ...matchedBilingual.aliases] : []),
+              ...rawCandidateNames,
+              ...rawCandidateNames.map(n => n.replace(/\.\s*/g, ' ').replace(/\s+/g, ' ').trim()),
+              ...rawCandidateNames.map(n => n.replace(/\./g, '').replace(/\s+/g, ' ').trim()),
+            ].filter(Boolean)
+          )
+        );
+
+        const canonicalArtist =
+          matchedBilingual?.en ||
+          rawCandidateNames.find(n => /[A-Za-z]/.test(n) && !/[\u0600-\u06FF]/.test(n)) ||
+          String(bestDzArtist?.name || bestItunesArtist?.artistName || artistQuery).trim();
+
+        const isArabicArtist =
+          Boolean(matchedBilingual) ||
+          allArtistAliases.some(a => /[\u0600-\u06FF]/.test(a));
+
+        const targetArNorms = Array.from(
+          new Set(allArtistAliases.filter(a => /[\u0600-\u06FF]/.test(a)).map(normalizeArabic).filter(Boolean))
+        );
+        const targetEnNorms = Array.from(
+          new Set(allArtistAliases.map(normalizePhoneticArtist).filter(Boolean))
+        );
+
+        const doesCandidateArtistMatch = (candArtistStr: string): boolean => {
+          if (!candArtistStr) return false;
+          const candAr = normalizeArabic(candArtistStr);
+          for (const tAr of targetArNorms) {
+            if (tAr.length >= 3 && candAr.includes(tAr)) return true;
+            const tArTokens = tAr.split(' ').filter(w => w.length >= 2);
+            const cArTokens = candAr.split(' ').filter(w => w.length >= 2);
+            if (tArTokens.length >= 2 && tArTokens.every(t => cArTokens.includes(t))) return true;
+          }
+          const candEn = normalizePhoneticArtist(candArtistStr);
+          if (!candEn) return false;
+          const candEnTokens = candEn.split(' ').filter(Boolean);
+          for (const tEn of targetEnNorms) {
+            if (!tEn) continue;
+            if (candEn === tEn || candEn.includes(tEn)) return true;
+            const tEnTokens = tEn.split(' ').filter(w => w.length >= 2);
+            if (tEnTokens.length >= 2 && tEnTokens.every(t => candEnTokens.includes(t))) return true;
+            if (tEnTokens.length === 1 && tEnTokens[0].length >= 3 && candEnTokens.includes(tEnTokens[0])) return true;
+          }
+          return false;
+        };
+
         const deezerArtistId = bestDzArtist?.id;
         const itunesArtistId = bestItunesArtist?.artistId;
-        const dotStrippedArtist = canonicalArtist.replace(/\.\s*/g, ' ').replace(/\s+/g, ' ').trim();
 
-        // Step B: Concurrently fetch Deezer Top 100, iTunes Top 200, and JioSaavn 320kbps pages
-        const [dzTopSettled, itunesLookupSettled, itunesSearchSettled, jioP1Settled, jioP2Settled, jioP3Settled] = await Promise.allSettled([
+        // Build distinct JioSaavn search queries covering primary Latin/Arabic names & spelling variants
+        const jioSearchQueries = Array.from(
+          new Set(
+            [
+              canonicalArtist.replace(/\.\s*/g, ' ').replace(/\s+/g, ' ').trim(),
+              ...allArtistAliases.slice(0, 5),
+            ].filter(q => q.length >= 2)
+          )
+        ).slice(0, 5);
+
+        const jioFetchTasks: Promise<any>[] = [];
+        jioSearchQueries.forEach((q, qIdx) => {
+          jioFetchTasks.push(
+            fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(q)}&page=1&limit=40`).then(r => r.ok ? r.json() : null)
+          );
+          if (qIdx < 2) {
+            jioFetchTasks.push(
+              fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(q)}&page=2&limit=40`).then(r => r.ok ? r.json() : null),
+              fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(q)}&page=3&limit=40`).then(r => r.ok ? r.json() : null)
+            );
+          }
+        });
+
+        // Also search JioSaavn artists endpoint to pull the artist's dedicated JioSaavn catalog
+        const jioArtistCatalogTask = (async () => {
+          const extraSongs: any[] = [];
+          try {
+            const artistSearchQueries = Array.from(new Set([canonicalArtist, ...allArtistAliases.filter(a => /[A-Za-z]/.test(a))].slice(0, 3)));
+            const searchSettled = await Promise.allSettled(
+              artistSearchQueries.map(aq =>
+                fetch(`https://elitejiosaavn-api.vercel.app/api/search/artists?query=${encodeURIComponent(aq)}&limit=5`).then(r => r.ok ? r.json() : null)
+              )
+            );
+            const matchedIds = new Set<string>();
+            for (const s of searchSettled) {
+              if (s.status !== 'fulfilled' || !s.value) continue;
+              const rows: any[] = Array.isArray(s.value?.data?.results) ? s.value.data.results : Array.isArray(s.value?.results) ? s.value.results : [];
+              for (const row of rows) {
+                const rName = String(row?.name || row?.title || '').trim();
+                const rId = String(row?.id || '').trim();
+                if (rId && doesCandidateArtistMatch(rName)) {
+                  matchedIds.add(rId);
+                }
+              }
+            }
+            const idList = Array.from(matchedIds).slice(0, 3);
+            if (idList.length > 0) {
+              const songPagesSettled = await Promise.allSettled(
+                idList.flatMap(id => [
+                  fetch(`https://elitejiosaavn-api.vercel.app/api/artists/${encodeURIComponent(id)}/songs?page=0&sortBy=popularity&sortOrder=desc`).then(r => r.ok ? r.json() : null),
+                  fetch(`https://elitejiosaavn-api.vercel.app/api/artists/${encodeURIComponent(id)}/songs?page=1&sortBy=popularity&sortOrder=desc`).then(r => r.ok ? r.json() : null),
+                ])
+              );
+              for (const sp of songPagesSettled) {
+                if (sp.status === 'fulfilled' && sp.value) {
+                  const arr = Array.isArray(sp.value?.data?.songs)
+                    ? sp.value.data.songs
+                    : Array.isArray(sp.value?.data?.results)
+                      ? sp.value.data.results
+                      : Array.isArray(sp.value?.songs)
+                        ? sp.value.songs
+                        : [];
+                  extraSongs.push(...arr);
+                }
+              }
+            }
+          } catch {}
+          return extraSongs;
+        })();
+
+        // Step B: Concurrently fetch Deezer Top 100, iTunes Top 200 (for popularity ranking & HD cover art), and JioSaavn 320kbps pages
+        const [dzTopSettled, itunesLookupSettled, itunesSearchSettled, jioArtistExtraSettled, ...jioPagesSettled] = await Promise.allSettled([
           deezerArtistId
             ? fetch(`https://api.deezer.com/artist/${deezerArtistId}/top?limit=100`).then(r => r.ok ? r.json() : null)
             : Promise.resolve(null),
           itunesArtistId
             ? fetch(`https://itunes.apple.com/lookup?id=${itunesArtistId}&entity=song&limit=200`).then(r => r.ok ? r.json() : null)
             : Promise.resolve(null),
-          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(canonicalArtist)}&entity=song&limit=200`).then(r => r.ok ? r.json() : null),
-          fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(dotStrippedArtist)}&page=1&limit=40`).then(r => r.ok ? r.json() : null),
-          fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(dotStrippedArtist)}&page=2&limit=40`).then(r => r.ok ? r.json() : null),
-          fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(dotStrippedArtist)}&page=3&limit=40`).then(r => r.ok ? r.json() : null),
+          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(canonicalArtist)}&country=${isArabicArtist ? 'ae' : 'us'}&entity=song&limit=100`).then(r => r.ok ? r.json() : null),
+          jioArtistCatalogTask,
+          ...jioFetchTasks,
         ]);
 
         // Build JioSaavn 320kbps stream map by normalized phonetic song title key
         const jioSongsRaw: any[] = [];
-        for (const s of [jioP1Settled, jioP2Settled, jioP3Settled]) {
+        if (jioArtistExtraSettled.status === 'fulfilled' && Array.isArray(jioArtistExtraSettled.value)) {
+          jioSongsRaw.push(...jioArtistExtraSettled.value);
+        }
+        for (const s of jioPagesSettled) {
           if (s.status === 'fulfilled' && s.value) {
             const arr = Array.isArray(s.value?.data?.results) ? s.value.data.results : Array.isArray(s.value?.results) ? s.value.results : [];
             jioSongsRaw.push(...arr);
@@ -2073,21 +2243,41 @@ export function createVoidGatewayHandler() {
         }
 
         const jioStreamByTitle = new Map<string, { url: string; fallbackUrls: string[]; image: string; duration: number; album: string; title: string; id: string; playCount: number }>();
-        for (const song of jioSongsRaw) {
+        const ingestJioSong = (song: any) => {
           const primaryArtists: any[] = Array.isArray(song?.artists?.primary) ? song.artists.primary : [];
-          const artistStr = primaryArtists.map((a: any) => a?.name).filter(Boolean).join(', ') || String(song?.primaryArtists || '');
-          const normArtistStr = stripAccents(artistStr).replace(/[^a-z0-9\u0600-\u0D7F]+/g, ' ');
-          if (canonicalFirstToken && !normArtistStr.includes(canonicalFirstToken)) continue;
+          const allArtists: any[] = Array.isArray(song?.artists?.all) ? song.artists.all : [];
+          const artistStr = [
+            ...primaryArtists.map((a: any) => a?.name),
+            ...allArtists.map((a: any) => a?.name),
+            song?.primaryArtists,
+            song?.singers,
+          ]
+            .filter(Boolean)
+            .join(', ');
+          if (!doesCandidateArtistMatch(artistStr)) return;
+
+          const songLang = String(song?.language || '').toLowerCase().trim();
+          if (isArabicArtist) {
+            if (/[\u0900-\u0D7F]/.test(`${song?.name || ''} ${song?.album?.name || ''} ${artistStr}`)) return;
+            if (songLang && songLang !== 'arabic' && songLang !== 'english' && songLang !== 'unknown') return;
+          }
+
+          const duration = Number(song?.duration) || 0;
+          // Strictly require full-length JioSaavn tracks (>= 60 seconds, never 30-second previews)
+          if (duration < 60 || duration > 1200) return;
+
           const rawTitle = cleanCanonicalSongTitle(String(song?.name || song?.title || ''));
           const key = cleanSongTitleKey(rawTitle);
-          if (!key) continue;
+          if (!key) return;
+          if (isSpamSong(rawTitle, String(song?.album?.name || ''))) return;
+
           const urls: any[] = Array.isArray(song?.downloadUrl) ? song.downloadUrl : [];
           const best = urls.find((u: any) => u?.quality === '320kbps') || urls[urls.length - 1];
           const bestUrl = String(best?.url || best?.link || '').trim();
-          if (!bestUrl.startsWith('http')) continue;
+          if (!bestUrl.startsWith('http')) return;
           const fallbacks = urls.map((u: any) => String(u?.url || u?.link || '').trim()).filter((u: string) => u.startsWith('http') && u !== bestUrl);
           const imgs: any[] = Array.isArray(song?.image) ? song.image : [];
-          const bestImg = String(imgs[imgs.length - 1]?.url || '').trim();
+          const bestImg = String(imgs.find((i: any) => i?.quality === '500x500')?.url || imgs[imgs.length - 1]?.url || '').trim();
           const existing = jioStreamByTitle.get(key);
           const playCount = Number(song?.playCount) || 0;
           if (!existing || playCount > existing.playCount) {
@@ -2097,49 +2287,107 @@ export function createVoidGatewayHandler() {
               url: bestUrl,
               fallbackUrls: fallbacks,
               image: bestImg,
-              duration: Number(song?.duration) || 0,
+              duration,
               album: cleanCanonicalSongTitle(String(song?.album?.name || '')),
               playCount,
             });
+          }
+        };
+
+        for (const song of jioSongsRaw) {
+          ingestJioSong(song);
+        }
+
+        // Pre-index iTunes & Deezer metadata (for high-res 600x600 artwork & popularity rank ONLY — NEVER use 30s previewUrl)
+        const itunesTracks: any[] = [
+          ...(itunesLookupSettled.status === 'fulfilled' && Array.isArray(itunesLookupSettled.value?.results) ? itunesLookupSettled.value.results : []),
+          ...(itunesSearchSettled.status === 'fulfilled' && Array.isArray(itunesSearchSettled.value?.results) ? itunesSearchSettled.value.results : []),
+        ];
+        const itunesCoverByKey = new Map<string, { image: string; album: string; title: string }>();
+        for (const t of itunesTracks) {
+          if (t?.wrapperType === 'track' || t?.kind === 'song') {
+            const tArtist = String(t?.artistName || '').trim();
+            if (!doesCandidateArtistMatch(tArtist)) continue;
+            const rawT = cleanCanonicalSongTitle(String(t?.trackName || ''));
+            const k = cleanSongTitleKey(rawT);
+            const art = String(t?.artworkUrl100 || '').replace('100x100bb', '600x600bb').trim();
+            if (k && art.startsWith('http') && !itunesCoverByKey.has(k)) {
+              itunesCoverByKey.set(k, {
+                image: art,
+                album: cleanCanonicalSongTitle(String(t?.collectionName || '')),
+                title: rawT,
+              });
+            }
+          }
+        }
+
+        const dzTopTracks: any[] = dzTopSettled.status === 'fulfilled' && Array.isArray(dzTopSettled.value?.data) ? dzTopSettled.value.data : [];
+        dzTopTracks.sort((a, b) => (Number(b?.rank) || 0) - (Number(a?.rank) || 0));
+
+        // If we have fewer than 20 JioSaavn songs so far, do a fast targeted JioSaavn search for top Deezer/iTunes track titles
+        if (jioStreamByTitle.size < 20) {
+          const topChartTitles: string[] = [];
+          for (const t of dzTopTracks) {
+            const rawT = cleanCanonicalSongTitle(String(t?.title_short || t?.title || ''));
+            const k = cleanSongTitleKey(rawT);
+            if (k && !jioStreamByTitle.has(k) && topChartTitles.length < 10) {
+              topChartTitles.push(rawT);
+            }
+          }
+          for (const t of itunesTracks) {
+            if (t?.wrapperType !== 'track' && t?.kind !== 'song') continue;
+            const rawT = cleanCanonicalSongTitle(String(t?.trackName || ''));
+            const k = cleanSongTitleKey(rawT);
+            if (k && !jioStreamByTitle.has(k) && !topChartTitles.includes(rawT) && topChartTitles.length < 15) {
+              topChartTitles.push(rawT);
+            }
+          }
+          if (topChartTitles.length > 0) {
+            const targetedSettled = await Promise.allSettled(
+              topChartTitles.slice(0, 12).map(tTitle =>
+                fetch(`https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(`${tTitle} ${canonicalArtist}`)}&page=1&limit=8`).then(r => r.ok ? r.json() : null)
+              )
+            );
+            for (const ts of targetedSettled) {
+              if (ts.status === 'fulfilled' && ts.value) {
+                const arr = Array.isArray(ts.value?.data?.results) ? ts.value.data.results : Array.isArray(ts.value?.results) ? ts.value.results : [];
+                for (const song of arr) ingestJioSong(song);
+              }
+            }
           }
         }
 
         const mergedTracks: any[] = [];
         const seenTitleKeys = new Set<string>();
+        const seenJioIds = new Set<string>();
 
-        const pushTrack = (candidate: {
-          id: string;
-          title: string;
-          artist: string;
-          album: string;
-          image: string;
-          duration: number;
-          audioUrl?: string;
-          fallbackUrls?: string[];
-          source?: string;
-        }) => {
-          const cleanTitle = cleanCanonicalSongTitle(candidate.title);
+        const pushVerifiedJioTrack = (
+          jioMatch: { url: string; fallbackUrls: string[]; image: string; duration: number; album: string; title: string; id: string; playCount: number },
+          preferredMeta?: { title?: string; album?: string; image?: string }
+        ) => {
+          if (!jioMatch?.url || !jioMatch.url.startsWith('http') || jioMatch.duration < 60) return;
+          if (jioMatch.id && seenJioIds.has(jioMatch.id)) return;
+          const cleanTitle = cleanCanonicalSongTitle(preferredMeta?.title || jioMatch.title);
           const key = cleanSongTitleKey(cleanTitle);
-          if (!key || key.length < 2 || seenTitleKeys.has(key)) return;
-          if (isSpamSong(cleanTitle, candidate.album)) return;
-          seenTitleKeys.add(key);
+          const jioKey = cleanSongTitleKey(jioMatch.title);
+          if (!key || key.length < 2 || seenTitleKeys.has(key) || (jioKey && seenTitleKeys.has(jioKey))) return;
+          if (isSpamSong(cleanTitle, preferredMeta?.album || jioMatch.album)) return;
 
-          const jioMatch = jioStreamByTitle.get(key);
-          const combinedFallbacks = Array.from(
-            new Set([
-              ...(Array.isArray(jioMatch?.fallbackUrls) ? jioMatch.fallbackUrls : []),
-              ...(Array.isArray(candidate.fallbackUrls) ? candidate.fallbackUrls : []),
-            ].filter(Boolean))
-          );
+          seenTitleKeys.add(key);
+          if (jioKey) seenTitleKeys.add(jioKey);
+          if (jioMatch.id) seenJioIds.add(jioMatch.id);
+
+          const itunesArt = itunesCoverByKey.get(key) || (jioKey ? itunesCoverByKey.get(jioKey) : undefined);
+
           mergedTracks.push({
-            id: jioMatch?.id ? `api-${jioMatch.id}` : candidate.id,
+            id: jioMatch.id ? `api-${jioMatch.id}` : `jio-${mergedTracks.length + 1}`,
             title: cleanTitle,
             artist: canonicalArtist,
-            album: cleanCanonicalSongTitle(candidate.album || jioMatch?.album || `${canonicalArtist} Essentials`),
-            image: candidate.image || jioMatch?.image || '',
-            duration: candidate.duration || jioMatch?.duration || 0,
-            audioUrl: candidate.audioUrl || jioMatch?.url || '',
-            fallbackUrls: combinedFallbacks.length > 0 ? combinedFallbacks : undefined,
+            album: cleanCanonicalSongTitle(preferredMeta?.album || jioMatch.album || itunesArt?.album || `${canonicalArtist} Essentials`),
+            image: preferredMeta?.image || itunesArt?.image || jioMatch.image || '',
+            duration: jioMatch.duration,
+            audioUrl: jioMatch.url,
+            fallbackUrls: jioMatch.fallbackUrls.length > 0 ? jioMatch.fallbackUrls : undefined,
             source: 'JioSaavn',
             bitrate: 320,
             codec: 'AAC',
@@ -2148,78 +2396,47 @@ export function createVoidGatewayHandler() {
           });
         };
 
-        // Pre-index iTunes preview URLs by normalized song title key so Deezer tracks also inherit AAC fallbacks
-        const itunesTracks: any[] = [
-          ...(itunesLookupSettled.status === 'fulfilled' && Array.isArray(itunesLookupSettled.value?.results) ? itunesLookupSettled.value.results : []),
-          ...(itunesSearchSettled.status === 'fulfilled' && Array.isArray(itunesSearchSettled.value?.results) ? itunesSearchSettled.value.results : []),
-        ];
-        const itunesPreviewByKey = new Map<string, string>();
-        for (const t of itunesTracks) {
-          if ((t?.wrapperType === 'track' || t?.kind === 'song') && typeof t?.previewUrl === 'string' && t.previewUrl.startsWith('http')) {
-            const k = cleanSongTitleKey(String(t?.trackName || ''));
-            if (k && !itunesPreviewByKey.has(k)) itunesPreviewByKey.set(k, String(t.previewUrl).trim());
-          }
-        }
-
-        // 1. Deezer Official Top Tracks (sorted by Deezer popularity rank)
-        const dzTopTracks: any[] = dzTopSettled.status === 'fulfilled' && Array.isArray(dzTopSettled.value?.data) ? dzTopSettled.value.data : [];
-        dzTopTracks.sort((a, b) => (Number(b?.rank) || 0) - (Number(a?.rank) || 0));
+        // 1. Deezer Official Top Tracks that have a verified full-length JioSaavn stream
         for (const t of dzTopTracks) {
           const tArtist = String(t?.artist?.name || '').trim();
           const contribs: any[] = Array.isArray(t?.contributors) ? t.contributors : [];
           const isTargetArtist =
-            stripAccents(tArtist).includes(canonicalFirstToken) ||
-            contribs.some(c => stripAccents(String(c?.name || '')).includes(canonicalFirstToken));
+            doesCandidateArtistMatch(tArtist) ||
+            contribs.some(c => doesCandidateArtistMatch(String(c?.name || '')));
           if (!isTargetArtist) continue;
-          const rawT = String(t?.title_short || t?.title || '').trim();
+          const rawT = cleanCanonicalSongTitle(String(t?.title_short || t?.title || '').trim());
           const tKey = cleanSongTitleKey(rawT);
-          const itPreview = tKey ? itunesPreviewByKey.get(tKey) : undefined;
-          const dzPreview = typeof t?.preview === 'string' && t.preview.startsWith('http') ? String(t.preview).trim() : undefined;
-          const fallbacks = [itPreview, dzPreview].filter((u): u is string => Boolean(u));
-          pushTrack({
-            id: `dz-track-${t.id}`,
-            title: rawT,
-            artist: canonicalArtist,
-            album: String(t?.album?.title || `${canonicalArtist} Essentials`).trim(),
-            image: String(t?.album?.cover_xl || t?.album?.cover_big || t?.album?.cover_medium || '').trim(),
-            duration: Number(t?.duration) || 0,
-            fallbackUrls: fallbacks.length > 0 ? fallbacks : undefined,
+          const jioMatch = tKey ? jioStreamByTitle.get(tKey) : undefined;
+          if (!jioMatch) continue;
+          pushVerifiedJioTrack(jioMatch, {
+            title: jioMatch.title || rawT,
+            album: String(t?.album?.title || jioMatch.album || `${canonicalArtist} Essentials`).trim(),
+            image: String(t?.album?.cover_xl || t?.album?.cover_big || t?.album?.cover_medium || jioMatch.image || '').trim(),
           });
         }
 
-        // 2. Apple Music / iTunes Top 200 Songs (sorted by iTunes popularity order)
+        // 2. Apple Music / iTunes Top Songs that have a verified full-length JioSaavn stream
         for (const t of itunesTracks) {
           if (t?.wrapperType !== 'track' && t?.kind !== 'song') continue;
           const tArtist = String(t?.artistName || '').trim();
-          if (!stripAccents(tArtist).includes(canonicalFirstToken)) continue;
-          const itPreview = typeof t?.previewUrl === 'string' && t.previewUrl.startsWith('http') ? String(t.previewUrl).trim() : undefined;
-          pushTrack({
-            id: `itunes-track-${t.trackId}`,
-            title: String(t?.trackName || '').trim(),
-            artist: canonicalArtist,
-            album: String(t?.collectionName || `${canonicalArtist} Essentials`).trim(),
-            image: String(t?.artworkUrl100 || '').replace('100x100bb', '600x600bb').trim(),
-            duration: Math.round((Number(t?.trackTimeMillis) || 0) / 1000),
-            fallbackUrls: itPreview ? [itPreview] : undefined,
+          if (!doesCandidateArtistMatch(tArtist)) continue;
+          const rawT = cleanCanonicalSongTitle(String(t?.trackName || '').trim());
+          const tKey = cleanSongTitleKey(rawT);
+          const jioMatch = tKey ? jioStreamByTitle.get(tKey) : undefined;
+          if (!jioMatch) continue;
+          pushVerifiedJioTrack(jioMatch, {
+            title: jioMatch.title || rawT,
+            album: String(t?.collectionName || jioMatch.album || `${canonicalArtist} Essentials`).trim(),
+            image: String(t?.artworkUrl100 || '').replace('100x100bb', '600x600bb').trim() || jioMatch.image,
           });
           if (mergedTracks.length >= 100) break;
         }
 
-        // 3. Supplement with JioSaavn 320kbps tracks sorted by playCount if under 100
+        // 3. Fill with all remaining verified JioSaavn 320kbps tracks for this artist sorted by playCount descending
         if (mergedTracks.length < 100) {
           const sortedJio = Array.from(jioStreamByTitle.values()).sort((a, b) => b.playCount - a.playCount);
           for (const j of sortedJio) {
-            pushTrack({
-              id: `api-${j.id}`,
-              title: j.title,
-              artist: canonicalArtist,
-              album: j.album || `${canonicalArtist} Essentials`,
-              image: j.image,
-              duration: j.duration,
-              audioUrl: j.url,
-              fallbackUrls: j.fallbackUrls,
-              source: 'JioSaavn',
-            });
+            pushVerifiedJioTrack(j);
             if (mergedTracks.length >= 100) break;
           }
         }
