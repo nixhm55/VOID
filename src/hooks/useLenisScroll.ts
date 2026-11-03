@@ -16,8 +16,8 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
     if (!enabled || !wrapper || !content) return;
 
     const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const mobileViewport = window.matchMedia('(max-width: 820px)');
     let frame = 0;
-    let touching = false;
 
     const stopRaf = () => {
       if (frame) {
@@ -36,7 +36,7 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
           return;
         }
         lenis.raf(time);
-        if (touching || lenis.isScrolling || Math.abs(lenis.velocity) > 0.008) {
+        if (lenis.isScrolling || Math.abs(lenis.velocity) > 0.008) {
           frame = window.requestAnimationFrame(raf);
         } else {
           frame = 0;
@@ -53,44 +53,28 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
     };
 
     const start = () => {
-      if (motionPreference.matches || lenisRef.current) return;
+      if (mobileViewport.matches || motionPreference.matches || lenisRef.current) return;
 
-      const isMobile = window.matchMedia('(max-width: 820px)').matches;
       const lenis = new Lenis({
         wrapper,
         content,
         autoRaf: false,
-        lerp: isMobile ? 0.14 : 0.1,
-        wheelMultiplier: 0.92,
-        touchMultiplier: 1,
-        syncTouch: true,
-        syncTouchLerp: 0.1,
+        lerp: 0.1,
+        wheelMultiplier: 0.9,
         allowNestedScroll: true,
       });
       lenisRef.current = lenis;
       wakeRaf();
     };
 
-    const onTouchStart = () => {
-      touching = true;
-      wakeRaf();
-    };
-    const onTouchEnd = () => {
-      touching = false;
-      wakeRaf();
-    };
     const onWake = () => wakeRaf();
 
     const syncScrollMode = () => {
-      if (motionPreference.matches) stop();
+      if (mobileViewport.matches || motionPreference.matches) stop();
       else start();
     };
 
     wrapper.addEventListener('wheel', onWake, { passive: true });
-    wrapper.addEventListener('touchstart', onTouchStart, { passive: true });
-    wrapper.addEventListener('touchmove', onWake, { passive: true });
-    wrapper.addEventListener('touchend', onTouchEnd, { passive: true });
-    wrapper.addEventListener('touchcancel', onTouchEnd, { passive: true });
     wrapper.addEventListener('scroll', onWake, { passive: true });
     window.addEventListener('keydown', onWake, { passive: true });
 
@@ -103,16 +87,14 @@ export function useLenisScroll<T extends HTMLElement, C extends HTMLElement>(
     resizeObserver?.observe(content);
 
     motionPreference.addEventListener('change', syncScrollMode);
+    mobileViewport.addEventListener('change', syncScrollMode);
     syncScrollMode();
 
     return () => {
       motionPreference.removeEventListener('change', syncScrollMode);
+      mobileViewport.removeEventListener('change', syncScrollMode);
       resizeObserver?.disconnect();
       wrapper.removeEventListener('wheel', onWake);
-      wrapper.removeEventListener('touchstart', onTouchStart);
-      wrapper.removeEventListener('touchmove', onWake);
-      wrapper.removeEventListener('touchend', onTouchEnd);
-      wrapper.removeEventListener('touchcancel', onTouchEnd);
       wrapper.removeEventListener('scroll', onWake);
       window.removeEventListener('keydown', onWake);
       stop();

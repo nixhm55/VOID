@@ -39,6 +39,20 @@ const greetings = [
   'Let the day soften.',
   'The evening is yours.',
 ];
+const mobileGreetings: readonly [string, string][] = [
+  ['Good night,', 'still awake?'],
+  ['The night', 'is quiet.'],
+  ['Before the', 'world wakes.'],
+  ['A good morning', 'starts here.'],
+  ['A good morning', 'starts here.'],
+  ['Good to have', 'you here.'],
+  ['Good afternoon,', 'take your time.'],
+  ['Settle into', 'the afternoon.'],
+  ['A little room', 'to listen.'],
+  ['Evening,', 'take your time.'],
+  ['Let the day', 'soften.'],
+  ['The evening', 'is yours.'],
+];
 // `compact` marks the pages that stay visible when the sidebar is collapsed to icons.
 const navItems: { id: Page; label: string; icon: typeof Home; group: 'listen' | 'collection'; compact: boolean }[] = [
   { id: 'home', label: 'Home', icon: Home, group: 'listen', compact: true },
@@ -4504,7 +4518,16 @@ useEffect(() => {
           {isReady && page === 'home' && !detail && !libraryOpen && !searchOpen && <>
             <div className="welcome">
               <div>
-                <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">{greetings[Math.floor(greetingHour / 2)]}</h1>
+                <h1 className="page-title greeting-title glass-ink" key={Math.floor(greetingHour / 2)} aria-live="polite">
+                  {isMobileViewport ? (
+                    <>
+                      <span className="greeting-line-top">{mobileGreetings[Math.floor(greetingHour / 2)]?.[0] ?? greetings[Math.floor(greetingHour / 2)]}</span>
+                      <span className="greeting-line-bottom">{mobileGreetings[Math.floor(greetingHour / 2)]?.[1] ?? ''}</span>
+                    </>
+                  ) : (
+                    greetings[Math.floor(greetingHour / 2)]
+                  )}
+                </h1>
                 <DgReveal as="p" dir="up" index={1} className="welcome-copy">A quiet place for the music already yours.</DgReveal>
                 {tracks.length ? <DgReveal as="p" dir="up" index={2} className="welcome-meta">{countLabel(albumNames.length, 'album')} · {countLabel(tracks.length, 'song')}</DgReveal> : null}
               </div>
@@ -4961,7 +4984,7 @@ useEffect(() => {
                       },
                     }}
                     className="trending-track-list"
-                    mobileBatchSize={isMobileViewport ? 40 : undefined}
+                    mobileBatchSize={isMobileViewport ? 100 : undefined}
                     mobileResetKey={trendingQuery}
                     downloadingIds={downloadingIds}
                     recentlyDownloadedIds={recentlyDownloadedIds}
