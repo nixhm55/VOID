@@ -15,6 +15,7 @@ export interface StarBorderProps extends HTMLAttributes<HTMLElement> {
   radius?: number;
   glow?: number;
   sparkle?: boolean;
+  active?: boolean;
   hover?: 'lap' | 'brighten' | 'reveal' | 'none';
   clickPulse?: boolean;
   theme?: 'dark' | 'light';

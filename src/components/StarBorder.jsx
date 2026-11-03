@@ -134,13 +134,14 @@ const StarBorder = ({
   style,
   color = '#94a3b8',
   trailColor = '#94a3b8',
-  duration = 5,
+  duration = 9,
   thickness = 2,
   radius = 12,
   trailLength = 0.4,
   stars = 1,
-  glow = 0.6,
+  glow = 0.75,
   sparkle = false,
+  active = true,
   direction = 'clockwise',
   hover = 'none',
   clickPulse = false,
@@ -166,6 +167,7 @@ const StarBorder = ({
     stars: clamp(Math.round(stars), 1, 6),
     glow: clamp(glow, 0, 1),
     sparkle,
+    active: active !== false,
     direction: direction === 'counterclockwise' ? -1 : 1,
     hover: HOVERS.includes(hover) ? hover : 'none',
     clickPulse
@@ -190,7 +192,7 @@ const StarBorder = ({
       motion: 0,
       lap: -1,
       time: 0,
-      reveal: 1,
+      reveal: settingsRef.current.active ? 1 : 0,
       boost: 0,
       flash: 0,
       emit: 0,
@@ -225,7 +227,7 @@ const StarBorder = ({
 
     const drawTrail = (s, shape, head, length, sign, intensity, tip = true) => {
       if (length < 0.5 || intensity <= 0) return;
-      const steps = clamp(Math.ceil(length / 6), 8, 52);
+      const steps = clamp(Math.ceil(length / 6), 10, 56);
       pointAt(shape, head, point);
       let px = point.x;
       let py = point.y;
@@ -234,9 +236,9 @@ const StarBorder = ({
         const u = 1 - (i - 0.5) / steps;
         const fade = u * u * intensity;
         let tone = mix(colors.tail, colors.head, u);
-        if (!s.light) tone = mix(tone, WHITE, u ** 6 * 0.65);
+        if (!s.light) tone = mix(tone, WHITE, u ** 4 * 0.82);
         ctx.lineCap = tip && i === 1 ? 'round' : 'butt';
-        stroke(px, py, point.x, point.y, 2 + 6 * s.glow, rgba(tone, fade * (s.light ? 0.1 : 0.2) * s.glow));
+        stroke(px, py, point.x, point.y, 2 + 6 * s.glow, rgba(tone, fade * (s.light ? 0.1 : 0.22) * s.glow));
         stroke(px, py, point.x, point.y, s.thickness, rgba(tone, fade));
         px = point.x;
         py = point.y;
@@ -246,40 +248,41 @@ const StarBorder = ({
     const drawHead = (s, x, y, intensity, twinkle) => {
       if (intensity <= 0) return;
       const tone = colors.head;
-      const reach = (12 + 40 * s.glow) * (s.light ? 0.6 : 1);
+      const reach = (16 + 44 * s.glow) * (s.light ? 0.6 : 1);
       const bloom = ctx.createRadialGradient(x, y, 0, x, y, reach);
-      const strength = (s.light ? 0.08 : 0.4) * s.glow * intensity;
-      bloom.addColorStop(0, rgba(tone, strength));
-      bloom.addColorStop(0.2, rgba(tone, strength * 0.4));
-      bloom.addColorStop(0.5, rgba(tone, strength * 0.1));
+      const strength = (s.light ? 0.12 : 0.52) * s.glow * intensity;
+      bloom.addColorStop(0, rgba(WHITE, Math.min(1, strength * 1.35)));
+      bloom.addColorStop(0.18, rgba(mix(tone, WHITE, 0.55), strength * 0.72));
+      bloom.addColorStop(0.48, rgba(tone, strength * 0.22));
       bloom.addColorStop(1, rgba(tone, 0));
       ctx.fillStyle = bloom;
       ctx.fillRect(x - reach, y - reach, reach * 2, reach * 2);
-      if (!s.sparkle) return;
 
-      const size = (1 + s.thickness * 0.6) * (s.light ? 0.85 : 1);
-      const core = ctx.createRadialGradient(x, y, 0, x, y, size * 2.2);
-      core.addColorStop(0, rgba(s.light ? tone : WHITE, intensity));
-      core.addColorStop(s.light ? 0.3 : 0.4, rgba(s.light ? tone : mix(tone, WHITE, 0.5), intensity * 0.9));
-      core.addColorStop(s.light ? 0.55 : 1, rgba(tone, s.light ? intensity * 0.12 : 0));
+      // Luminous glowing pointer head at the leading tip of the line
+      const coreRadius = (2.4 + s.thickness * 1.15) * (0.92 + 0.08 * twinkle);
+      const core = ctx.createRadialGradient(x, y, 0, x, y, coreRadius * 2.6);
+      core.addColorStop(0, rgba(WHITE, Math.min(1, intensity * 1.15)));
+      core.addColorStop(0.32, rgba(mix(tone, WHITE, 0.75), Math.min(1, intensity * 0.92)));
+      core.addColorStop(0.68, rgba(tone, intensity * 0.38));
       core.addColorStop(1, rgba(tone, 0));
       ctx.fillStyle = core;
       ctx.beginPath();
-      ctx.arc(x, y, size * 2.2, 0, TAU);
+      ctx.arc(x, y, coreRadius * 2.6, 0, TAU);
       ctx.fill();
 
-      const spike = (3 + 4 * s.glow + s.thickness * 1.5) * twinkle;
+      // Crisp star-glint shine on the leading pointer tip
+      const spike = (4.5 + 5 * s.glow + s.thickness * 1.4) * (0.88 + 0.12 * twinkle);
       const center = s.light ? tone : WHITE;
       const horizontal = ctx.createLinearGradient(x - spike, y, x + spike, y);
       horizontal.addColorStop(0, rgba(tone, 0));
-      horizontal.addColorStop(0.5, rgba(center, intensity * 0.95));
+      horizontal.addColorStop(0.5, rgba(center, Math.min(1, intensity * 0.92)));
       horizontal.addColorStop(1, rgba(tone, 0));
-      stroke(x - spike, y, x + spike, y, s.light ? 0.75 : 1, horizontal);
+      stroke(x - spike, y, x + spike, y, s.light ? 0.85 : 1.15, horizontal);
       const vertical = ctx.createLinearGradient(x, y - spike, x, y + spike);
       vertical.addColorStop(0, rgba(tone, 0));
-      vertical.addColorStop(0.5, rgba(center, intensity * 0.95));
+      vertical.addColorStop(0.5, rgba(center, Math.min(1, intensity * 0.92)));
       vertical.addColorStop(1, rgba(tone, 0));
-      stroke(x, y - spike, x, y + spike, s.light ? 0.75 : 1, vertical);
+      stroke(x, y - spike, x, y + spike, s.light ? 0.85 : 1.15, vertical);
     };
 
     const spawnDust = (x, y, nx, ny, speed) => {
@@ -302,7 +305,7 @@ const StarBorder = ({
       const s = state.boost > 0.001 ? { ...base, glow: Math.min(1.5, base.glow + 0.4 * state.boost) } : base;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (state.width < 2 || state.height < 2) return;
+      if (state.width < 2 || state.height < 2 || state.reveal <= 0.001) return;
       const offset = (BLEED + s.thickness / 2) * state.dpr;
       ctx.setTransform(state.dpr, 0, 0, state.dpr, offset, offset);
       ctx.globalCompositeOperation = s.light ? 'source-over' : 'lighter';
@@ -310,10 +313,11 @@ const StarBorder = ({
 
       const total = shape.total;
       const spacing = total / s.stars;
-      const speed = Math.abs(state.motion);
-      const sign = state.motion >= 0 ? 1 : -1;
+      const fullSpeed = Math.abs(total / s.duration);
+      const speed = Math.max(fullSpeed * 0.35, Math.abs(state.motion));
+      const sign = (state.motion !== 0 ? state.motion : s.direction) >= 0 ? 1 : -1;
       const span = s.trailLength * s.duration;
-      const length = Math.min(speed * span, spacing * 0.92, total * 0.6);
+      const length = Math.min(speed * span, spacing * 0.92, total * 0.6) * (0.35 + 0.65 * state.reveal);
       const intensity = state.reveal * (1 + 0.4 * state.boost + 0.6 * state.flash);
 
       const ring = state.flash * (s.light ? 0.18 : 0.32) + state.boost * state.reveal * (s.light ? 0.07 : 0.12);
@@ -331,15 +335,9 @@ const StarBorder = ({
         ctx.stroke();
       }
 
-      const still = clamp(1 - speed / Math.max(1, (total / s.duration) * 0.6), 0, 1) * Math.min(1, intensity);
-      const rest = (10 + 14 * s.glow + s.thickness * 2) * still;
       for (let i = 0; i < s.stars; i++) {
         const head = state.phase + i * spacing;
         drawTrail(s, shape, head, length, sign, Math.min(1, intensity));
-        if (still > 0.01) {
-          drawTrail(s, shape, head, rest, 1, still, false);
-          drawTrail(s, shape, head, rest, -1, still, false);
-        }
       }
 
       pulses.forEach(pulse => {
@@ -357,7 +355,7 @@ const StarBorder = ({
 
       for (let i = 0; i < s.stars; i++) {
         pointAt(shape, state.phase + i * spacing, point);
-        const twinkle = 0.82 + 0.18 * Math.sin(state.time * 6.1 + i * 2.3) * Math.sin(state.time * 2.7 + i);
+        const twinkle = 0.86 + 0.14 * Math.sin(state.time * 5.2 + i * 2.3) * Math.sin(state.time * 2.4 + i);
         drawHead(s, point.x, point.y, Math.min(1.3, intensity), twinkle);
       }
 
@@ -399,8 +397,10 @@ const StarBorder = ({
         colors.tail = toRgb(s.trailColor);
       }
       const cruise = reduce ? 0 : (s.direction * nextShape.total) / s.duration;
-      state.velocity = cruise;
-      state.motion = cruise;
+      if (state.velocity === 0 && s.active) {
+        state.velocity = cruise;
+        state.motion = cruise;
+      }
       draw(s, nextShape);
       wake();
     };
@@ -433,21 +433,34 @@ const StarBorder = ({
       const engaged = state.hovered || state.focused;
       const cruise = reduce ? 0 : (s.direction * total) / s.duration;
 
+      const baseRevealTarget = s.hover === 'reveal' && !engaged ? 0 : 1;
+      const revealTarget = s.active ? baseRevealTarget : 0;
+
+      if (revealTarget > state.reveal) {
+        // Smooth fade-in when search opens or resets
+        state.reveal += (revealTarget - state.reveal) * (1 - Math.exp(-dt / 0.32));
+        if (revealTarget - state.reveal < 0.004) state.reveal = revealTarget;
+      } else if (revealTarget < state.reveal) {
+        // Slow, gentle fade-out ("malle malle slowly slowly fade out") when song list appears
+        const expStep = (state.reveal - revealTarget) * (1 - Math.exp(-dt / 0.95));
+        const linearTail = dt * 0.14;
+        state.reveal = Math.max(revealTarget, state.reveal - Math.max(expStep, linearTail));
+      }
+
       if (s.hover === 'none') {
-        state.reveal = 1;
         state.boost = 0;
         state.lap = -1;
-        state.velocity = cruise;
-        state.motion = cruise;
-        state.phase = wrap(state.phase + cruise * dt, total);
+        const targetVel = s.active ? cruise : cruise * 0.18;
+        state.velocity += (targetVel - state.velocity) * (1 - Math.exp(-dt / (s.active ? 0.25 : 1.1)));
+        state.motion = state.velocity;
+        state.phase = wrap(state.phase + state.velocity * dt, total);
       } else {
-        const revealTarget = s.hover === 'reveal' && !engaged ? 0 : 1;
-        state.reveal += (revealTarget - state.reveal) * (1 - Math.exp(-dt / (revealTarget > state.reveal ? 0.16 : 0.45)));
-        const boostTarget = s.hover === 'brighten' && engaged ? 1 : 0;
+        const boostTarget = s.hover === 'brighten' && engaged && s.active ? 1 : 0;
         state.boost += (boostTarget - state.boost) * (1 - Math.exp(-dt / (boostTarget > state.boost ? 0.18 : 0.5)));
         state.flash *= Math.exp(-dt / 0.22);
 
-        state.velocity += (cruise - state.velocity) * (1 - Math.exp(-dt / 0.45));
+        const targetVel = s.active ? cruise : 0;
+        state.velocity += (targetVel - state.velocity) * (1 - Math.exp(-dt / 0.55));
         let extra = 0;
         if (state.lap >= 0) {
           const before = ease(Math.min(1, state.lap / LAP));
@@ -484,8 +497,7 @@ const StarBorder = ({
 
       draw(s, shape);
 
-      const revealTarget = s.hover === 'reveal' && !engaged ? 0 : 1;
-      const boostTarget = s.hover === 'brighten' && engaged ? 1 : 0;
+      const boostTarget = s.hover === 'brighten' && engaged && s.active ? 1 : 0;
       const settling =
         Math.abs(revealTarget - state.reveal) > 0.002 ||
         Math.abs(boostTarget - state.boost) > 0.002 ||
@@ -494,7 +506,9 @@ const StarBorder = ({
         dust.length > 0;
       const moving = Math.abs(state.motion) > 0.05 || cruise !== 0 || state.lap >= 0;
       const showing = state.reveal > 0.002 || revealTarget > 0;
-      if (state.visible && (settling || (moving && showing) || state.hovered)) raf = requestAnimationFrame(frame);
+      if (state.visible && (settling || (moving && showing))) {
+        raf = requestAnimationFrame(frame);
+      }
     };
 
     const wake = () => {

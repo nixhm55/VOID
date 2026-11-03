@@ -1908,6 +1908,7 @@ useEffect(() => {
 
     let cancelled = false;
     const controller = new AbortController();
+    setMusicSearching(true);
 
     const search = async () => {
       setMusicSearching(true);
@@ -5005,13 +5006,21 @@ useEffect(() => {
               className="mobile-search-star-wrap"
               color="#94a3b8"
               trailColor="#94a3b8"
-              duration={5}
+              duration={9.5}
               direction="clockwise"
               stars={1}
               trailLength={0.4}
               thickness={2}
               radius={14}
-              glow={0.6}
+              glow={0.75}
+              active={
+                voiceOrbOpen ||
+                !paletteQuery.trim() ||
+                (musicSearching &&
+                  !allSearchResults.length &&
+                  !deduplicatedMusicResults.length &&
+                  !artistSearchResults.length)
+              }
               hover="none"
               sparkle={false}
               clickPulse={false}
@@ -5105,13 +5114,14 @@ useEffect(() => {
                 className="mobile-search-results is-voice-orb-open"
                 color="#94a3b8"
                 trailColor="#94a3b8"
-                duration={5}
+                duration={9.5}
                 direction="clockwise"
                 stars={1}
                 trailLength={0.4}
                 thickness={2}
                 radius={26}
-                glow={0.6}
+                glow={0.75}
+                active={true}
                 hover="none"
                 sparkle={false}
                 clickPulse={false}
@@ -6122,13 +6132,21 @@ useEffect(() => {
         aria-label="Search your library"
         color="#94a3b8"
         trailColor="#94a3b8"
-        duration={5}
+        duration={9.5}
         direction="clockwise"
         stars={1}
         trailLength={0.4}
         thickness={2}
         radius={30}
-        glow={0.6}
+        glow={0.75}
+        active={
+          voiceOrbOpen ||
+          !paletteQuery.trim() ||
+          (musicSearching &&
+            !allSearchResults.length &&
+            !deduplicatedMusicResults.length &&
+            !artistSearchResults.length)
+        }
         hover="none"
         sparkle={false}
         clickPulse={false}
