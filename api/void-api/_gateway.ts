@@ -973,35 +973,164 @@ export function createVoidGatewayHandler() {
       return;
     }
 
-    // 1. Multi-Provider Universal Lyrics Aggregator (LRCLIB Exact + LRCLIB Search + NetEase Cloud LRC + LrcCx + JioSaavn Lyrics + Lyrics.ovh + ChartLyrics)
+    // 1. Multi-Provider Universal Lyrics Aggregator (LRCLIB + Kugou LRC + NetEase LRC + QQ Music LRC + Megalobiz LRC + LrcCx + Textyl + Official JioSaavn api.php + Genius + Shazam + Manual YouTube Captions + Lyrist + Lyrics.ovh + ChartLyrics)
     if (parsed.pathname === '/__void_api/lyrics') {
       const q = parsed.searchParams.get('q')?.trim() || '';
       const titleParam = parsed.searchParams.get('title')?.trim() || '';
       const rawTitleParam = parsed.searchParams.get('rawTitle')?.trim() || '';
       const artistParam = parsed.searchParams.get('artist')?.trim() || '';
+      const albumParam = parsed.searchParams.get('album')?.trim() || '';
+      const videoIdParam = parsed.searchParams.get('videoId')?.trim() || '';
+      const songIdParam = parsed.searchParams.get('songId')?.trim() || '';
       const durationParam = Number(parsed.searchParams.get('duration') || '0') || 0;
 
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Access-Control-Allow-Origin', '*');
-      if (!q && !titleParam) {
+      if (!q && !titleParam && !rawTitleParam) {
         res.statusCode = 200;
         res.end('[]');
         return;
       }
 
-      const cleanTitle = (titleParam || q)
-        .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const artistParts = artistParam
-        .split(/[·•,/&|]+|\b(?:feat\.?|ft\.?)\b/i)
-        .map((s) => s.trim())
-        .filter((s) => s.length >= 2 && !/unknown artist/i.test(s));
+      const NOISE_LABEL_RE =
+        /\b(?:sony\s*music(?:\s*south|\s*india)?|t-series(?:\s*malayalam|\s*tamil|\s*telugu|\s*regional|\s*marathi)?|think\s*music(?:\s*india)?|muzik\s*247|saregama(?:\s*malayalam|\s*tamil|\s*hindi|\s*marathi)?|zee\s*music(?:\s*company|\s*south|\s*marathi)?|aditya\s*music|lahari\s*music|manorama\s*music|satyam\s*audios|millennium\s*audios|goodwill\s*entertainments|speed\s*records|yrf|tips\s*official|everest\s*marathi|fountain\s*music|rotana|mazzika|coke\s*studio|vevo|topic|official\s*channel|records|music\s*label|unknown\s*artist)\b/gi;
+
+      const NOISE_TITLE_RE =
+        /\b(?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video|mv|visualizer)|lyric(?:al)?\s*(?:video|song)?|full\s*(?:video|audio|song)|video\s*song|audio\s*song|4k|8k|hd|hq|remastered|from\s+["'“”]?[^"'”)\]]+["'”]?|original\s+motion\s+picture\s+soundtrack|ost|malayalam\s*song|tamil\s*song|hindi\s*song|marathi\s*song|urdu\s*song|telugu\s*song|kannada\s*song|arabic\s*song|mongolian\s*song|chinese\s*song)\b/gi;
+
+      const stripHtml = (s: string) =>
+        String(s || '')
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;|&apos;/g, "'")
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&nbsp;/g, ' ')
+          .trim();
+
+      const extractBracketSongs = (raw: string): string[] => {
+        const out: string[] = [];
+        for (const m of raw.matchAll(/[【《「『]([^】》」』]{2,40})[】》」』]/g)) {
+          if (m[1]?.trim()) out.push(m[1].trim());
+        }
+        return out;
+      };
+
+      const cleanOneTitle = (raw: string): string => {
+        return stripHtml(raw)
+          .replace(/\s*\((?:from|feat|ft|prod|official|video|audio|lyric|lyrics|single|remaster|version|live|ost|theme)[^)]*\)/gi, ' ')
+          .replace(/\s*\[(?:from|feat|ft|prod|official|video|audio|lyric|lyrics|single|remaster|version|live|ost|theme)[^\]]*\]/gi, ' ')
+          .replace(/[【《「『][^】》」』]*[】》」』]/g, ' ')
+          .replace(NOISE_TITLE_RE, ' ')
+          .replace(NOISE_LABEL_RE, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      };
+
+      const artistParts = Array.from(
+        new Set(
+          stripHtml(artistParam)
+            .replace(NOISE_LABEL_RE, ' ')
+            .split(/[·•,/&|;]+|\b(?:feat\.?|ft\.?|x|vs\.?)\b/i)
+            .map((s) => s.replace(/\.\s*/g, ' ').replace(/\s+/g, ' ').trim())
+            .filter((s) => s.length >= 2 && !/^(?:various|unknown)/i.test(s))
+        )
+      );
+
+      // Expand known bilingual Arabic/Indian artist aliases so both scripts are searched
+      const BILINGUAL_ARTIST_MAP: Record<string, string[]> = {
+        'mehad hamad': ['ميحد حمد', 'Mehad Hamad', 'Mihed Hamad'],
+        'ميحد حمد': ['Mehad Hamad', 'ميحد حمد', 'Mihed Hamad'],
+        'amr diab': ['عمرو دياب', 'Amr Diab'],
+        'عمرو دياب': ['Amr Diab', 'عمرو دياب'],
+        'hussain al jassmi': ['حسين الجسمي', 'Hussain Al Jassmi'],
+        'حسين الجسمي': ['Hussain Al Jassmi', 'حسين الجسمي'],
+        'rashid al majed': ['راشد الماجد', 'Rashid Al Majed'],
+        'راشد الماجد': ['Rashid Al Majed', 'راشد الماجد'],
+        'abdul majeed abdullah': ['عبد المجيد عبدالله', 'Abdul Majeed Abdullah'],
+        'عبد المجيد عبدالله': ['Abdul Majeed Abdullah', 'عبد المجيد عبدالله'],
+        'mohammed abdu': ['محمد عبده', 'Mohammed Abdu'],
+        'محمد عبده': ['Mohammed Abdu', 'محمد عبده'],
+        'al shami': ['الشامي', 'Al Shami'],
+        'الشامي': ['Al Shami', 'الشامي'],
+        'eida al menhali': ['عيضة المنهالي', 'Eida Al Menhali'],
+        'عيضة المنهالي': ['Eida Al Menhali', 'عيضة المنهالي'],
+        'majid al mohandis': ['ماجد المهندس', 'Majid Al Mohandis'],
+        'ماجد المهندس': ['Majid Al Mohandis', 'ماجد المهندس'],
+        'nancy ajram': ['نانسي عجرم', 'Nancy Ajram'],
+        'نانسي عجرم': ['Nancy Ajram', 'نانسي عجرم'],
+        'elissa': ['إليسا', 'Elissa'],
+        'إليسا': ['Elissa', 'إليسا'],
+        'sherine': ['شيرين', 'Sherine', 'شيرين عبدالوهاب'],
+        'شيرين عبدالوهاب': ['Sherine', 'شيرين عبدالوهاب', 'شيرين'],
+        'ahlam': ['أحلام', 'Ahlam'],
+        'أحلام': ['Ahlam', 'أحلام'],
+        'assala': ['أصالة', 'Assala', 'أصالة نصري'],
+        'أصالة نصري': ['Assala', 'أصالة نصري', 'أصالة'],
+        'kadim al sahir': ['كاظم الساهر', 'Kadim Al Sahir'],
+        'كاظم الساهر': ['Kadim Al Sahir', 'كاظم الساهر'],
+        'tamer hosny': ['تامر حسني', 'Tamer Hosny'],
+        'تامر حسني': ['Tamer Hosny', 'تامر حسني'],
+        'ahmed saad': ['أحمد سعد', 'Ahmed Saad'],
+        'أحمد سعد': ['Ahmed Saad', 'أحمد سعد'],
+        'saad lamjarred': ['سعد لمجرد', 'Saad Lamjarred'],
+        'سعد لمجرد': ['Saad Lamjarred', 'سعد لمجرد'],
+        'wael kfoury': ['وائل كفوري', 'Wael Kfoury'],
+        'وائل كفوري': ['Wael Kfoury', 'وائل كفوري'],
+        'nassif zeytoun': ['ناصيف زيتون', 'Nassif Zeytoun'],
+        'ناصيف زيتون': ['Nassif Zeytoun', 'ناصيف زيتون'],
+        'mohamed mounir': ['محمد منير', 'Mohamed Mounir'],
+        'محمد منير': ['Mohamed Mounir', 'محمد منير'],
+      };
+      for (const ap of [...artistParts]) {
+        const extra = BILINGUAL_ARTIST_MAP[ap.toLowerCase()];
+        if (extra) {
+          for (const e of extra) {
+            if (!artistParts.includes(e)) artistParts.push(e);
+          }
+        }
+      }
+
+      const rawCandidates = [rawTitleParam, titleParam, q].filter(Boolean);
+      const titleVariantsSet = new Set<string>();
+      for (const rc of rawCandidates) {
+        for (const b of extractBracketSongs(rc)) {
+          const cb = cleanOneTitle(b);
+          if (cb.length >= 2) titleVariantsSet.add(cb);
+        }
+        const cleanedFull = cleanOneTitle(rc);
+        if (cleanedFull.length >= 2) {
+          const noParens = cleanedFull.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+          if (noParens.length >= 2) titleVariantsSet.add(noParens);
+          titleVariantsSet.add(cleanedFull);
+        }
+        const segments = stripHtml(rc)
+          .split(/\s*(?:\||·|•|\/\/| - | – | — |:)\s*/)
+          .map(cleanOneTitle)
+          .filter((seg) => seg.length >= 2);
+        for (const seg of segments) {
+          const noParens = seg.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+          if (noParens.length >= 2) {
+            const isPureArtist = artistParts.some(
+              (ap) => ap.toLowerCase() === noParens.toLowerCase()
+            );
+            if (!isPureArtist) titleVariantsSet.add(noParens);
+          }
+        }
+      }
+
+      const titleVariants = Array.from(titleVariantsSet).slice(0, 8);
+      const cleanTitle = titleVariants[0] || cleanOneTitle(titleParam || q) || q;
       const primaryArtist = artistParts[0] || '';
       const secondaryArtist = artistParts[1] || '';
 
-      const normTokens = (str: string) =>
-        String(str || '')
+      const isTargetSlowedOrRemix = /\b(?:slowed|reverb|sped\s*up|nightcore|remix|lofi|lo-fi|live|karaoke|instrumental)\b/i.test(
+        `${rawTitleParam} ${titleParam}`
+      );
+
+      // Phonetic token normalizer across Arabic, Malayalam, Hindi, Marathi, Tamil, and English
+      const normalizePhoneticToken = (w: string): string => {
+        let s = w
           .toLowerCase()
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
@@ -1009,55 +1138,259 @@ export function createVoidGatewayHandler() {
           .replace(/[أإآٱ]/g, 'ا')
           .replace(/ة/g, 'ه')
           .replace(/ى/g, 'ي')
+          .replace(/ؤ/g, 'و')
+          .replace(/ئ/g, 'ي');
+        if (/^[a-z0-9]+$/.test(s)) {
+          s = s
+            .replace(/^(?:al|el)-?/, '')
+            .replace(/\b(?:mehad|mihed|maihad|mihad|mahad)\b/g, 'mehad')
+            .replace(/\b(?:hamad|hamed|ahmed|ahmad)\b/g, 'hamad')
+            .replace(/\b(?:jser|jisser|jisr|jesr)\b/g, 'jisr')
+            .replace(/\b(?:sadaqa|sadaka|sadaqah|sadakah)\b/g, 'sadaqa')
+            .replace(/\b(?:mater|matar|mtar)\b/g, 'matar')
+            .replace(/\b(?:wen|wain|wayn|wein|fein|fain)\b/g, 'wain')
+            .replace(/\b(?:ent|enta|inta|ant|anta|enti|inti)\b/g, 'inta')
+            .replace(/\b(?:tamally|tamali|tamalli)\b/g, 'tamali')
+            .replace(/\b(?:maak|ma3ak|mak)\b/g, 'mak')
+            .replace(/\b(?:leila|layla|laila|leyla)\b/g, 'laila')
+            .replace(/\b(?:habibi|habiby|7abibi)\b/g, 'habibi')
+            .replace(/\b(?:bismatak|besmetak|basmatak)\b/g, 'basmatak')
+            .replace(/\b(?:ahib|aheb|oheb|uhib)\b/g, 'ahib')
+            .replace(/aa+/g, 'a')
+            .replace(/ee+|ii+/g, 'i')
+            .replace(/oo+|uu+|ou/g, 'u')
+            .replace(/ph/g, 'f')
+            .replace(/kh/g, 'k')
+            .replace(/gh/g, 'g')
+            .replace(/sh/g, 's')
+            .replace(/th/g, 't')
+            .replace(/dh/g, 'd')
+            .replace(/bh/g, 'b')
+            .replace(/zh/g, 'l')
+            .replace(/q/g, 'k')
+            .replace(/([a-z])\1+/g, '$1');
+        }
+        return s;
+      };
+
+      const STOP_WORDS = new Set([
+        'the', 'al', 'el', 'from', 'song', 'video', 'audio', 'official',
+        'lyrics', 'lyrical', 'full', 'movie', 'film', 'version', 'original',
+        'كلمات', 'اغنية', 'أغنية', 'اغنيه',
+      ]);
+
+      const normTokens = (str: string): string[] =>
+        String(str || '')
           .replace(/[^\p{L}\p{N}\s]/gu, ' ')
           .split(/\s+/)
-          .filter((w) => w.length >= 2 && w !== 'the' && w !== 'al' && w !== 'el' && w !== 'from');
+          .map(normalizePhoneticToken)
+          .filter((w) => w.length >= 1 && !STOP_WORDS.has(w));
 
-      const targetTitleTokens = normTokens(cleanTitle);
+      const tokensMatch = (a: string, b: string): boolean => {
+        if (a === b) return true;
+        const minLen = Math.min(a.length, b.length);
+        const maxLen = Math.max(a.length, b.length);
+        if (minLen >= 4 && minLen / maxLen >= 0.78 && (a.startsWith(b) || b.startsWith(a))) {
+          return true;
+        }
+        return false;
+      };
+
+      const allTargetTitleTokenSets = titleVariants.map(normTokens).filter((t) => t.length > 0);
       const targetArtistTokens = artistParts.flatMap(normTokens);
 
-      const isCandidateMatch = (candTitle: string, candArtist: string): boolean => {
-        const cTitleTokens = normTokens(candTitle);
-        if (!targetTitleTokens.length || !cTitleTokens.length) return false;
-        const overlap = targetTitleTokens.filter((tt) =>
-          cTitleTokens.some((ct) => ct === tt || (tt.length >= 4 && ct.length >= 4 && (ct.includes(tt) || tt.includes(ct))))
-        );
-        const minReq = targetTitleTokens.length === 1 ? 1 : Math.max(1, Math.ceil(targetTitleTokens.length * 0.6));
-        if (overlap.length < minReq) return false;
+      const scoreCandidate = (
+        candTitle: string,
+        candArtist: string,
+        candDurationSec: number,
+        hasSynced: boolean,
+        basePriority: number
+      ): number => {
+        if (!candTitle) return -1;
+        if (
+          !isTargetSlowedOrRemix &&
+          /\b(?:slowed|reverb|sped\s*up|nightcore|8d\s*audio|karaoke|instrumental|ringtone)\b/i.test(
+            `${candTitle} ${candArtist}`
+          )
+        ) {
+          return -1;
+        }
 
-        if (candArtist && targetArtistTokens.length > 0) {
-          const cArtistTokens = normTokens(candArtist);
-          if (cArtistTokens.length > 0) {
-            const artistMatch = targetArtistTokens.some((at) =>
-              cArtistTokens.some((ct) => ct === at || (at.length >= 4 && ct.length >= 4 && (ct.includes(at) || at.includes(ct))))
-            );
-            if (targetTitleTokens.length <= 2 && !artistMatch) return false;
+        const cTitleTokens = normTokens(cleanOneTitle(candTitle));
+        const cArtistTokens = normTokens(candArtist);
+        if (!cTitleTokens.length) return -1;
+
+        let bestTitleScore = 0;
+        for (const tTokens of allTargetTitleTokenSets) {
+          if (!tTokens.length) continue;
+          const matchesForward = tTokens.filter((tt) =>
+            cTitleTokens.some((ct) => tokensMatch(tt, ct))
+          ).length;
+          const matchesBackward = cTitleTokens.filter((ct) =>
+            tTokens.some((tt) => tokensMatch(tt, ct))
+          ).length;
+          const fwdRatio = matchesForward / tTokens.length;
+          const bwdRatio = matchesBackward / cTitleTokens.length;
+          // Require both forward and backward overlap so 1-word generic titles never match 4-word titles
+          if (fwdRatio >= 0.5 && bwdRatio >= 0.4) {
+            const combined = (2 * matchesForward) / (tTokens.length + cTitleTokens.length);
+            if (combined > bestTitleScore) bestTitleScore = Math.max(combined, (fwdRatio + bwdRatio) * 0.5);
+          } else if (tTokens.length >= 2 && matchesForward === tTokens.length && bwdRatio >= 0.34) {
+            bestTitleScore = Math.max(bestTitleScore, 0.72);
           }
         }
-        return true;
+
+        if (bestTitleScore < 0.48) {
+          return -1;
+        }
+
+        const artistMatched =
+          targetArtistTokens.length > 0 &&
+          cArtistTokens.length > 0 &&
+          targetArtistTokens.some((at) =>
+            cArtistTokens.some((ct) => at.length >= 2 && ct.length >= 2 && tokensMatch(at, ct))
+          );
+
+        const durationDiff =
+          durationParam > 30 && candDurationSec > 30
+            ? Math.abs(candDurationSec - durationParam)
+            : -1;
+        const durationClose = durationDiff >= 0 && durationDiff <= 7;
+        const durationVeryClose = durationDiff >= 0 && durationDiff <= 3;
+
+        // If title has only 1 token and artist is known on both sides, require artist or duration match
+        const shortestTargetLen = allTargetTitleTokenSets[0]?.length || 1;
+        if (
+          shortestTargetLen <= 1 &&
+          targetArtistTokens.length > 0 &&
+          cArtistTokens.length > 0 &&
+          !artistMatched &&
+          !durationClose
+        ) {
+          return -1;
+        }
+
+        let score = basePriority + bestTitleScore * 25;
+        if (hasSynced) score += 35;
+        if (artistMatched) score += 22;
+        if (durationVeryClose) score += 28;
+        else if (durationClose) score += 16;
+        else if (durationDiff > 25) score -= 35;
+
+        return score;
       };
 
       const aggregated: any[] = [];
+      const pushCandidate = (item: {
+        trackName: string;
+        artistName: string;
+        duration?: number;
+        syncedLyrics?: string;
+        plainLyrics?: string;
+        basePriority: number;
+      }) => {
+        const hasSynced = Boolean(item.syncedLyrics && /\[\d{1,3}:\d{1,2}/.test(item.syncedLyrics));
+        const hasPlain = Boolean(item.plainLyrics && item.plainLyrics.trim().length > 20);
+        if (!hasSynced && !hasPlain) return;
+        const sc = scoreCandidate(
+          item.trackName,
+          item.artistName,
+          Number(item.duration) || 0,
+          hasSynced,
+          item.basePriority
+        );
+        if (sc < 0) return;
+        aggregated.push({
+          trackName: item.trackName,
+          artistName: item.artistName,
+          duration: item.duration,
+          syncedLyrics: hasSynced ? item.syncedLyrics : undefined,
+          plainLyrics: item.plainLyrics,
+          verified: true,
+          priority: sc,
+        });
+      };
 
-      // Provider A: LRCLIB Exact Match (`lrclib.net/api/get`)
-      const lrclibGetTask = (async () => {
-        if (!cleanTitle || !primaryArtist) return;
+      // Step 0: Canonical & Cross-Script Metadata Discovery (iTunes AE/IN/US + Deezer + JioSaavn + Google Transliteration)
+      const canonicalQueries: Array<{ title: string; artist: string; duration?: number }> = [];
+      const isArabicContext =
+        /[\u0600-\u06FF]/.test(`${rawTitleParam} ${artistParam}`) ||
+        artistParts.some((a) => /[\u0600-\u06FF]/.test(a));
+
+      const metadataDiscoveryTask = (async () => {
+        const lookupQ = `${cleanTitle} ${primaryArtist}`.trim() || cleanTitle;
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3000);
+        const t = setTimeout(() => ctrl.abort(), 2400);
         try {
-          const getParams = new URLSearchParams({
-            track_name: cleanTitle,
-            artist_name: primaryArtist,
-          });
-          if (durationParam > 30) getParams.set('duration', String(durationParam));
-          const r = await fetch(`https://lrclib.net/api/get?${getParams.toString()}`, {
-            headers: { 'User-Agent': 'VOID-Music-Player/2.0' },
-            signal: ctrl.signal,
-          });
-          if (r.ok) {
-            const item: any = await r.json();
-            if (item && (item.syncedLyrics || item.plainLyrics)) {
-              aggregated.push({ ...item, verified: true, priority: 100 });
+          const translateTask = (async () => {
+            try {
+              const targetLang = isArabicContext
+                ? /[\u0600-\u06FF]/.test(cleanTitle)
+                  ? 'en'
+                  : 'ar'
+                : 'en';
+              const trRes = await fetch(
+                `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&dt=rm&q=${encodeURIComponent(cleanTitle)}`,
+                { signal: ctrl.signal }
+              );
+              if (trRes.ok) {
+                const trJson: any = await trRes.json();
+                const translated = String(trJson?.[0]?.[0]?.[0] || '').trim();
+                const romanized = String(trJson?.[0]?.[1]?.[3] || trJson?.[0]?.[1]?.[2] || '').trim();
+                for (const cand of [translated, romanized]) {
+                  const cl = cleanOneTitle(cand);
+                  if (cl.length >= 2 && !titleVariants.includes(cl)) {
+                    titleVariants.push(cl);
+                  }
+                }
+              }
+            } catch {}
+          })();
+
+          const [itunesAeRes, itunesInRes, dzRes] = await Promise.allSettled([
+            fetch(
+              `https://itunes.apple.com/search?term=${encodeURIComponent(lookupQ)}&country=${isArabicContext ? 'ae' : 'us'}&entity=song&limit=4`,
+              { signal: ctrl.signal }
+            ),
+            fetch(
+              `https://itunes.apple.com/search?term=${encodeURIComponent(lookupQ)}&country=in&entity=song&limit=4`,
+              { signal: ctrl.signal }
+            ),
+            fetch(
+              `https://api.deezer.com/search?q=${encodeURIComponent(lookupQ)}&limit=4`,
+              { signal: ctrl.signal }
+            ),
+            translateTask,
+          ]);
+
+          for (const itRes of [itunesAeRes, itunesInRes]) {
+            if (itRes.status === 'fulfilled' && itRes.value.ok) {
+              const j: any = await itRes.value.json();
+              for (const r of Array.isArray(j?.results) ? j.results : []) {
+                const tName = cleanOneTitle(String(r?.trackName || ''));
+                const aName = String(r?.artistName || '').trim();
+                const dur = Math.round((Number(r?.trackTimeMillis) || 0) / 1000);
+                if (tName && aName && scoreCandidate(tName, aName, dur, true, 50) > 0) {
+                  canonicalQueries.push({ title: tName, artist: aName, duration: dur });
+                  if (!titleVariants.includes(tName)) titleVariants.push(tName);
+                  const firstA = aName.split(/[,&]/)[0]?.trim();
+                  if (firstA && !artistParts.includes(firstA)) artistParts.push(firstA);
+                }
+              }
+            }
+          }
+
+          if (dzRes.status === 'fulfilled' && dzRes.value.ok) {
+            const j: any = await dzRes.value.json();
+            for (const r of Array.isArray(j?.data) ? j.data : []) {
+              const tName = cleanOneTitle(String(r?.title_short || r?.title || ''));
+              const aName = String(r?.artist?.name || '').trim();
+              const dur = Number(r?.duration) || 0;
+              if (tName && aName && scoreCandidate(tName, aName, dur, true, 50) > 0) {
+                canonicalQueries.push({ title: tName, artist: aName, duration: dur });
+                if (!titleVariants.includes(tName)) titleVariants.push(tName);
+                if (!artistParts.includes(aName)) artistParts.push(aName);
+              }
             }
           }
         } catch {
@@ -1067,40 +1400,59 @@ export function createVoidGatewayHandler() {
         }
       })();
 
-      // Provider B: LRCLIB Multi-Query Search (`lrclib.net/api/search`)
-      const lrclibSearchTask = (async () => {
-        const searchQueries = Array.from(
-          new Set(
-            [
-              `${cleanTitle} ${primaryArtist}`.trim(),
-              secondaryArtist ? `${cleanTitle} ${secondaryArtist}`.trim() : '',
-              q,
-              cleanTitle,
-            ].filter((s) => s.length >= 2)
-          )
-        ).slice(0, 3);
+      await metadataDiscoveryTask;
 
+      const updatedPrimaryArtist = artistParts[0] || primaryArtist;
+      const updatedSecondaryArtist = artistParts[1] || secondaryArtist;
+      const latinArtist =
+        artistParts.find((a) => /[A-Za-z]/.test(a) && !/[\u0600-\u06FF]/.test(a)) ||
+        updatedPrimaryArtist;
+      const arabicArtist =
+        artistParts.find((a) => /[\u0600-\u06FF]/.test(a)) || updatedPrimaryArtist;
+
+      targetArtistTokens.splice(0, targetArtistTokens.length, ...artistParts.flatMap(normTokens));
+      allTargetTitleTokenSets.splice(
+        0,
+        allTargetTitleTokenSets.length,
+        ...titleVariants.map(normTokens).filter((t) => t.length > 0)
+      );
+
+      // Provider A: LRCLIB Exact Match (`lrclib.net/api/get`) across top title/artist pairs
+      const lrclibGetTask = (async () => {
+        const pairs: Array<{ t: string; a: string; d?: number }> = [];
+        for (const tv of titleVariants.slice(0, 3)) {
+          for (const ap of Array.from(new Set([updatedPrimaryArtist, latinArtist, arabicArtist])).filter(Boolean)) {
+            pairs.push({ t: tv, a: ap, d: durationParam });
+          }
+        }
+        for (const cq of canonicalQueries.slice(0, 2)) {
+          const firstArtist = cq.artist.split(/[,&]/)[0]?.trim() || cq.artist;
+          pairs.push({ t: cq.title, a: firstArtist, d: durationParam || cq.duration });
+        }
         await Promise.allSettled(
-          searchQueries.map(async (sq, qIdx) => {
+          pairs.slice(0, 5).map(async (pair) => {
             const ctrl = new AbortController();
             const t = setTimeout(() => ctrl.abort(), 3400);
             try {
-              const r = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(sq)}`, {
-                headers: { 'User-Agent': 'VOID-Music-Player/2.0' },
+              const getParams = new URLSearchParams({
+                track_name: pair.t,
+                artist_name: pair.a,
+              });
+              if (pair.d && pair.d > 30) getParams.set('duration', String(Math.round(pair.d)));
+              const r = await fetch(`https://lrclib.net/api/get?${getParams.toString()}`, {
+                headers: { 'User-Agent': 'VOID-Music-Player/3.0' },
                 signal: ctrl.signal,
               });
-              if (!r.ok) return;
-              const list: any[] = await r.json();
-              if (!Array.isArray(list)) return;
-              for (const item of list) {
-                const cTitle = String(item?.trackName || item?.name || '');
-                const cArtist = String(item?.artistName || '');
-                if (!isCandidateMatch(cTitle, cArtist)) continue;
-                if (item?.syncedLyrics || item?.plainLyrics) {
-                  aggregated.push({
-                    ...item,
-                    verified: true,
-                    priority: item.syncedLyrics ? 95 - qIdx * 2 : 70 - qIdx * 2,
+              if (r.ok) {
+                const item: any = await r.json();
+                if (item && (item.syncedLyrics || item.plainLyrics)) {
+                  pushCandidate({
+                    trackName: String(item.trackName || pair.t),
+                    artistName: String(item.artistName || pair.a),
+                    duration: Number(item.duration) || pair.d,
+                    syncedLyrics: item.syncedLyrics,
+                    plainLyrics: item.plainLyrics,
+                    basePriority: 108,
                   });
                 }
               }
@@ -1113,59 +1465,778 @@ export function createVoidGatewayHandler() {
         );
       })();
 
-      // Provider C: NetEase Cloud Music Synced LRC API (`music.163.com/api/search/get` + `music.163.com/api/song/lyric`)
+      // Provider B: LRCLIB Multi-Query Search (`lrclib.net/api/search`)
+      const lrclibSearchTask = (async () => {
+        const searchQueries = Array.from(
+          new Set(
+            [
+              updatedPrimaryArtist ? `${cleanTitle} ${updatedPrimaryArtist}`.trim() : '',
+              latinArtist && latinArtist !== updatedPrimaryArtist ? `${cleanTitle} ${latinArtist}`.trim() : '',
+              arabicArtist && arabicArtist !== updatedPrimaryArtist ? `${cleanTitle} ${arabicArtist}`.trim() : '',
+              updatedSecondaryArtist ? `${cleanTitle} ${updatedSecondaryArtist}`.trim() : '',
+              ...titleVariants.slice(1, 4).map((tv) => `${tv} ${latinArtist || updatedPrimaryArtist}`.trim()),
+              ...canonicalQueries.slice(0, 2).map((cq) => `${cq.title} ${cq.artist.split(/[,&]/)[0]}`.trim()),
+              ...titleVariants.slice(0, 3),
+              albumParam && cleanTitle ? `${cleanTitle} ${albumParam}`.trim() : '',
+            ].filter((s) => s.length >= 2)
+          )
+        ).slice(0, 7);
+
+        await Promise.allSettled(
+          searchQueries.map(async (sq, qIdx) => {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 3800);
+            try {
+              const r = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(sq)}`, {
+                headers: { 'User-Agent': 'VOID-Music-Player/3.0' },
+                signal: ctrl.signal,
+              });
+              if (!r.ok) return;
+              const list: any[] = await r.json();
+              if (!Array.isArray(list)) return;
+              for (const item of list) {
+                pushCandidate({
+                  trackName: String(item?.trackName || item?.name || ''),
+                  artistName: String(item?.artistName || ''),
+                  duration: Number(item?.duration) || 0,
+                  syncedLyrics: item?.syncedLyrics,
+                  plainLyrics: item?.plainLyrics,
+                  basePriority: 98 - qIdx * 1.5,
+                });
+              }
+            } catch {
+              // Ignore
+            } finally {
+              clearTimeout(t);
+            }
+          })
+        );
+      })();
+
+      // Provider C: Kugou Music Global Synced LRC API (`mobilecdn.kugou.com` + `krcs.kugou.com` + `lyrics.kugou.com`)
+      const kugouTask = (async () => {
+        const kugouQueries = Array.from(
+          new Set(
+            [
+              updatedPrimaryArtist ? `${cleanTitle} ${updatedPrimaryArtist}`.trim() : '',
+              latinArtist ? `${cleanTitle} ${latinArtist}`.trim() : '',
+              canonicalQueries[0] ? `${canonicalQueries[0].title} ${canonicalQueries[0].artist.split(/[,&]/)[0]}`.trim() : '',
+              ...titleVariants.slice(0, 2),
+            ].filter((s) => s.length >= 2)
+          )
+        ).slice(0, 3);
+
+        for (const kq of kugouQueries) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 3800);
+          try {
+            const sRes = await fetch(
+              `http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=${encodeURIComponent(kq)}&page=1&pagesize=6`,
+              {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+                signal: ctrl.signal,
+              }
+            );
+            if (!sRes.ok) continue;
+            const sJson: any = await sRes.json();
+            const infoList: any[] = Array.isArray(sJson?.data?.info) ? sJson.data.info : [];
+            const matchedSongs = infoList
+              .filter((item) => {
+                const sName = String(item?.songname || item?.filename || '');
+                const sArtist = String(item?.singername || '');
+                const sDur = Number(item?.duration) || 0;
+                return scoreCandidate(sName, sArtist, sDur, true, 90) > 0;
+              })
+              .slice(0, 2);
+
+            for (const song of matchedSongs) {
+              const hash = String(song?.hash || '').trim();
+              const durMs = (Number(song?.duration) || durationParam || 200) * 1000;
+              if (!hash) continue;
+              const krcSearch = await fetch(
+                `http://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=&duration=${durMs}&hash=${encodeURIComponent(hash)}&album_audio_id=`,
+                { signal: ctrl.signal }
+              );
+              if (!krcSearch.ok) continue;
+              const krcJson: any = await krcSearch.json();
+              const cand = Array.isArray(krcJson?.candidates) ? krcJson.candidates[0] : null;
+              if (!cand?.id || !cand?.accesskey) continue;
+
+              const dlRes = await fetch(
+                `http://lyrics.kugou.com/download?ver=1&client=pc&id=${encodeURIComponent(String(cand.id))}&accesskey=${encodeURIComponent(String(cand.accesskey))}&fmt=lrc&charset=utf8`,
+                { signal: ctrl.signal }
+              );
+              if (!dlRes.ok) continue;
+              const dlJson: any = await dlRes.json();
+              if (typeof dlJson?.content === 'string' && dlJson.content.length > 16) {
+                const decodedLrc = Buffer.from(dlJson.content, 'base64').toString('utf8').trim();
+                if (/\[\d{1,2}:\d{2}/.test(decodedLrc)) {
+                  pushCandidate({
+                    trackName: String(song.songname || cleanTitle),
+                    artistName: String(song.singername || updatedPrimaryArtist),
+                    duration: Number(song.duration) || durationParam,
+                    syncedLyrics: decodedLrc,
+                    basePriority: 98,
+                  });
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Ignore
+          } finally {
+            clearTimeout(t);
+          }
+        }
+      })();
+
+      // Provider D: NetEase Cloud Music Synced LRC API (`cloudsearch/pc` + `song/lyric`)
       const neteaseTask = (async () => {
-        const searchQ = `${cleanTitle} ${primaryArtist}`.trim() || q;
+        const netQueries = Array.from(
+          new Set(
+            [
+              updatedPrimaryArtist ? `${cleanTitle} ${updatedPrimaryArtist}`.trim() : '',
+              latinArtist ? `${cleanTitle} ${latinArtist}`.trim() : '',
+              cleanTitle,
+              titleVariants[1] || '',
+            ].filter((s) => s.length >= 2)
+          )
+        ).slice(0, 3);
+
+        for (const nq of netQueries) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 3800);
+          try {
+            const searchRes = await fetch(
+              `https://music.163.com/api/cloudsearch/pc?s=${encodeURIComponent(nq)}&type=1&limit=8&offset=0`,
+              {
+                method: 'POST',
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                  Referer: 'https://music.163.com/',
+                },
+                signal: ctrl.signal,
+              }
+            );
+            if (!searchRes.ok) continue;
+            const sJson: any = await searchRes.json();
+            const songs: any[] = Array.isArray(sJson?.result?.songs) ? sJson.result.songs : [];
+            const matchedSong = songs.find((s) => {
+              const sName = String(s?.name || '');
+              const arList = Array.isArray(s?.ar) ? s.ar : Array.isArray(s?.artists) ? s.artists : [];
+              const sArtists = arList.map((a: any) => a?.name).filter(Boolean).join(', ');
+              const sDur = Math.round((Number(s?.dt || s?.duration) || 0) / 1000);
+              return scoreCandidate(sName, sArtists, sDur, true, 92) > 0;
+            });
+            if (!matchedSong?.id) continue;
+
+            const lrcRes = await fetch(
+              `https://music.163.com/api/song/lyric?id=${encodeURIComponent(String(matchedSong.id))}&lv=1&kv=1&tv=-1`,
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                  Referer: 'https://music.163.com/',
+                },
+                signal: ctrl.signal,
+              }
+            );
+            if (!lrcRes.ok) continue;
+            const lrcJson: any = await lrcRes.json();
+            const rawLrc = String(lrcJson?.lrc?.lyric || '').trim();
+            if (rawLrc.length > 20) {
+              const hasTimestamps = /\[\d{1,2}:\d{2}/.test(rawLrc);
+              const arList = Array.isArray(matchedSong?.ar)
+                ? matchedSong.ar
+                : Array.isArray(matchedSong?.artists)
+                  ? matchedSong.artists
+                  : [];
+              pushCandidate({
+                trackName: String(matchedSong.name || cleanTitle),
+                artistName: arList.map((a: any) => a?.name).filter(Boolean).join(', ') || updatedPrimaryArtist,
+                duration: Math.round((Number(matchedSong?.dt || matchedSong?.duration) || 0) / 1000),
+                syncedLyrics: hasTimestamps ? rawLrc : undefined,
+                plainLyrics: !hasTimestamps ? rawLrc : undefined,
+                basePriority: hasTimestamps ? 95 : 72,
+              });
+              if (hasTimestamps) return;
+            }
+          } catch {
+            // Ignore
+          } finally {
+            clearTimeout(t);
+          }
+        }
+      })();
+
+      // Provider E: QQ Music Synced LRC API (`client_search_cp` + `fcg_query_lyric_new.fcg`)
+      const qqMusicTask = (async () => {
+        const searchQ = `${cleanTitle} ${updatedPrimaryArtist}`.trim() || cleanTitle;
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 3600);
         try {
-          const searchRes = await fetch(
-            `https://music.163.com/api/search/get?s=${encodeURIComponent(searchQ)}&type=1&limit=6&offset=0`,
+          const sRes = await fetch(
+            `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=${encodeURIComponent(searchQ)}&p=1&n=5&format=json`,
             {
-              method: 'POST',
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-                Referer: 'https://music.163.com/',
+                Referer: 'https://y.qq.com/',
               },
               signal: ctrl.signal,
             }
           );
-          if (!searchRes.ok) return;
-          const sJson: any = await searchRes.json();
-          const songs: any[] = Array.isArray(sJson?.result?.songs) ? sJson.result.songs : [];
-          const matchedSong = songs.find((s) => {
-            const sName = String(s?.name || '');
-            const sArtists = Array.isArray(s?.artists)
-              ? s.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
+          if (!sRes.ok) return;
+          const sJson: any = await sRes.json();
+          const list: any[] = Array.isArray(sJson?.data?.song?.list) ? sJson.data.song.list : [];
+          const matched = list.find((s) => {
+            const sName = String(s?.songname || s?.title || '');
+            const sArtists = Array.isArray(s?.singer)
+              ? s.singer.map((a: any) => a?.name).filter(Boolean).join(', ')
               : '';
-            return isCandidateMatch(sName, sArtists);
+            const sDur = Number(s?.interval) || 0;
+            return scoreCandidate(sName, sArtists, sDur, true, 90) > 0;
           });
-          if (!matchedSong?.id) return;
+          const songmid = matched?.songmid;
+          if (!songmid) return;
 
-          const lrcRes = await fetch(
-            `https://music.163.com/api/song/lyric?id=${encodeURIComponent(String(matchedSong.id))}&lv=1&kv=1&tv=-1`,
+          const lRes = await fetch(
+            `https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=${encodeURIComponent(String(songmid))}&format=json&nobase64=0`,
             {
               headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-                Referer: 'https://music.163.com/',
+                Referer: 'https://y.qq.com/',
               },
               signal: ctrl.signal,
             }
           );
-          if (!lrcRes.ok) return;
-          const lrcJson: any = await lrcRes.json();
-          const rawLrc = String(lrcJson?.lrc?.lyric || '').trim();
-          if (rawLrc.length > 20) {
-            const hasTimestamps = /\[\d{1,2}:\d{2}/.test(rawLrc);
-            aggregated.push({
-              trackName: matchedSong.name,
-              artistName: Array.isArray(matchedSong.artists)
-                ? matchedSong.artists.map((a: any) => a?.name).filter(Boolean).join(', ')
-                : primaryArtist,
-              syncedLyrics: hasTimestamps ? rawLrc : undefined,
-              plainLyrics: !hasTimestamps ? rawLrc : undefined,
-              verified: true,
-              priority: hasTimestamps ? 92 : 68,
+          if (!lRes.ok) return;
+          const lText = await lRes.text();
+          const jsonStr = lText.replace(/^[^(]+\(/, '').replace(/\)\s*;?\s*$/, '');
+          const lJson: any = JSON.parse(jsonStr);
+          if (typeof lJson?.lyric === 'string' && lJson.lyric.length > 16) {
+            const decoded = Buffer.from(lJson.lyric, 'base64').toString('utf8').trim();
+            if (/\[\d{1,2}:\d{2}/.test(decoded)) {
+              pushCandidate({
+                trackName: String(matched.songname || cleanTitle),
+                artistName: Array.isArray(matched.singer)
+                  ? matched.singer.map((a: any) => a?.name).filter(Boolean).join(', ')
+                  : updatedPrimaryArtist,
+                duration: Number(matched.interval) || durationParam,
+                syncedLyrics: decoded,
+                basePriority: 94,
+              });
+            }
+          }
+        } catch {
+          // Ignore
+        } finally {
+          clearTimeout(t);
+        }
+      })();
+
+      // Provider F: LrcCx + Textyl Synced LRC APIs
+      const lrcCxAndTextylTask = (async () => {
+        if (!cleanTitle) return;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3400);
+        try {
+          const cxParams = new URLSearchParams({ title: cleanTitle });
+          if (updatedPrimaryArtist) cxParams.set('artist', updatedPrimaryArtist);
+          const [cxRes, txRes] = await Promise.allSettled([
+            fetch(`https://api.lrc.cx/lyrics?${cxParams.toString()}`, {
+              headers: { 'User-Agent': 'VOID-Music-Player/3.0' },
+              signal: ctrl.signal,
+            }),
+            fetch(
+              `https://api.textyl.co/api/lyrics?q=${encodeURIComponent(`${cleanTitle} ${updatedPrimaryArtist}`.trim())}`,
+              { signal: ctrl.signal }
+            ),
+          ]);
+          if (cxRes.status === 'fulfilled' && cxRes.value.ok) {
+            const text = (await cxRes.value.text()).trim();
+            if (text.length > 25 && /\[\d{1,2}:\d{2}/.test(text)) {
+              pushCandidate({
+                trackName: cleanTitle,
+                artistName: updatedPrimaryArtist,
+                duration: durationParam,
+                syncedLyrics: text,
+                basePriority: 91,
+              });
+            }
+          }
+          if (txRes.status === 'fulfilled' && txRes.value.ok) {
+            const arr: any[] = await txRes.value.json();
+            if (Array.isArray(arr) && arr.length >= 3) {
+              const lrcLines = arr
+                .filter((row) => typeof row?.seconds === 'number' && typeof row?.lyrics === 'string')
+                .map((row) => {
+                  const s = Math.max(0, Number(row.seconds));
+                  const mins = String(Math.floor(s / 60)).padStart(2, '0');
+                  const secs = (s % 60).toFixed(2).padStart(5, '0');
+                  return `[${mins}:${secs}]${row.lyrics}`;
+                })
+                .join('\n');
+              if (lrcLines.length > 25) {
+                pushCandidate({
+                  trackName: cleanTitle,
+                  artistName: updatedPrimaryArtist,
+                  duration: durationParam,
+                  syncedLyrics: lrcLines,
+                  basePriority: 89,
+                });
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        } finally {
+          clearTimeout(t);
+        }
+      })();
+
+      // Provider G: Megalobiz Synced LRC Archive (Malayalam, Tamil, Hindi, Marathi, Urdu, Telugu, Arabic, English)
+      const megalobizTask = (async () => {
+        const queries = Array.from(
+          new Set([
+            `${cleanTitle} ${latinArtist || updatedPrimaryArtist}`.trim(),
+            cleanTitle,
+          ].filter((s) => s.length >= 2))
+        );
+        for (const searchQ of queries) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 4000);
+          try {
+            const sRes = await fetch(
+              `https://www.megalobiz.com/search/all?qry=${encodeURIComponent(searchQ)}`,
+              {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+                signal: ctrl.signal,
+              }
+            );
+            if (!sRes.ok) continue;
+            const html = await sRes.text();
+            const linkMatches = [...html.matchAll(/href="(\/lrc\/maker\/[^"]+)"[^>]*>([^<]+)<\/a>/gi)];
+            for (const m of linkMatches.slice(0, 3)) {
+              const href = m[1];
+              const linkTitle = stripHtml(m[2] || '');
+              if (scoreCandidate(linkTitle, updatedPrimaryArtist, durationParam, true, 88) < 0) {
+                continue;
+              }
+              const pageRes = await fetch(`https://www.megalobiz.com${href}`, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+                signal: ctrl.signal,
+              });
+              if (!pageRes.ok) continue;
+              const pageHtml = await pageRes.text();
+              const detailsMatch = pageHtml.match(/<span\s+id="lrc_\d+_details"[^>]*>([\s\S]*?)<\/span>/i);
+              if (detailsMatch && detailsMatch[1]) {
+                const lrcContent = stripHtml(
+                  detailsMatch[1].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+                );
+                if (/\[\d{1,2}:\d{2}/.test(lrcContent)) {
+                  pushCandidate({
+                    trackName: cleanTitle,
+                    artistName: updatedPrimaryArtist,
+                    duration: durationParam,
+                    syncedLyrics: lrcContent,
+                    basePriority: 90,
+                  });
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Ignore
+          } finally {
+            clearTimeout(t);
+          }
+        }
+      })();
+
+      // Provider H: Official Direct JioSaavn API (`www.jiosaavn.com/api.php`) + Mirrors (`saavn.dev`, `elitejiosaavn-api.vercel.app`)
+      // Covers Malayalam, Hindi, Marathi, Tamil, Telugu, Kannada, Punjabi, Bengali, Urdu, Arabic, and English
+      const jioLyricsTask = (async () => {
+        const fetchOfficialJioLyricsById = async (sId: string, sName: string, sArtist: string, sDur: number, signal: AbortSignal): Promise<boolean> => {
+          try {
+            const directRes = await fetch(
+              `https://www.jiosaavn.com/api.php?__call=lyrics.getLyrics&ctx=web6dot0&api_version=4&_format=json&_marker=0&lyrics_id=${encodeURIComponent(sId)}`,
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                  Referer: 'https://www.jiosaavn.com/',
+                },
+                signal,
+              }
+            );
+            if (directRes.ok) {
+              const directJson: any = await directRes.json();
+              const rawLyr = String(directJson?.lyrics || '').trim();
+              if (rawLyr.length > 20) {
+                const cleanPlain = stripHtml(rawLyr.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''));
+                const hasLrc = /\[\d{1,2}:\d{2}/.test(cleanPlain);
+                pushCandidate({
+                  trackName: sName || cleanTitle,
+                  artistName: sArtist || updatedPrimaryArtist,
+                  duration: sDur || durationParam,
+                  syncedLyrics: hasLrc ? cleanPlain : undefined,
+                  plainLyrics: cleanPlain,
+                  basePriority: hasLrc ? 94 : 84,
+                });
+                return true;
+              }
+            }
+          } catch {}
+          return false;
+        };
+
+        // 1. If exact JioSaavn songId was passed, try it immediately
+        if (songIdParam && /^[A-Za-z0-9_-]{6,12}$/.test(songIdParam)) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 3000);
+          try {
+            if (await fetchOfficialJioLyricsById(songIdParam, cleanTitle, updatedPrimaryArtist, durationParam, ctrl.signal)) {
+              return;
+            }
+          } finally {
+            clearTimeout(t);
+          }
+        }
+
+        // 2. Search Official JioSaavn `api.php?__call=search.getResults` & Mirrors
+        const searchQueries = Array.from(
+          new Set([
+            `${cleanTitle} ${latinArtist || updatedPrimaryArtist}`.trim(),
+            cleanTitle,
+            ...titleVariants.slice(1, 3),
+          ].filter((s) => s.length >= 2))
+        ).slice(0, 3);
+
+        for (const sq of searchQueries) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 3800);
+          try {
+            const officialSearchRes = await fetch(
+              `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&q=${encodeURIComponent(sq)}&p=1&n=8`,
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                  Referer: 'https://www.jiosaavn.com/',
+                },
+                signal: ctrl.signal,
+              }
+            ).catch(() => null);
+
+            if (officialSearchRes && officialSearchRes.ok) {
+              const sJson: any = await officialSearchRes.json();
+              const results: any[] = Array.isArray(sJson?.results) ? sJson.results : [];
+              for (const s of results) {
+                const sId = String(s?.id || '').trim();
+                const sName = stripHtml(String(s?.title || s?.song || ''));
+                const sArtist = stripHtml(String(s?.more_info?.music || s?.more_info?.artistMap?.primary_artists?.map((a: any) => a?.name).join(', ') || s?.subtitle || ''));
+                const sDur = Number(s?.more_info?.duration || s?.duration) || durationParam;
+                if (!sId || scoreCandidate(sName, sArtist, sDur, false, 84) < 0) continue;
+                if (await fetchOfficialJioLyricsById(sId, sName, sArtist, sDur, ctrl.signal)) {
+                  return;
+                }
+              }
+            }
+
+            // Also check saavn.dev & elitejiosaavn mirrors
+            for (const base of ['https://saavn.dev/api', 'https://elitejiosaavn-api.vercel.app/api']) {
+              const sRes = await fetch(
+                `${base}/search/songs?query=${encodeURIComponent(sq)}&page=1&limit=6`,
+                { signal: ctrl.signal }
+              ).catch(() => null);
+              if (!sRes || !sRes.ok) continue;
+              const sJson: any = await sRes.json();
+              const songs: any[] = Array.isArray(sJson?.data?.results)
+                ? sJson.data.results
+                : Array.isArray(sJson?.results)
+                  ? sJson.results
+                  : [];
+              for (const s of songs.slice(0, 4)) {
+                const sId = String(s?.id || '').trim();
+                const sName = stripHtml(String(s?.name || s?.title || ''));
+                const sArtist = Array.isArray(s?.artists?.primary)
+                  ? s.artists.primary.map((a: any) => a?.name).filter(Boolean).join(', ')
+                  : String(s?.primaryArtists || '');
+                const sDur = Number(s?.duration) || durationParam;
+                if (!sId || scoreCandidate(sName, sArtist, sDur, false, 82) < 0) continue;
+
+                if (await fetchOfficialJioLyricsById(sId, sName, sArtist, sDur, ctrl.signal)) {
+                  return;
+                }
+
+                const lRes = await fetch(`${base}/songs/${encodeURIComponent(sId)}/lyrics`, {
+                  signal: ctrl.signal,
+                }).catch(() => null);
+                if (!lRes || !lRes.ok) continue;
+                const lJson: any = await lRes.json();
+                const rawLyrics = String(lJson?.data?.lyrics || lJson?.lyrics || '').trim();
+                if (rawLyrics.length > 20) {
+                  const cleanPlain = stripHtml(
+                    rawLyrics.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+                  );
+                  const hasLrc = /\[\d{1,2}:\d{2}/.test(cleanPlain);
+                  pushCandidate({
+                    trackName: sName || cleanTitle,
+                    artistName: sArtist || updatedPrimaryArtist,
+                    duration: sDur,
+                    syncedLyrics: hasLrc ? cleanPlain : undefined,
+                    plainLyrics: cleanPlain,
+                    basePriority: hasLrc ? 94 : 82,
+                  });
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Ignore
+          } finally {
+            clearTimeout(t);
+          }
+        }
+      })();
+
+      // Provider I: Genius Official Search & Lyrics Extractor (Arabic, Malayalam, Hindi, Marathi, Tamil, Urdu, English)
+      const geniusLyricsTask = (async () => {
+        const geniusQueries = Array.from(
+          new Set(
+            [
+              updatedPrimaryArtist ? `${cleanTitle} ${updatedPrimaryArtist}`.trim() : '',
+              latinArtist && latinArtist !== updatedPrimaryArtist ? `${cleanTitle} ${latinArtist}`.trim() : '',
+              arabicArtist && arabicArtist !== updatedPrimaryArtist ? `${cleanTitle} ${arabicArtist}`.trim() : '',
+              ...titleVariants.slice(1, 3).map((tv) => `${tv} ${updatedPrimaryArtist}`.trim()),
+              cleanTitle,
+            ].filter((s) => s.length >= 2)
+          )
+        ).slice(0, 4);
+
+        for (const gq of geniusQueries) {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 4200);
+          try {
+            const sRes = await fetch(
+              `https://genius.com/api/search/multi?per_page=5&q=${encodeURIComponent(gq)}`,
+              {
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                  Accept: 'application/json',
+                },
+                signal: ctrl.signal,
+              }
+            );
+            if (!sRes.ok) continue;
+            const sJson: any = await sRes.json();
+            const sections: any[] = Array.isArray(sJson?.response?.sections)
+              ? sJson.response.sections
+              : [];
+            const hits: any[] = [];
+            for (const sec of sections) {
+              if (sec?.type === 'song' || sec?.type === 'top_hit') {
+                for (const h of Array.isArray(sec?.hits) ? sec.hits : []) {
+                  if (h?.type === 'song' && h?.result?.url) hits.push(h.result);
+                }
+              }
+            }
+
+            for (const song of hits.slice(0, 3)) {
+              const sTitle = stripHtml(String(song?.title || song?.title_with_featured || ''));
+              const sArtist = stripHtml(String(song?.primary_artist?.name || song?.artist_names || ''));
+              const sUrl = String(song?.url || '').trim();
+              if (!sUrl.startsWith('https://genius.com/')) continue;
+              // Skip Genius tracklist/translation index pages
+              if (/\b(?:tracklist|album\s*art|credits|q&a|romanized)\b/i.test(sTitle) && !/romanized/i.test(cleanTitle)) {
+                continue;
+              }
+              if (scoreCandidate(sTitle, sArtist, durationParam, false, 80) < 0) continue;
+
+              const pageRes = await fetch(sUrl, {
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                },
+                signal: ctrl.signal,
+              });
+              if (!pageRes.ok) continue;
+              const html = await pageRes.text();
+              const containerMatches = [
+                ...html.matchAll(/<div[^>]+data-lyrics-container="true"[^>]*>([\s\S]*?)<\/div>/gi),
+              ];
+              if (containerMatches.length > 0) {
+                const rawExtracted = containerMatches
+                  .map((m) =>
+                    m[1]
+                      .replace(/<br\s*\/?>/gi, '\n')
+                      .replace(/<\/p>/gi, '\n')
+                      .replace(/<[^>]+>/g, '')
+                  )
+                  .join('\n');
+                const cleanedLyrics = stripHtml(rawExtracted)
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter((l) => !/^\[(?:verse|chorus|bridge|intro|outro|hook|pre-chorus|instrumental|מתוך|كلمات|مقطع)[^\]]*\]$/i.test(l))
+                  .join('\n')
+                  .replace(/\n{3,}/g, '\n\n')
+                  .trim();
+
+                if (cleanedLyrics.length > 35) {
+                  pushCandidate({
+                    trackName: sTitle || cleanTitle,
+                    artistName: sArtist || updatedPrimaryArtist,
+                    duration: durationParam,
+                    plainLyrics: cleanedLyrics,
+                    basePriority: 83,
+                  });
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Ignore
+          } finally {
+            clearTimeout(t);
+          }
+        }
+      })();
+
+      // Provider J: Shazam Official Catalog & Lyrics API (Arabic AE, India IN, Global US)
+      const shazamLyricsTask = (async () => {
+        const storefront = isArabicContext ? 'ae' : 'in';
+        const searchQ = `${cleanTitle} ${updatedPrimaryArtist}`.trim() || cleanTitle;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3800);
+        try {
+          const sRes = await fetch(
+            `https://www.shazam.com/services/amapi/v1/catalog/${storefront}/search?types=songs&term=${encodeURIComponent(searchQ)}&limit=4`,
+            {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                Accept: 'application/json',
+              },
+              signal: ctrl.signal,
+            }
+          );
+          if (!sRes.ok) return;
+          const sJson: any = await sRes.json();
+          const songs: any[] = Array.isArray(sJson?.results?.songs?.data)
+            ? sJson.results.songs.data
+            : [];
+          for (const s of songs.slice(0, 2)) {
+            const attr = s?.attributes || {};
+            const sName = stripHtml(String(attr.name || ''));
+            const sArtist = stripHtml(String(attr.artistName || ''));
+            const sDur = Math.round((Number(attr.durationInMillis) || 0) / 1000) || durationParam;
+            if (scoreCandidate(sName, sArtist, sDur, false, 80) < 0) continue;
+
+            // Search Shazam discovery track endpoint for lyrics section
+            const shazamSearch = await fetch(
+              `https://www.shazam.com/services/search/v4/en-US/AE/web/search?term=${encodeURIComponent(`${sName} ${sArtist}`)}&numResults=3&offset=0&types=songs`,
+              {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+                signal: ctrl.signal,
+              }
+            ).catch(() => null);
+            if (!shazamSearch || !shazamSearch.ok) continue;
+            const shJson: any = await shazamSearch.json();
+            const hits: any[] = Array.isArray(shJson?.tracks?.hits) ? shJson.tracks.hits : [];
+            const key = hits[0]?.track?.key;
+            if (!key) continue;
+
+            const trRes = await fetch(
+              `https://www.shazam.com/discovery/v5/en/US/web/-/track/${encodeURIComponent(String(key))}?shazamapiversion=v3&video=v3`,
+              {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+                signal: ctrl.signal,
+              }
+            ).catch(() => null);
+            if (!trRes || !trRes.ok) continue;
+            const trJson: any = await trRes.json();
+            const sections: any[] = Array.isArray(trJson?.sections) ? trJson.sections : [];
+            const lyrSec = sections.find((sec) => sec?.type === 'LYRICS' && Array.isArray(sec?.text));
+            if (lyrSec && lyrSec.text.length >= 3) {
+              const plain = lyrSec.text.join('\n').trim();
+              if (plain.length > 25) {
+                pushCandidate({
+                  trackName: sName || cleanTitle,
+                  artistName: sArtist || updatedPrimaryArtist,
+                  duration: sDur,
+                  plainLyrics: plain,
+                  basePriority: 81,
+                });
+                return;
+              }
+            }
+          }
+        } catch {
+          // Ignore
+        } finally {
+          clearTimeout(t);
+        }
+      })();
+
+      // Provider K: YouTube Official Human-Synced TimedText Captions ONLY (`kind !== 'asr'`)
+      const youtubeCaptionsTask = (async () => {
+        if (!videoIdParam || !/^[A-Za-z0-9_-]{11}$/.test(videoIdParam)) return;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3800);
+        try {
+          const playerRes = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip',
+            },
+            body: JSON.stringify({
+              context: {
+                client: {
+                  clientName: 'ANDROID',
+                  clientVersion: '19.29.37',
+                  androidSdkVersion: 34,
+                  hl: 'en',
+                  gl: 'IN',
+                },
+              },
+              videoId: videoIdParam,
+            }),
+            signal: ctrl.signal,
+          });
+          if (!playerRes.ok) return;
+          const playerJson: any = await playerRes.json();
+          const captionTracks: any[] =
+            playerJson?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+          if (!Array.isArray(captionTracks) || captionTracks.length === 0) return;
+
+          // Strictly ONLY use manual human-authored captions (NEVER `asr` auto-generated speech captions!)
+          const manualTrack = captionTracks.find((ct) => ct?.kind !== 'asr' && ct?.baseUrl);
+          if (!manualTrack?.baseUrl) return;
+
+          const capUrl = `${manualTrack.baseUrl}${manualTrack.baseUrl.includes('?') ? '&' : '?'}fmt=json3`;
+          const capRes = await fetch(capUrl, { signal: ctrl.signal });
+          if (!capRes.ok) return;
+          const capJson: any = await capRes.json();
+          const events: any[] = Array.isArray(capJson?.events) ? capJson.events : [];
+          const lrcLines: string[] = [];
+          for (const ev of events) {
+            if (!Array.isArray(ev?.segs)) continue;
+            const lineText = ev.segs
+              .map((seg: any) => String(seg?.utf8 || ''))
+              .join('')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (!lineText || /^\[(?:music|applause|laughter|♪)+\]$/i.test(lineText)) continue;
+            const startSec = Math.max(0, (Number(ev.tStartMs) || 0) / 1000);
+            const mins = String(Math.floor(startSec / 60)).padStart(2, '0');
+            const secs = (startSec % 60).toFixed(2).padStart(5, '0');
+            lrcLines.push(`[${mins}:${secs}]${lineText}`);
+          }
+          if (lrcLines.length >= 5) {
+            pushCandidate({
+              trackName: cleanTitle,
+              artistName: updatedPrimaryArtist,
+              duration: Number(playerJson?.videoDetails?.lengthSeconds) || durationParam,
+              syncedLyrics: lrcLines.join('\n'),
+              basePriority: 87,
             });
           }
         } catch {
@@ -1175,127 +2246,63 @@ export function createVoidGatewayHandler() {
         }
       })();
 
-      // Provider D: LrcCx Synced LRC API (`api.lrc.cx/lyrics`)
-      const lrcCxTask = (async () => {
+      // Provider L: Lyrist + Lyrics.ovh + ChartLyrics Global Fallback
+      const globalPlainTask = (async () => {
         if (!cleanTitle) return;
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3200);
-        try {
-          const cxParams = new URLSearchParams({ title: cleanTitle });
-          if (primaryArtist) cxParams.set('artist', primaryArtist);
-          const r = await fetch(`https://api.lrc.cx/lyrics?${cxParams.toString()}`, {
-            headers: { 'User-Agent': 'VOID-Music-Player/2.0' },
-            signal: ctrl.signal,
-          });
-          if (r.ok) {
-            const text = (await r.text()).trim();
-            if (text.length > 25 && /\[\d{1,2}:\d{2}/.test(text)) {
-              aggregated.push({
-                trackName: cleanTitle,
-                artistName: primaryArtist,
-                syncedLyrics: text,
-                verified: true,
-                priority: 88,
-              });
-            }
-          }
-        } catch {
-          // Ignore
-        } finally {
-          clearTimeout(t);
-        }
-      })();
-
-      // Provider E: JioSaavn Official Lyrics API (Malayalam, Tamil, Telugu, Hindi, Urdu, Arabic, English)
-      const jioLyricsTask = (async () => {
-        const searchQ = `${cleanTitle} ${primaryArtist}`.trim() || rawTitleParam || q;
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 3500);
         try {
-          const sRes = await fetch(
-            `https://elitejiosaavn-api.vercel.app/api/search/songs?query=${encodeURIComponent(searchQ)}&page=1&limit=6`,
-            { signal: ctrl.signal }
-          );
-          if (!sRes.ok) return;
-          const sJson: any = await sRes.json();
-          const songs: any[] = Array.isArray(sJson?.data?.results)
-            ? sJson.data.results
-            : Array.isArray(sJson?.results)
-              ? sJson.results
-              : [];
-          for (const s of songs.slice(0, 3)) {
-            const sId = String(s?.id || '').trim();
-            const sName = String(s?.name || s?.title || '').replace(/&quot;/g, '"');
-            const sArtist = Array.isArray(s?.artists?.primary)
-              ? s.artists.primary.map((a: any) => a?.name).filter(Boolean).join(', ')
-              : String(s?.primaryArtists || '');
-            if (!sId || !isCandidateMatch(sName, sArtist)) continue;
-            const lRes = await fetch(
-              `https://elitejiosaavn-api.vercel.app/api/songs/${encodeURIComponent(sId)}/lyrics`,
-              { signal: ctrl.signal }
-            );
-            if (!lRes.ok) continue;
-            const lJson: any = await lRes.json();
-            const rawLyrics = String(lJson?.data?.lyrics || lJson?.lyrics || '').trim();
-            if (rawLyrics.length > 20) {
-              const cleanPlain = rawLyrics
-                .replace(/<br\s*\/?>/gi, '\n')
-                .replace(/<[^>]+>/g, '')
-                .trim();
-              aggregated.push({
-                trackName: sName,
-                artistName: sArtist,
-                plainLyrics: cleanPlain,
-                verified: true,
-                priority: 75,
-              });
-              break;
-            }
-          }
-        } catch {
-          // Ignore
-        } finally {
-          clearTimeout(t);
-        }
-      })();
-
-      // Provider F: Lyrics.ovh + ChartLyrics Direct API
-      const ovhAndChartTask = (async () => {
-        if (!cleanTitle || !primaryArtist) return;
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3200);
-        try {
-          const ovhRes = await fetch(
-            `https://api.lyrics.ovh/v1/${encodeURIComponent(primaryArtist)}/${encodeURIComponent(cleanTitle)}`,
-            { signal: ctrl.signal }
-          );
-          if (ovhRes.ok) {
-            const ovhJson: any = await ovhRes.json();
-            if (typeof ovhJson?.lyrics === 'string' && ovhJson.lyrics.trim().length > 25) {
-              aggregated.push({
-                trackName: cleanTitle,
-                artistName: primaryArtist,
-                plainLyrics: ovhJson.lyrics.trim(),
-                verified: true,
-                priority: 65,
+          const lyristPath = updatedPrimaryArtist
+            ? `https://lyrist.vercel.app/api/${encodeURIComponent(cleanTitle)}/${encodeURIComponent(updatedPrimaryArtist)}`
+            : `https://lyrist.vercel.app/api/${encodeURIComponent(cleanTitle)}`;
+          const lyristRes = await fetch(lyristPath, { signal: ctrl.signal }).catch(() => null);
+          if (lyristRes && lyristRes.ok) {
+            const lJson: any = await lyristRes.json();
+            if (typeof lJson?.lyrics === 'string' && lJson.lyrics.trim().length > 25) {
+              pushCandidate({
+                trackName: String(lJson?.title || cleanTitle),
+                artistName: String(lJson?.artist || updatedPrimaryArtist),
+                duration: durationParam,
+                plainLyrics: lJson.lyrics.trim(),
+                basePriority: 70,
               });
               return;
             }
           }
-          const clRes = await fetch(
-            `http://api.chartlyrics.com/apiv1.asmx/SearchLyricDirect?artist=${encodeURIComponent(primaryArtist)}&song=${encodeURIComponent(cleanTitle)}`,
+
+          if (!updatedPrimaryArtist) return;
+          const ovhRes = await fetch(
+            `https://api.lyrics.ovh/v1/${encodeURIComponent(updatedPrimaryArtist)}/${encodeURIComponent(cleanTitle)}`,
             { signal: ctrl.signal }
-          );
-          if (clRes.ok) {
+          ).catch(() => null);
+          if (ovhRes && ovhRes.ok) {
+            const ovhJson: any = await ovhRes.json();
+            if (typeof ovhJson?.lyrics === 'string' && ovhJson.lyrics.trim().length > 25) {
+              pushCandidate({
+                trackName: cleanTitle,
+                artistName: updatedPrimaryArtist,
+                duration: durationParam,
+                plainLyrics: ovhJson.lyrics.trim(),
+                basePriority: 66,
+              });
+              return;
+            }
+          }
+
+          const clRes = await fetch(
+            `http://api.chartlyrics.com/apiv1.asmx/SearchLyricDirect?artist=${encodeURIComponent(updatedPrimaryArtist)}&song=${encodeURIComponent(cleanTitle)}`,
+            { signal: ctrl.signal }
+          ).catch(() => null);
+          if (clRes && clRes.ok) {
             const xml = await clRes.text();
             const lyricMatch = xml.match(/<Lyric>([\s\S]*?)<\/Lyric>/i);
             if (lyricMatch && lyricMatch[1] && lyricMatch[1].trim().length > 25) {
-              aggregated.push({
+              pushCandidate({
                 trackName: cleanTitle,
-                artistName: primaryArtist,
+                artistName: updatedPrimaryArtist,
+                duration: durationParam,
                 plainLyrics: lyricMatch[1].trim(),
-                verified: true,
-                priority: 60,
+                basePriority: 62,
               });
             }
           }
@@ -1309,10 +2316,16 @@ export function createVoidGatewayHandler() {
       await Promise.allSettled([
         lrclibGetTask,
         lrclibSearchTask,
+        kugouTask,
         neteaseTask,
-        lrcCxTask,
+        qqMusicTask,
+        lrcCxAndTextylTask,
+        megalobizTask,
         jioLyricsTask,
-        ovhAndChartTask,
+        geniusLyricsTask,
+        shazamLyricsTask,
+        youtubeCaptionsTask,
+        globalPlainTask,
       ]);
 
       aggregated.sort((a, b) => (b.priority || 0) - (a.priority || 0));
@@ -1400,7 +2413,45 @@ export function createVoidGatewayHandler() {
       return;
     }
 
-    // 3b. Local YouTube InnerTube Search (fast, zero cold-start)
+    // 3a. CORS-safe Image Proxy for Canvas Ambient Color Sampling (YouTube i.ytimg.com, archive.org, etc.)
+    if (parsed.pathname === '/__void_api/img-proxy') {
+      const rawUrl = parsed.searchParams.get('url')?.trim() || '';
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      if (!/^https?:\/\//i.test(rawUrl)) {
+        res.statusCode = 400;
+        res.end();
+        return;
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      try {
+        const imgRes = await fetch(rawUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+          },
+          signal: controller.signal,
+        });
+        if (imgRes.ok) {
+          const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+          const buf = Buffer.from(await imgRes.arrayBuffer());
+          res.statusCode = 200;
+          res.setHeader('Content-Type', contentType);
+          res.end(buf);
+          return;
+        }
+      } catch {
+        // Ignore
+      } finally {
+        clearTimeout(timeout);
+      }
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+
+    // 3b. Local YouTube InnerTube Search (fast, zero cold-start, filtered strictly to Songs & Quran/Recitations)
     if (parsed.pathname === '/__void_api/yt-search') {
       const q = parsed.searchParams.get('q')?.trim() || '';
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -1410,6 +2461,14 @@ export function createVoidGatewayHandler() {
         res.end('[]');
         return;
       }
+      const hasAudioIntent =
+        /\b(song|songs|music|audio|lyrics|lyrical|ost|bgm|remix|slowed|reverb|lofi|cover|instrumental|album|track|jukeb|quran|qur'an|surah|surat|ayah|ayat|tilawat|recitation|qari|nasheed|naat|madh|mappila|ghazal|qawwali|bhajan|dua|azan|adhan)\b/i.test(
+          q
+        );
+      const searchQuery = hasAudioIntent ? q : `${q} song`;
+      const nonAudioBlockRegex =
+        /\b(which\s+exam|exam\s+i\s+should|exam\s+prep|exam\s+strategy|exam\s+date|syllabus|coaching|lecture|lectures|tutorial|tutorials|course|class\s*\d|classes|neet|jee|upsc|ssc|ias|ips|ibps|sbi\s*po|bank\s*exam|ca\s*foundation|gate\s*exam|cat\s*exam|board\s*exam|study\s*tips|how\s+to\s+prepare|mock\s*test|previous\s*year\s*question|mcq|aptitude|reasoning|physics\s*wallah|unacademy|byju|vedantu|xylem|eduport|anil\s*aggarwal|vlog|vlogs|unboxing|review|gameplay|walkthrough|let'?s\s*play|patch\s*notes|breaking\s*news|press\s*conference|debate|podcast\s*ep|recipe|cooking|how\s+to\s+make|workout\s*routine|stock\s*market|trading|crypto)\b/i;
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 3200);
       try {
@@ -1417,7 +2476,7 @@ export function createVoidGatewayHandler() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            query: q,
+            query: searchQuery,
             context: {
               client: {
                 clientName: 'WEB',
@@ -1433,7 +2492,7 @@ export function createVoidGatewayHandler() {
           const data: any = await ytRes.json();
           const items: any[] = [];
           const walk = (node: any) => {
-            if (!node || typeof node !== 'object' || items.length >= 10) return;
+            if (!node || typeof node !== 'object' || items.length >= 12) return;
             if (node.videoRenderer && typeof node.videoRenderer.videoId === 'string') {
               const v = node.videoRenderer;
               const id = v.videoId;
@@ -1446,6 +2505,9 @@ export function createVoidGatewayHandler() {
                 v.longBylineText?.runs?.[0]?.text ||
                 'YouTube';
               const durationText = v.lengthText?.simpleText || '';
+              if (nonAudioBlockRegex.test(`${title} ${artist}`)) {
+                return;
+              }
               items.push({
                 id,
                 videoId: id,

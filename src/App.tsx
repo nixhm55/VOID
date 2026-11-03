@@ -1,5 +1,4 @@
-import { fetchArtist } from './api/musicApi';
-import { extractCleanYouTubeId, extractYouTubeIdFromTrack, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
+import { extractCleanYouTubeId, extractYouTubeIdFromTrack, isNonAudioYouTubeVideo, resolveYouTubeDownloadCandidates, resolveYouTubePlayableStream, searchYouTube, warmUpYouTubeBackend } from "./api/youtubeApi";
 import { searchAllProviders } from './api/unifiedSearch';
 import { fetchTrendingTop100, getInitialTrendingTracks, getOrderedTrendingLanguages, MOBILE_EXCLUDED_TRENDING_LANG_IDS, prewarmArabicTopStreams, promoteTrendingLanguage, resolveTrendingTrackStream, warmUpTrendingCatalog, type TrendingLanguage, type TrendingTrackItem } from './api/trendingApi';
 import { computeAutoFitCoverScale, getCachedCoverScale, getInstantArabicTop200, getStickyCoverUrl, isCoverUrlLoaded, isValidCoverUrl, markCoverUrlLoaded, rememberStickyCover, resolveAndLockTrackCover, resolveArabicYouTubeFallback, stickyCoverListeners } from './api/arabicTrendingCatalog';
@@ -7,8 +6,9 @@ import { resolveUniversalTrackLyrics } from './api/lyricsApi';
 import { areSameOrDuplicateArtist, deduplicateArtistNames, doesArtistMatchQuery, fetchArtistTop100, getInitialArtistTop100, isCompoundArtistString, isValidArtistAvatarUrl, normalizeArtistIdentityKey, pickCanonicalArtistDisplayName, scoreArtistAvatarUrl, searchCanonicalArtists } from './api/artistCatalogApi';
 import { areSongsFuzzyDuplicates, cleanCanonicalTrackTitle, deduplicateTrackCollection, detectTrackQuality, formatProviderLabel, getTrackQualityBadge } from './api/quality';
 import { QualityBadge } from './components/QualityBadge';
-import { SoapBubbleMaterial, SoapBubbleSearch } from './components/soap-bubble';
+import { SoapBubbleMaterial, SoapBubbleSearch, SoapBubbleSlider, SoapBubbleSurface } from './components/soap-bubble';
 import { LiquidGlassOrb, type LiquidGlassOrbState } from './components/liquid-glass-orb';
+import { SilverDustBackdrop } from './components/SilverDustBackdrop';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
@@ -93,10 +93,11 @@ const countLabel = (count: number, one: string) => `${count} ${count === 1 ? one
 const rangeStyle = (fraction: number) => ({ '--p': `${Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0)) * 100}%` }) as CSSProperties;
 const activeLyricIndexAt = (seconds: number, lyrics: { time: number; text: string }[] | null) => {
   if (!lyrics?.length) return -1;
-  if (seconds < lyrics[0].time) return 0;
+  const effectiveSec = seconds + 0.16;
+  if (effectiveSec < lyrics[0].time) return 0;
   for (let i = 0; i < lyrics.length; i += 1) {
     const nextTime = lyrics[i + 1]?.time ?? Infinity;
-    if (seconds >= lyrics[i].time && seconds < nextTime) return i;
+    if (effectiveSec >= lyrics[i].time && effectiveSec < nextTime) return i;
   }
   return lyrics.length - 1;
 };
@@ -416,51 +417,69 @@ async function sampleArtworkAmbient(blob: Blob): Promise<Hue4 | null> {
   finally { URL.revokeObjectURL(url); }
 }
 
-// Sample ambient from remote image URL (JioSaavn / streaming cover)
+// Sample ambient from remote image URL (JioSaavn / YouTube / streaming cover)
 async function sampleImageUrlAmbient(url: string): Promise<Hue4 | null> {
-  if (!url || /archive\.org|ytimg\.com|fbcdn\.net/i.test(url)) return null;
-  try {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = url;
-    await img.decode();
-    const size = 20;
-    const canvas = document.createElement('canvas');
-    canvas.width = size; canvas.height = size;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
-    ctx.drawImage(img, 0, 0, size, size);
-    const { data } = ctx.getImageData(0, 0, size, size);
-    const bins = new Array<number>(24).fill(0);
-    let satSum = 0, weightSum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
-      const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
-      if (d < .08) continue;
-      const l = (max + min) / 2;
-      const mid = 1 - Math.abs(2 * l - 1);
-      const s = d / (mid || 1);
-      let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-      h = (h * 60 + 360) % 360;
-      const weight = d * mid;
-      bins[Math.floor(h / 15) % 24] += weight;
-      satSum += s * weight; weightSum += weight;
+  if (!url || /fbcdn\.net/i.test(url)) return null;
+  const needsProxy = /ytimg\.com|archive\.org|youtube\.com/i.test(url);
+  const candidates = needsProxy
+    ? [
+        `/__void_api/img-proxy?url=${encodeURIComponent(url)}`,
+        `https://wsrv.nl/?url=${encodeURIComponent(url)}&w=64&h=64&output=jpg`,
+        url,
+      ]
+    : [
+        url,
+        `/__void_api/img-proxy?url=${encodeURIComponent(url)}`,
+        `https://wsrv.nl/?url=${encodeURIComponent(url)}&w=64&h=64&output=jpg`,
+      ];
+
+  for (const srcUrl of candidates) {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = srcUrl;
+      await img.decode();
+      const size = 20;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) continue;
+      ctx.drawImage(img, 0, 0, size, size);
+      const { data } = ctx.getImageData(0, 0, size, size);
+      const bins = new Array<number>(24).fill(0);
+      let satSum = 0, weightSum = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+        if (d < .08) continue;
+        const l = (max + min) / 2;
+        const mid = 1 - Math.abs(2 * l - 1);
+        const s = d / (mid || 1);
+        let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+        h = (h * 60 + 360) % 360;
+        const weight = d * mid;
+        bins[Math.floor(h / 15) % 24] += weight;
+        satSum += s * weight; weightSum += weight;
+      }
+      if (weightSum < 4) return [215, 215, 215, 6];
+      const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
+      let best = 0;
+      for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
+      let second = -1;
+      for (let i = 0; i < 24; i += 1) {
+        const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
+        if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
+      }
+      const h1 = best * 15 + 7.5;
+      const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
+      const h3 = (h1 + 338) % 360;
+      const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
+      return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
+    } catch {
+      continue;
     }
-    if (weightSum < 4) return [215, 215, 215, 6];
-    const score = (i: number) => bins[(i + 23) % 24] * .5 + bins[i] + bins[(i + 1) % 24] * .5;
-    let best = 0;
-    for (let i = 1; i < 24; i += 1) if (score(i) > score(best)) best = i;
-    let second = -1;
-    for (let i = 0; i < 24; i += 1) {
-      const gap = Math.min((i - best + 24) % 24, (best - i + 24) % 24);
-      if (gap >= 5 && (second < 0 || score(i) > score(second))) second = i;
-    }
-    const h1 = best * 15 + 7.5;
-    const h2 = second >= 0 && score(second) > score(best) * .25 ? second * 15 + 7.5 : (h1 + 28) % 360;
-    const h3 = (h1 + 338) % 360;
-    const saturation = Math.max(54, Math.min(94, Math.round((satSum / weightSum) * 105)));
-    return [Math.round(h1), Math.round(h2), Math.round(h3), saturation];
-  } catch { return null; }
+  }
+  return null;
 }
 
 const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
@@ -1333,8 +1352,30 @@ function VoidGlyph({ playing }: { playing: boolean }) {
   </svg>;
 }
 
-function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, inputTestId }: {
-  volume: number; muted: boolean; onVolume: (value: number) => void; onToggleMute: () => void; buttonTestId: string; inputTestId: string;
+const SLIDER_BUBBLE_MATERIAL_PROPS = {
+  iridescence: 0.5,
+  oilCoverage: 0.73,
+  oilEdgeFade: 2.33,
+  clearCenter: 0.57,
+  windowLength: 1.3,
+  windowMargin: 0.85,
+  windowBend: 0.75,
+  windowSize: 0.75,
+  windowWidth: 0.8,
+  windowGradient: 0.96,
+  windowHead: 0.7,
+  windowTail: 0.6,
+  glintSize: 1.65,
+  glintIntensity: 0,
+  glintDistance: -0.45,
+  glintHeight: 0.65,
+  windowIntensity: 0.85,
+  windowTwin: false,
+  bottomShadeColor: '#ffffff',
+} as const;
+
+function VolumeControl({ volume, muted, accentColor = 'rgb(232, 228, 220)', onVolume, onToggleMute, buttonTestId, inputTestId }: {
+  volume: number; muted: boolean; accentColor?: string; onVolume: (value: number) => void; onToggleMute: () => void; buttonTestId: string; inputTestId: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -1360,14 +1401,28 @@ function VolumeControl({ volume, muted, onVolume, onToggleMute, buttonTestId, in
     onKeyDown={event => { if (open && event.key === 'Escape') { event.stopPropagation(); setOpen(false); } }}
     onBlur={event => { if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) armClose(); }}>
     <div className="vol-pop">
-      <input className="vol-slider" style={rangeStyle(silent ? 0 : volume)} type="range" min="0" max="1" step=".01" value={silent ? 0 : volume}
-        aria-label="Volume" tabIndex={open ? 0 : -1}
-        onChange={event => onVolume(Number(event.target.value))}
-        onPointerDown={() => {
-          dragging.current = true; clearTimer();
-          window.addEventListener('pointerup', () => { dragging.current = false; }, { once: true });
-        }}
-        data-testid={inputTestId} />
+      <SoapBubbleMaterial {...SLIDER_BUBBLE_MATERIAL_PROPS}>
+        <SoapBubbleSlider
+          className="vol-slider"
+          scale={0.62}
+          sliderHeight={18}
+          trackHeight={3.5}
+          hoverOnlyBubble
+          from={accentColor}
+          min={0}
+          max={1}
+          step={0.01}
+          value={silent ? 0 : volume}
+          label="Volume"
+          inputTabIndex={open ? 0 : -1}
+          inputTestId={inputTestId}
+          onValueChange={val => onVolume(val)}
+          onDragStateChange={isDragging => {
+            dragging.current = isDragging;
+            if (isDragging) clearTimer();
+          }}
+        />
+      </SoapBubbleMaterial>
     </div>
     <button className="icon-button vol-button" aria-label={label} aria-expanded={open} title={label}
       onClick={() => { if (open) onToggleMute(); else setOpen(true); }} data-testid={buttonTestId}>
@@ -1613,13 +1668,25 @@ useEffect(() => {
   const [voiceOrbOpen, setVoiceOrbOpen] = useState(false);
   const [voiceOrbState, setVoiceOrbState] = useState<LiquidGlassOrbState>('listening');
   const voiceAudioLevelRef = useRef<number>(0);
+  const voiceSignalRef = useRef<{ level: number; onset: number; low: number; mid: number; high: number }>({
+    level: 0,
+    onset: 0,
+    low: 0,
+    mid: 0,
+    high: 0,
+  });
   const speechRecRef = useRef<any>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAudioCtxRef = useRef<AudioContext | null>(null);
   const micRafRef = useRef<number>(0);
   const voiceFinishTimerRef = useRef<number>(0);
 
-  const getLiveVoiceAudioLevel = useCallback(() => voiceAudioLevelRef.current, []);
+  const getLiveVoiceAudioLevel = useCallback(
+    () => (voiceAudioLevelRef.current > 0.05 ? voiceAudioLevelRef.current : 0.55),
+    [],
+  );
+
+  const getLiveVoiceSignal = useCallback(() => voiceSignalRef.current, []);
 
   const stopVoiceSearchResources = useCallback(() => {
     if (voiceFinishTimerRef.current) {
@@ -1652,6 +1719,7 @@ useEffect(() => {
       micAudioCtxRef.current = null;
     }
     voiceAudioLevelRef.current = 0;
+    voiceSignalRef.current = { level: 0, onset: 0, low: 0, mid: 0, high: 0 };
   }, []);
 
   const stopVoiceSearch = useCallback(() => {
@@ -1662,6 +1730,7 @@ useEffect(() => {
 
   const startVoiceSearch = useCallback(() => {
     stopVoiceSearchResources();
+    setPaletteQuery('');
     setVoiceOrbOpen(true);
     setVoiceOrbState('listening');
 
@@ -1678,15 +1747,42 @@ useEffect(() => {
           const source = ctx.createMediaStreamSource(stream);
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 256;
-          analyser.smoothingTimeConstant = 0.75;
+          analyser.smoothingTimeConstant = 0.65;
           source.connect(analyser);
           const data = new Uint8Array(analyser.frequencyBinCount);
+          let prevLvl = 0;
           const pump = () => {
             analyser.getByteFrequencyData(data);
             let sum = 0;
-            for (let i = 0; i < data.length; i++) sum += data[i];
-            const avg = sum / (data.length * 255);
-            voiceAudioLevelRef.current = Math.min(1, avg * 2.8);
+            let lowSum = 0;
+            let midSum = 0;
+            let highSum = 0;
+            const n = data.length;
+            const lowEnd = Math.max(1, Math.floor(n * 0.18));
+            const midEnd = Math.max(lowEnd + 1, Math.floor(n * 0.55));
+            for (let i = 0; i < n; i++) {
+              const v = data[i];
+              sum += v;
+              if (i < lowEnd) lowSum += v;
+              else if (i < midEnd) midSum += v;
+              else highSum += v;
+            }
+            const avg = sum / (n * 255);
+            const lvl = Math.min(1, avg * 3.1);
+            const low = Math.min(1, (lowSum / (lowEnd * 255)) * 2.6);
+            const mid = Math.min(1, (midSum / ((midEnd - lowEnd) * 255)) * 3.2);
+            const high = Math.min(1, (highSum / ((n - midEnd) * 255)) * 3.8);
+            const onset = Math.min(1, Math.max(0, (lvl - prevLvl) * 4.5));
+            prevLvl = lvl * 0.7 + prevLvl * 0.3;
+
+            voiceAudioLevelRef.current = lvl;
+            voiceSignalRef.current = {
+              level: Math.max(lvl, voiceSignalRef.current.level * 0.82),
+              onset: Math.max(onset, voiceSignalRef.current.onset * 0.78),
+              low: Math.max(low, voiceSignalRef.current.low * 0.82),
+              mid: Math.max(mid, voiceSignalRef.current.mid * 0.82),
+              high: Math.max(high, voiceSignalRef.current.high * 0.82),
+            };
             micRafRef.current = window.requestAnimationFrame(pump);
           };
           micRafRef.current = window.requestAnimationFrame(pump);
@@ -1696,7 +1792,7 @@ useEffect(() => {
         });
     }
 
-    // 2. Live Speech-to-Text capture directly into paletteQuery
+    // 2. Live Speech-to-Text capture directly into paletteQuery (fresh session each mic press)
     const SpeechRec =
       typeof window !== 'undefined'
         ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -1717,6 +1813,14 @@ useEffect(() => {
             transcript += res[0]?.transcript || '';
             if (res.isFinal) hasFinal = true;
           }
+          // Excite voice signal on speech recognition syllables
+          voiceSignalRef.current = {
+            level: Math.max(voiceSignalRef.current.level, 0.78),
+            onset: 0.92,
+            low: Math.max(voiceSignalRef.current.low, 0.68),
+            mid: Math.max(voiceSignalRef.current.mid, 0.85),
+            high: Math.max(voiceSignalRef.current.high, 0.74),
+          };
           const cleaned = transcript.trim();
           if (cleaned) {
             setPaletteQuery(cleaned);
@@ -1725,6 +1829,10 @@ useEffect(() => {
               window.clearTimeout(voiceFinishTimerRef.current);
             }
             voiceFinishTimerRef.current = window.setTimeout(() => {
+              try {
+                rec.onresult = null;
+                rec.stop();
+              } catch {}
               setVoiceOrbState('searching');
               window.setTimeout(() => {
                 setVoiceOrbState('success');
@@ -1747,12 +1855,12 @@ useEffect(() => {
   }, [stopVoiceSearchResources]);
 
   const toggleVoiceSearch = useCallback(() => {
-    if (voiceOrbOpen) {
+    if (voiceOrbOpen && !paletteQuery.trim()) {
       stopVoiceSearch();
     } else {
       startVoiceSearch();
     }
-  }, [startVoiceSearch, stopVoiceSearch, voiceOrbOpen]);
+  }, [paletteQuery, startVoiceSearch, stopVoiceSearch, voiceOrbOpen]);
 
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('void-search-history') || '[]'); } catch { return []; }
@@ -1915,10 +2023,20 @@ useEffect(() => {
 
    // --- SYNCED LYRICS STATE & LOGIC ---
   const [syncedLyrics, setSyncedLyrics] = useState<{time: number, text: string}[] | null>(null);
+  const syncedLyricsRef = useRef<{time: number, text: string}[] | null>(null);
+  syncedLyricsRef.current = syncedLyrics;
   const [lyricsManualScroll, setLyricsManualScroll] = useState(false);
   const sideLyricsRef = useRef<HTMLDivElement>(null);
 
   const positionRef = useRef(0);
+  const lastFetchedLyricsTrackIdRef = useRef<string | null>(null);
+
+  // Sync position immediately when opening the expanded player on mobile
+  useEffect(() => {
+    if (expanded) {
+      setPosition(positionRef.current);
+    }
+  }, [expanded]);
 
   // Playback time drives the whole app shell, so only publish routine clock ticks
   // when the visible second or a time-sensitive UI boundary actually changes.
@@ -1927,23 +2045,36 @@ useEffect(() => {
     if (!Number.isFinite(next) || next < 0) return;
     positionRef.current = next;
     if (isMobileViewport && !expandedRef.current && !closingRef.current) return;
+    const currentLyrics = syncedLyricsRef.current;
     setPosition(current => {
       const crossedSecond = Math.floor(current) !== Math.floor(next);
-      const crossedLyric = activeLyricIndexAt(current, syncedLyrics) !== activeLyricIndexAt(next, syncedLyrics);
+      const crossedLyric = activeLyricIndexAt(current, currentLyrics) !== activeLyricIndexAt(next, currentLyrics);
       const crossedCanvasEnding = duration > 10 && (duration - current <= 9) !== (duration - next <= 9);
       return crossedSecond || crossedLyric || crossedCanvasEnding ? next : current;
     });
-  }, [duration, isMobileViewport, syncedLyrics]);
+  }, [duration, isMobileViewport]);
   
   const activeLyricIndex = useMemo(() => {
     return activeLyricIndexAt(position, syncedLyrics);
   }, [syncedLyrics, position]);
 
+  const lyricsScrollResetRef = useRef<number | undefined>(undefined);
+  const roundedKnownDuration = duration > 25 && Number.isFinite(duration) ? Math.round(duration) : 0;
+
   useEffect(() => {
-    if (!activeTrack) { setSyncedLyrics(null); setLyricsManualScroll(false); return; }
+    if (!activeTrack) {
+      lastFetchedLyricsTrackIdRef.current = null;
+      setSyncedLyrics(null);
+      setLyricsManualScroll(false);
+      return;
+    }
     let alive = true;
     setLyricsManualScroll(false);
-    resolveUniversalTrackLyrics(activeTrack)
+    if (lastFetchedLyricsTrackIdRef.current !== activeTrack.id) {
+      lastFetchedLyricsTrackIdRef.current = activeTrack.id;
+      setSyncedLyrics(null);
+    }
+    resolveUniversalTrackLyrics(activeTrack, roundedKnownDuration || undefined)
       .then((lines) => {
         if (alive) {
           setSyncedLyrics(lines && lines.length > 0 ? lines : null);
@@ -1953,7 +2084,7 @@ useEffect(() => {
         if (alive) setSyncedLyrics(null);
       });
     return () => { alive = false; };
-  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.duration]);
+  }, [activeTrack?.id, activeTrack?.title, activeTrack?.artist, activeTrack?.duration, roundedKnownDuration]);
 
   useEffect(() => {
     if (lyricsManualScroll || activeLyricIndex < 0 || !sideLyricsRef.current) return;
@@ -1961,13 +2092,19 @@ useEffect(() => {
     const activeEl = container.children[activeLyricIndex] as HTMLElement;
     if (activeEl) {
       container.scrollTo({
-        top: activeEl.offsetTop - container.clientHeight * 0.18 + activeEl.clientHeight / 2,
+        top: Math.max(0, activeEl.offsetTop - container.clientHeight * 0.42 + activeEl.clientHeight / 2),
         behavior: 'smooth'
       });
     }
-  }, [activeLyricIndex, lyricsManualScroll]);
+  }, [activeLyricIndex, lyricsManualScroll, expanded, syncedLyrics]);
 
-  const handleLyricsScroll = () => { if (!lyricsManualScroll) setLyricsManualScroll(true); };
+  const handleLyricsScroll = () => {
+    if (!lyricsManualScroll) setLyricsManualScroll(true);
+    window.clearTimeout(lyricsScrollResetRef.current);
+    lyricsScrollResetRef.current = window.setTimeout(() => {
+      setLyricsManualScroll(false);
+    }, 3200);
+  };
 
   // --- SPOTIFY CANVAS (YouTube Video Background) STATE ---
   const [canvasVideoId, setCanvasVideoId] = useState<string | null>(null);
@@ -2346,7 +2483,15 @@ useEffect(() => {
       try {
         const parsedFavs = JSON.parse(localStorage.getItem('void-remote-favorites') || '[]');
         const arabicCatalogMap = new Map(getInstantArabicTop200().map(t => [t.id, t]));
-        remoteFavs = Array.isArray(parsedFavs) ? parsedFavs.map((item: any) => {
+      const rawFavs = Array.isArray(parsedFavs)
+          ? parsedFavs.filter((item: any) => !isNonAudioYouTubeVideo(item?.title || item?.name, item?.artist))
+          : [];
+        if (Array.isArray(parsedFavs) && rawFavs.length !== parsedFavs.length) {
+          try {
+            localStorage.setItem('void-remote-favorites', JSON.stringify(rawFavs));
+          } catch {}
+        }
+        remoteFavs = rawFavs.map((item: any) => {
           const validSavedImg = isValidCoverUrl(item?.image) ? String(item.image).trim() : '';
           const cleanImage = validSavedImg || getStickyCoverUrl(item) || undefined;
           if (cleanImage) rememberStickyCover(item, cleanImage);
@@ -2372,9 +2517,16 @@ useEffect(() => {
             audioUrl: isLegacyYt && /^[\w-]{11}$/.test(cleanId) ? `yt-stream://${cleanId}` : item?.audioUrl,
             fallbackUrls: Array.isArray(item?.fallbackUrls) ? item.fallbackUrls.filter((u: string) => !String(u).includes('void-backend')) : undefined,
           };
-        }) : [];
+        });
       } catch { remoteFavs = []; }
-      const mergedTracks = [...remoteFavs, ...storedTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
+      const cleanStoredTracks = storedTracks.filter(t => {
+        if (isNonAudioYouTubeVideo(t.title, t.artist)) {
+          void removeTrack(t.id).catch(() => {});
+          return false;
+        }
+        return true;
+      });
+      const mergedTracks = [...remoteFavs, ...cleanStoredTracks.filter(t => !remoteFavs.some(rf => rf.id === t.id))];
       setTracks(mergedTracks.sort((a, b) => b.importedAt - a.importedAt));
       setPlaylists(storedPlaylists.sort((a, b) => a.createdAt - b.createdAt));
       if (storedPrefs) {
@@ -2550,18 +2702,22 @@ useEffect(() => {
   useEffect(() => {
     if (!isPlaying) return;
     const timer = window.setInterval(() => {
-      if (!ytActiveRef.current || !ytAudioPlayerRef.current) return;
-      try {
-        const cur = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? 0);
+      if (ytActiveRef.current && ytAudioPlayerRef.current) {
+        try {
+          const cur = Number(ytAudioPlayerRef.current.getCurrentTime?.() ?? 0);
+          if (Number.isFinite(cur) && cur >= 0) setPlaybackPosition(cur);
+          const dur = Number(ytAudioPlayerRef.current.getDuration?.() ?? 0);
+          if (Number.isFinite(dur) && dur > 0) setDuration(dur);
+        } catch {}
+      } else if (audio.current && !audio.current.paused && !switchingTrackRef.current) {
+        const cur = audio.current.currentTime;
         if (Number.isFinite(cur) && cur >= 0) setPlaybackPosition(cur);
-        const dur = Number(ytAudioPlayerRef.current.getDuration?.() ?? 0);
-        if (Number.isFinite(dur) && dur > 0) setDuration(dur);
-      } catch {}
-    }, 250);
+      }
+    }, 65);
     return () => window.clearInterval(timer);
   }, [isPlaying, setPlaybackPosition]);
 
-  // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn) or Local Artwork ---
+  // --- Dynamic Ambient Color Detection from Remote Track Image (JioSaavn / YouTube) or Local Artwork ---
   useEffect(() => {
     if (!activeTrack) {
       setAtmos(null);
@@ -2574,24 +2730,33 @@ useEffect(() => {
     }
     let alive = true;
 
-    if (activeTrack.image) {
-      sampleImageUrlAmbient(activeTrack.image).then(found => {
-        if (alive) setAtmos(found ?? defaultAmbient);
-      }).catch(() => {
-        if (alive) setAtmos(defaultAmbient);
-      });
-    } else if (activeTrack.artwork && activeTrack.artwork instanceof Blob) {
-      sampleArtworkAmbient(activeTrack.artwork).then(found => {
-        if (alive) setAtmos(found ?? defaultAmbient);
-      }).catch(() => {
-        if (alive) setAtmos(defaultAmbient);
-      });
-    } else {
-      setAtmos(null);
-    }
+    const updateFromCover = () => {
+      const ytId = extractYouTubeIdFromTrack(activeTrack);
+      const ytThumb = ytId ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg` : '';
+      const coverSrc = getStickyCoverUrl(activeTrack) || activeTrack.image || ytThumb;
+      if (coverSrc) {
+        sampleImageUrlAmbient(coverSrc).then(found => {
+          if (alive) setAtmos(found ?? defaultAmbient);
+        }).catch(() => {
+          if (alive) setAtmos(defaultAmbient);
+        });
+      } else if (activeTrack.artwork && activeTrack.artwork instanceof Blob) {
+        sampleArtworkAmbient(activeTrack.artwork).then(found => {
+          if (alive) setAtmos(found ?? defaultAmbient);
+        }).catch(() => {
+          if (alive) setAtmos(defaultAmbient);
+        });
+      } else {
+        setAtmos(null);
+      }
+    };
+
+    updateFromCover();
+    stickyCoverListeners.add(updateFromCover);
 
     return () => {
       alive = false;
+      stickyCoverListeners.delete(updateFromCover);
     };
   }, [activeTrack?.id, activeTrack?.image, activeTrack?.artwork, isMobileViewport]);
 
@@ -4549,6 +4714,14 @@ useEffect(() => {
     const saturation = Math.max(58, Math.min(92, Math.round(source[3])));
     return `hsl(${hue} ${saturation}% 64%)`;
   }, [atmosphere, activeTrack]);
+  const sliderAccentColor = useMemo(() => {
+    const source = atmos ?? (activeTrack ? artFor(activeTrack).ambient : null);
+    if (!source) return 'rgb(232, 228, 220)';
+    const hue = Math.round(source[0]);
+    const saturation = Math.max(64, Math.min(95, Math.round(source[3]) + 10));
+    const [r, g, b] = hslToRgb(hue, saturation / 100, 0.62);
+    return `rgb(${r}, ${g}, ${b})`;
+  }, [atmos, activeTrack]);
   const changeVolume = (value: number) => {
     if (audio.current) audio.current.volume = value;
     if (ytAudioPlayerRef.current) {
@@ -4641,40 +4814,58 @@ useEffect(() => {
           </div>
           {!isMobileViewport && (
           <div className="top-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div
-              className="search-trigger"
-              role="button"
-              tabIndex={0}
-              onClick={() => { stopVoiceSearch(); setPaletteOpen(true); setPaletteQuery(''); }}
-              onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  stopVoiceSearch();
-                  setPaletteOpen(true);
-                  setPaletteQuery('');
-                }
-              }}
-              aria-label="Search your library"
-              data-testid="button-open-search"
+            <SoapBubbleMaterial
+              iridescence={0}
+              oilOpacity={0}
+              oilCoverage={0}
+              reflectivity={0}
+              glass={0}
+              mirage={0}
+              windowLight={false}
+              keyLight={false}
+              floorLight={0}
+              bottomShade={false}
+              windowIntensity={0}
+              glintIntensity={0}
+              windowTwin={false}
             >
-              <Search size={14} />
-              <span>Search library</span>
-              <button
-                type="button"
-                className="search-trigger-mic-btn"
-                onClick={event => {
-                  event.stopPropagation();
-                  setPaletteQuery('');
-                  setPaletteOpen(true);
-                  startVoiceSearch();
+              <SoapBubbleSurface
+                className="search-trigger"
+                radius={14}
+                interactive={0.4}
+                role="button"
+                tabIndex={0}
+                onClick={() => { stopVoiceSearch(); setPaletteOpen(true); setPaletteQuery(''); }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    stopVoiceSearch();
+                    setPaletteOpen(true);
+                    setPaletteQuery('');
+                  }
                 }}
-                aria-label="Voice search"
-                title="Voice search"
-                data-testid="button-topbar-voice-search"
+                aria-label="Search your library"
+                data-testid="button-open-search"
               >
-                <Mic size={13.5} strokeWidth={1.8} />
-              </button>
-            </div>
+                <Search size={14} />
+                <span>Search library</span>
+                <button
+                  type="button"
+                  className="search-trigger-mic-btn"
+                  onClick={event => {
+                    event.stopPropagation();
+                    setPaletteQuery('');
+                    setPaletteOpen(true);
+                    startVoiceSearch();
+                  }}
+                  aria-label="Voice search"
+                  title="Voice search"
+                  data-testid="button-topbar-voice-search"
+                >
+                  <Mic size={14} strokeWidth={1.8} />
+                </button>
+              </SoapBubbleSurface>
+            </SoapBubbleMaterial>
 
             {/* Phones get the compact add action beside search; the desktop button below stays as it is. */}
             <button className="icon-button mobile-add-music" onClick={openImport} disabled={importing} aria-label="Add music" title="Add music" data-testid="button-add-music-compact"><Plus /></button>
@@ -4809,33 +5000,25 @@ useEffect(() => {
               <h1 className="page-title">Search</h1>
             </div>
             <SoapBubbleMaterial
-              backdrop={contentRef}
-              iridescence={0.5}
-              oilCoverage={0.73}
-              oilEdgeFade={2.33}
-              clearCenter={0.57}
-              seeThroughBend={0.37}
-              windowLength={1.3}
-              windowMargin={0.85}
-              windowBend={0.75}
-              windowSize={0.75}
-              windowWidth={0.8}
-              windowGradient={0.96}
-              windowHead={0.7}
-              windowTail={0.6}
-              glintSize={1.65}
+              iridescence={0}
+              oilOpacity={0}
+              oilCoverage={0}
+              reflectivity={0}
+              glass={0}
+              mirage={0}
+              windowLight={false}
+              keyLight={false}
+              floorLight={0}
+              bottomShade={false}
+              windowIntensity={0}
               glintIntensity={0}
-              glintDistance={-0.45}
-              glintHeight={0.65}
-              windowIntensity={0.85}
               windowTwin={false}
-              bottomShadeColor="#ffffff"
             >
               <SoapBubbleSearch
                 radius={14}
                 wrapperClassName="mobile-search-bar-wrap"
                 inputClassName="palette-input mobile-search-page-input"
-                placeholder="Search for artists and music…"
+                placeholder={voiceOrbOpen ? 'Listening…' : 'Search for artists and music…'}
                 value={paletteQuery}
                 onChange={event => setPaletteQuery(event.target.value)}
                 onKeyDown={event => {
@@ -4899,8 +5082,10 @@ useEffect(() => {
 
             <div className={`mobile-search-results${voiceOrbOpen ? ' is-voice-orb-open' : ''}`}>
               {voiceOrbOpen ? (
-                <div className="palette-voice-orb-stage" onClick={() => stopVoiceSearch()}>
-                  <LiquidGlassOrb
+                <>
+                  <SilverDustBackdrop getVoiceSignal={getLiveVoiceSignal} />
+                  <div className="palette-voice-orb-stage" onClick={() => stopVoiceSearch()}>
+                    <LiquidGlassOrb
                     baseColor="#ffffff"
                     colorA="#000000"
                     colorB="#4d4d4d"
@@ -4932,13 +5117,15 @@ useEffect(() => {
                     state={voiceOrbState}
                     thinkingAnimation="ripples"
                     searchingAnimation="lens"
+                    intensity={1}
                     preserveWhites={true}
                     animateEntrance={true}
-                    size={250}
+                    size={208}
                     audioLevel={0.55}
                     getAudioLevel={getLiveVoiceAudioLevel}
                   />
-                </div>
+                  </div>
+                </>
               ) : (
                 <>
               {paletteTab === 'songs' && allSearchResults.map(track => {
@@ -5862,7 +6049,24 @@ useEffect(() => {
         </div>
         <div className="player-scrub">
           <span>{activeTrack ? formatElapsed(position) : '—:—'}</span>
-          <input className="seek" aria-label="Playback position" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} disabled={!activeTrack} onChange={event => seekTo(Number(event.target.value))} data-testid="input-seek" />
+          <SoapBubbleMaterial {...SLIDER_BUBBLE_MATERIAL_PROPS}>
+            <SoapBubbleSlider
+              className="seek"
+              scale={0.68}
+              sliderHeight={18}
+              trackHeight={3.5}
+              hoverOnlyBubble
+              from={sliderAccentColor}
+              label="Playback position"
+              min={0}
+              max={duration > 0 && Number.isFinite(duration) ? duration : 100}
+              step={0.1}
+              value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0}
+              disabled={!activeTrack}
+              inputTestId="input-seek"
+              onValueChange={val => seekTo(val)}
+            />
+          </SoapBubbleMaterial>
           <span>{activeTrack ? (activeTrack.isLive ? 'LIVE' : formatTime(duration)) : '—:—'}</span>
         </div>
       </div>
@@ -5870,7 +6074,7 @@ useEffect(() => {
         <button className="icon-button extra-fade extra-opt" aria-label={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack?.favorite ? 'Remove favorite' : 'Add favorite'} disabled={!activeTrack} onClick={() => activeTrack && void toggleFavorite(activeTrack)} data-testid="button-player-favorite"><Heart fill={activeTrack?.favorite ? 'currentColor' : 'none'} /></button>
         <button className="icon-button extra-fade extra-opt" aria-label="Open queue" title="Queue" onClick={() => setPageAndRoute('queue')} data-testid="button-open-queue"><ListMusic /></button>
         <button className="icon-button extra-fade" aria-label="Expand now playing" title="Now playing" onClick={openExpanded} data-testid="button-expand-player"><ChevronDown style={{ transform: 'rotate(180deg)' }} /></button>
-        <VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="button-mute" inputTestId="input-volume" />
+        <VolumeControl volume={prefs.volume} muted={prefs.muted} accentColor={sliderAccentColor} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="button-mute" inputTestId="input-volume" />
       </div>
     </div>}
     <input ref={fileInput} type="file" accept="audio/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.aiff,.aif,.alac" multiple hidden onChange={event => { if (event.target.files) void importFiles(event.target.files); event.target.value = ''; }} data-testid="input-import-files" />
@@ -5884,11 +6088,12 @@ useEffect(() => {
     </div></div>}
     {paletteOpen && !isMobileViewport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) { stopVoiceSearch(); setPaletteOpen(false); } }}>
       <div className={`palette${voiceOrbOpen ? ' is-voice-orb-open' : ''}`} role="dialog" aria-modal="true" aria-label="Search your library">
+        {voiceOrbOpen && <SilverDustBackdrop getVoiceSignal={getLiveVoiceSignal} />}
         <div className="palette-input-row">
           <input
             autoFocus
             className="palette-input"
-            placeholder="Search for artists and music…"
+            placeholder={voiceOrbOpen ? 'Listening…' : 'Search for artists and music…'}
             value={paletteQuery}
             onChange={event => setPaletteQuery(event.target.value)}
             onKeyDown={event => {
@@ -5945,7 +6150,6 @@ useEffect(() => {
             <div
               className="palette-voice-orb-stage"
               onClick={() => stopVoiceSearch()}
-              title="Click to finish voice search"
             >
               <LiquidGlassOrb
                 baseColor="#ffffff"
@@ -5979,9 +6183,10 @@ useEffect(() => {
                 state={voiceOrbState}
                 thinkingAnimation="ripples"
                 searchingAnimation="lens"
+                intensity={1}
                 preserveWhites={true}
                 animateEntrance={true}
-                size={250}
+                size={208}
                 audioLevel={0.55}
                 getAudioLevel={getLiveVoiceAudioLevel}
               />
@@ -6334,7 +6539,7 @@ useEffect(() => {
         <div className="np-top np-fade">
           <button className="icon-button np-close" aria-label="Close now playing" title="Close" onClick={closeExpanded} data-testid="button-close-expanded"><X /></button>
           <span className="brand"><span className="eclipse" /><span className="brand-word">VOID</span></span>
-          <div className="np-top-end"><VolumeControl volume={prefs.volume} muted={prefs.muted} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="expanded-mute" inputTestId="expanded-volume" /></div>
+          <div className="np-top-end"><VolumeControl volume={prefs.volume} muted={prefs.muted} accentColor={sliderAccentColor} onVolume={changeVolume} onToggleMute={toggleMute} buttonTestId="expanded-mute" inputTestId="expanded-volume" /></div>
         </div>
         {activeTrack ? <div className="np-body">
           <div className="np-main">
@@ -6355,7 +6560,23 @@ useEffect(() => {
                 <button className="icon-button" onClick={() => void toggleFavorite(activeTrack)} aria-label={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} title={activeTrack.favorite ? 'Remove favorite' : 'Add favorite'} data-testid="expanded-favorite"><Heart fill={activeTrack.favorite ? 'currentColor' : 'none'} /></button>
               </div>
               <div className="np-scrub">
-                <input className="np-seek" type="range" min="0" max={duration > 0 && Number.isFinite(duration) ? duration : 100} step=".1" style={rangeStyle(duration > 0 && Number.isFinite(duration) ? position / duration : 0)} value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0} aria-label="Now playing position" onChange={event => seekTo(Number(event.target.value))} data-testid="expanded-seek" />
+                <SoapBubbleMaterial {...SLIDER_BUBBLE_MATERIAL_PROPS}>
+                  <SoapBubbleSlider
+                    className="np-seek"
+                    scale={0.68}
+                    sliderHeight={18}
+                    trackHeight={3.5}
+                    hoverOnlyBubble
+                    from={sliderAccentColor}
+                    label="Now playing position"
+                    min={0}
+                    max={duration > 0 && Number.isFinite(duration) ? duration : 100}
+                    step={0.1}
+                    value={duration > 0 && Number.isFinite(duration) ? Math.min(position, duration) : 0}
+                    inputTestId="expanded-seek"
+                    onValueChange={val => seekTo(val)}
+                  />
+                </SoapBubbleMaterial>
                 <div className="np-times"><span>{formatElapsed(position)}</span><span>{activeTrack.isLive ? 'LIVE' : formatTime(duration)}</span></div>
               </div>
               <div className="np-controls">
@@ -6374,7 +6595,7 @@ useEffect(() => {
           {syncedLyrics ? <div className="np-side np-fade">
             <div className="np-lyrics-synced" ref={sideLyricsRef} onWheel={handleLyricsScroll} onTouchMove={handleLyricsScroll}>
               {syncedLyrics.map((line, i) => (
-                <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => seekTo(line.time)}>
+                <div key={i} className={`side-lyric-line ${i === activeLyricIndex ? 'active' : i < activeLyricIndex ? 'passed' : ''}`} onClick={() => { setLyricsManualScroll(false); seekTo(line.time); }}>
                   {line.text}
                 </div>
               ))}
