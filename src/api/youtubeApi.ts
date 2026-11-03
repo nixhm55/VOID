@@ -290,6 +290,31 @@ export async function resolveYouTubePlayableStream(track: {
   return null;
 }
 
+const AUDIO_INTENT_REGEX =
+  /\b(song|songs|music|audio|lyrics|lyrical|ost|bgm|remix|slowed|reverb|lofi|cover|instrumental|album|track|jukebox|quran|qur'an|surah|surat|ayah|ayat|tilawat|recitation|qari|nasheed|naat|madh|mappila|ghazal|qawwali|bhajan|dua|azan|adhan|subliminal)\b/i;
+
+const NON_AUDIO_YOUTUBE_BLOCK_REGEX =
+  /\b(which\s+exam|exam\s+i\s+should|exam\s+prep|exam\s+strategy|exam\s+date|syllabus|coaching|lecture|lectures|tutorial|tutorials|course|class\s*\d|classes|neet|jee|upsc|ssc|ias|ips|ibps|sbi\s*po|bank\s*exam|ca\s*foundation|gate\s*exam|cat\s*exam|board\s*exam|study\s*tips|how\s+to\s+prepare|mock\s*test|previous\s*year\s*question|mcq|aptitude|reasoning|physics\s*wallah|unacademy|byju|vedantu|xylem|eduport|anil\s*aggarwal|confused\s+which\s+exam|vlog|vlogs|unboxing|review|gameplay|walkthrough|let'?s\s*play|patch\s*notes|breaking\s*news|press\s*conference|debate|podcast\s*ep|recipe|cooking|how\s+to\s+make|workout\s*routine|stock\s*market|trading|crypto)\b/i;
+
+export function isNonAudioYouTubeVideo(title?: string, artist?: string): boolean {
+  const combined = `${String(title || "")} ${String(artist || "")}`.trim();
+  if (!combined) return false;
+  if (
+    /\b(quran|qur'an|surah|surat|ayah|ayat|tilawat|recitation|qari|nasheed|naat|madh|mappila|ghazal|qawwali|bhajan|dua|azan|adhan)\b/i.test(
+      combined
+    )
+  ) {
+    return false;
+  }
+  return NON_AUDIO_YOUTUBE_BLOCK_REGEX.test(combined);
+}
+
+export function buildYouTubeAudioSearchQuery(cleanQuery: string): string {
+  const trimmed = cleanQuery.trim();
+  if (!trimmed) return "";
+  return AUDIO_INTENT_REGEX.test(trimmed) ? trimmed : `${trimmed} song`;
+}
+
 function normalizeYouTubeRows(rows: any[], cleanQuery: string): SearchResult[] {
   const results: SearchResult[] = [];
 
@@ -302,6 +327,13 @@ function normalizeYouTubeRows(rows: any[], cleanQuery: string): SearchResult[] {
       if (match) id = match[1];
     }
     if (!/^[\w-]{11}$/.test(id)) continue;
+
+    const name = String(row.name || row.title || cleanQuery).trim();
+    const artist = String(row.artist || row.uploaderName || row.author || "YouTube").trim();
+
+    if (isNonAudioYouTubeVideo(name, artist)) {
+      continue;
+    }
 
     let rawDownloadUrl = String(row.downloadUrl || "").trim();
     if (rawDownloadUrl) {
@@ -341,8 +373,6 @@ function normalizeYouTubeRows(rows: any[], cleanQuery: string): SearchResult[] {
       sourceHint: "YouTube",
     });
 
-    const artist = String(row.artist || row.uploaderName || row.author || "YouTube").trim();
-
     const rawImg = String(row.image || row.thumbnail || "").trim();
     const image =
       rawImg && !rawImg.includes("hq720.jpg")
@@ -355,7 +385,7 @@ function normalizeYouTubeRows(rows: any[], cleanQuery: string): SearchResult[] {
 
     results.push({
       id,
-      name: String(row.name || row.title || cleanQuery).trim(),
+      name,
       album: String(row.album || "YouTube").trim() || "YouTube",
       artist: artist || "YouTube",
       image,
@@ -386,8 +416,9 @@ async function fetchYouTubeFromBackend(
   externalSignal?.addEventListener("abort", onAbort, { once: true });
 
   try {
+    const audioQuery = buildYouTubeAudioSearchQuery(cleanQuery);
     const response = await fetch(
-      `${baseUrl}/search?q=${encodeURIComponent(cleanQuery)}`,
+      `${baseUrl}/search?q=${encodeURIComponent(audioQuery)}`,
       { signal: controller.signal }
     );
 
@@ -419,6 +450,7 @@ export async function searchYouTube(
 ): Promise<SearchResult[]> {
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
+  const audioQuery = buildYouTubeAudioSearchQuery(cleanQuery);
 
   if (
     typeof window !== "undefined" &&
@@ -430,7 +462,7 @@ export async function searchYouTube(
       const onAbort = () => localController.abort();
       externalSignal?.addEventListener("abort", onAbort, { once: true });
       try {
-        const res = await fetch(`/__void_api/yt-search?q=${encodeURIComponent(cleanQuery)}`, {
+        const res = await fetch(`/__void_api/yt-search?q=${encodeURIComponent(audioQuery)}`, {
           signal: localController.signal,
         });
         if (res.ok) {
