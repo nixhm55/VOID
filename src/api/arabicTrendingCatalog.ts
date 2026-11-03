@@ -714,7 +714,7 @@ export function computeAutoFitCoverScale(
   img: HTMLImageElement | null,
   url?: string | null,
   track?: any,
-  onAsyncUpdate?: (scale: number) => void
+  _onAsyncUpdate?: (scale: number) => void
 ): number {
   const key = String(url || img?.src || "").trim();
 
@@ -733,20 +733,6 @@ export function computeAutoFitCoverScale(
   const h = img.naturalHeight || 0;
   if (w <= 0 || h <= 0) return getCachedCoverScale(key, track);
 
-  try {
-    const scale = inspectYouTubeImageCanvas(img, key);
-    if (scale !== null) {
-      if (key) coverScaleCache.set(key, scale);
-      return scale;
-    }
-  } catch {
-    // Remote YouTube image without CORS header on the <img> element:
-    // probe via local CORS-safe proxy to detect any letterbox or left/right pillarbox gaps
-    if (key && /^https?:\/\//i.test(key)) {
-      probeYouTubeCoverScaleViaProxy(key, onAsyncUpdate);
-    }
-  }
-
   const ratio = w / h;
   const initialScale =
     /(?:ytimg\.com|youtube\.com)\/vi(?:_webp)?\/[^/]+\/(?:hqdefault|sddefault|0|default)\./i.test(
@@ -756,6 +742,9 @@ export function computeAutoFitCoverScale(
       ? 1.35
       : 1;
 
+  if (key) {
+    coverScaleCache.set(key, initialScale);
+  }
   return initialScale;
 }
 

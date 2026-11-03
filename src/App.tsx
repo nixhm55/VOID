@@ -9,6 +9,7 @@ import { QualityBadge } from './components/QualityBadge';
 import { SoapBubbleMaterial, SoapBubbleSearch, SoapBubbleSlider, SoapBubbleSurface } from './components/soap-bubble';
 import { LiquidGlassOrb, type LiquidGlassOrbState } from './components/liquid-glass-orb';
 import { SilverDustBackdrop } from './components/SilverDustBackdrop';
+import StarBorder from './components/StarBorder';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import{
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, Clock3, Disc3, Download, FileAudio, FolderOpen, Heart, Home,
@@ -2713,7 +2714,7 @@ useEffect(() => {
         const cur = audio.current.currentTime;
         if (Number.isFinite(cur) && cur >= 0) setPlaybackPosition(cur);
       }
-    }, 65);
+    }, 120);
     return () => window.clearInterval(timer);
   }, [isPlaying, setPlaybackPosition]);
 
@@ -4999,63 +5000,81 @@ useEffect(() => {
               <div className="eyebrow">Discover</div>
               <h1 className="page-title">Search</h1>
             </div>
-            <SoapBubbleMaterial
-              iridescence={0}
-              oilOpacity={0}
-              oilCoverage={0}
-              reflectivity={0}
-              glass={0}
-              mirage={0}
-              windowLight={false}
-              keyLight={false}
-              floorLight={0}
-              bottomShade={false}
-              windowIntensity={0}
-              glintIntensity={0}
-              windowTwin={false}
+            <StarBorder
+              as="div"
+              className="mobile-search-star-wrap"
+              color="#94a3b8"
+              trailColor="#94a3b8"
+              duration={5}
+              direction="clockwise"
+              stars={1}
+              trailLength={0.4}
+              thickness={2}
+              radius={14}
+              glow={0.6}
+              hover="none"
+              sparkle={false}
+              clickPulse={false}
+              theme="dark"
             >
-              <SoapBubbleSearch
-                radius={14}
-                wrapperClassName="mobile-search-bar-wrap"
-                inputClassName="palette-input mobile-search-page-input"
-                placeholder={voiceOrbOpen ? 'Listening…' : 'Search for artists and music…'}
-                value={paletteQuery}
-                onChange={event => setPaletteQuery(event.target.value)}
-                onKeyDown={event => {
-                  if (event.key !== 'Enter') return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (paletteQuery.trim()) {
-                    handleSaveHistory(paletteQuery);
-                  }
-                }}
-                data-testid="input-mobile-search-page"
-                rightSlot={
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    {paletteQuery && (
+              <SoapBubbleMaterial
+                iridescence={0}
+                oilOpacity={0}
+                oilCoverage={0}
+                reflectivity={0}
+                glass={0}
+                mirage={0}
+                windowLight={false}
+                keyLight={false}
+                floorLight={0}
+                bottomShade={false}
+                windowIntensity={0}
+                glintIntensity={0}
+                windowTwin={false}
+              >
+                <SoapBubbleSearch
+                  radius={14}
+                  wrapperClassName="mobile-search-bar-wrap"
+                  inputClassName="palette-input mobile-search-page-input"
+                  placeholder={voiceOrbOpen ? 'Listening…' : 'Search for artists and music…'}
+                  value={paletteQuery}
+                  onChange={event => setPaletteQuery(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (paletteQuery.trim()) {
+                      handleSaveHistory(paletteQuery);
+                    }
+                  }}
+                  data-testid="input-mobile-search-page"
+                  rightSlot={
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {paletteQuery && (
+                        <button
+                          type="button"
+                          className="icon-button mobile-search-clear-btn"
+                          onClick={() => setPaletteQuery('')}
+                          aria-label="Clear search"
+                        >
+                          <X size={15} />
+                        </button>
+                      )}
                       <button
                         type="button"
-                        className="icon-button mobile-search-clear-btn"
-                        onClick={() => setPaletteQuery('')}
-                        aria-label="Clear search"
+                        className={`icon-button palette-mic-btn${voiceOrbOpen ? ' is-active' : ''}`}
+                        onClick={() => toggleVoiceSearch()}
+                        aria-label={voiceOrbOpen ? 'Stop voice search' : 'Start voice search'}
+                        title={voiceOrbOpen ? 'Stop voice search' : 'Voice search'}
+                        data-testid="button-mobile-voice-search"
                       >
-                        <X size={15} />
+                        <Mic size={15} strokeWidth={1.8} />
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className={`icon-button palette-mic-btn${voiceOrbOpen ? ' is-active' : ''}`}
-                      onClick={() => toggleVoiceSearch()}
-                      aria-label={voiceOrbOpen ? 'Stop voice search' : 'Start voice search'}
-                      title={voiceOrbOpen ? 'Stop voice search' : 'Voice search'}
-                      data-testid="button-mobile-voice-search"
-                    >
-                      <Mic size={15} strokeWidth={1.8} />
-                    </button>
-                  </div>
-                }
-              />
-            </SoapBubbleMaterial>
+                    </div>
+                  }
+                />
+              </SoapBubbleMaterial>
+            </StarBorder>
 
             {paletteQuery.trim() && (
               <div className="palette-tabs mobile-search-tabs" role="tablist" aria-label="Search category">
@@ -5080,12 +5099,27 @@ useEffect(() => {
               </div>
             )}
 
-            <div className={`mobile-search-results${voiceOrbOpen ? ' is-voice-orb-open' : ''}`}>
-              {voiceOrbOpen ? (
-                <>
-                  <SilverDustBackdrop getVoiceSignal={getLiveVoiceSignal} />
-                  <div className="palette-voice-orb-stage" onClick={() => stopVoiceSearch()}>
-                    <LiquidGlassOrb
+            {voiceOrbOpen ? (
+              <StarBorder
+                as="div"
+                className="mobile-search-results is-voice-orb-open"
+                color="#94a3b8"
+                trailColor="#94a3b8"
+                duration={5}
+                direction="clockwise"
+                stars={1}
+                trailLength={0.4}
+                thickness={2}
+                radius={26}
+                glow={0.6}
+                hover="none"
+                sparkle={false}
+                clickPulse={false}
+                theme="dark"
+              >
+                <SilverDustBackdrop getVoiceSignal={getLiveVoiceSignal} />
+                <div className="palette-voice-orb-stage" onClick={() => stopVoiceSearch()}>
+                  <LiquidGlassOrb
                     baseColor="#ffffff"
                     colorA="#000000"
                     colorB="#4d4d4d"
@@ -5124,9 +5158,10 @@ useEffect(() => {
                     audioLevel={0.55}
                     getAudioLevel={getLiveVoiceAudioLevel}
                   />
-                  </div>
-                </>
-              ) : (
+                </div>
+              </StarBorder>
+            ) : (
+            <div className="mobile-search-results">
                 <>
               {paletteTab === 'songs' && allSearchResults.map(track => {
                 const localQuality = getTrackQualityBadge(track);
@@ -5356,8 +5391,8 @@ useEffect(() => {
                 </div>
               )}
                 </>
-              )}
             </div>
+            )}
           </div>}
 {libraryOpen && !searchOpen && !detail && <div className="dg-page library-hub" key="library">
             <div className="library-head">
@@ -5455,15 +5490,7 @@ useEffect(() => {
                     activeId={activeId}
                     isPlaying={isPlaying}
                     page={page}
-                    actions={isMobileViewport ? trendingRowActions : {
-                      ...rowActions,
-                      play: (track, list) => {
-                        if (activeTrendingLang) {
-                          setTrendingLanguages(promoteTrendingLanguage(activeTrendingLang.id));
-                        }
-                        rowActions.play(track, list);
-                      },
-                    }}
+                    actions={trendingRowActions}
                     className="trending-track-list"
                     mobileBatchSize={isMobileViewport ? 100 : undefined}
                     mobileResetKey={trendingQuery}
@@ -6087,7 +6114,26 @@ useEffect(() => {
       <div className="import-footer"><button className="button" onClick={() => setImportMenu(false)} data-testid="button-cancel-import">Cancel</button></div>
     </div></div>}
     {paletteOpen && !isMobileViewport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) { stopVoiceSearch(); setPaletteOpen(false); } }}>
-      <div className={`palette${voiceOrbOpen ? ' is-voice-orb-open' : ''}`} role="dialog" aria-modal="true" aria-label="Search your library">
+      <StarBorder
+        as="div"
+        className={`palette${voiceOrbOpen ? ' is-voice-orb-open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search your library"
+        color="#94a3b8"
+        trailColor="#94a3b8"
+        duration={5}
+        direction="clockwise"
+        stars={1}
+        trailLength={0.4}
+        thickness={2}
+        radius={30}
+        glow={0.6}
+        hover="none"
+        sparkle={false}
+        clickPulse={false}
+        theme="dark"
+      >
         {voiceOrbOpen && <SilverDustBackdrop getVoiceSignal={getLiveVoiceSignal} />}
         <div className="palette-input-row">
           <input
@@ -6439,7 +6485,7 @@ useEffect(() => {
             </>
           )}
         </div>
-      </div>
+      </StarBorder>
     </div>}
     {modal && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setModal(null); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
        <h2 id="modal-title">{modal === 'playlist' ? 'New playlist' : modal === 'rename' ? 'Rename playlist' : modal === 'properties' ? 'Track details' : 'Add to playlist'}</h2>
